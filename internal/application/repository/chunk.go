@@ -82,6 +82,7 @@ func (r *chunkRepository) ListPagedChunksByKnowledgeID(
 	keyword string,
 	searchField string,
 	sortOrder string,
+	knowledgeType string,
 ) ([]*types.Chunk, int64, error) {
 	var chunks []*types.Chunk
 	var total int64
@@ -98,6 +99,14 @@ func (r *chunkRepository) ListPagedChunksByKnowledgeID(
 		}
 		if keyword != "" {
 			like := "%" + keyword + "%"
+
+			// Document type: search content only
+			if knowledgeType != types.KnowledgeTypeFAQ {
+				db = db.Where("content LIKE ?", like)
+				return db
+			}
+
+			// FAQ type: search based on searchField
 			// 根据数据库类型使用不同的 JSON 查询语法
 			isPostgres := db.Dialector.Name() == "postgres"
 
@@ -147,10 +156,20 @@ func (r *chunkRepository) ListPagedChunksByKnowledgeID(
 	// Then query the paginated data
 	dataQuery := baseFilter(r.db.WithContext(ctx))
 
-	// Default is time descending, "asc" for time ascending
-	orderClause := "updated_at DESC"
-	if sortOrder == "asc" {
-		orderClause = "updated_at ASC"
+	// Determine sort order based on knowledge type
+	var orderClause string
+	if knowledgeType == types.KnowledgeTypeFAQ {
+		// FAQ: sort by updated_at
+		orderClause = "updated_at DESC"
+		if sortOrder == "asc" {
+			orderClause = "updated_at ASC"
+		}
+	} else {
+		// Document: sort by chunk_index
+		orderClause = "chunk_index ASC"
+		if sortOrder == "desc" {
+			orderClause = "chunk_index DESC"
+		}
 	}
 
 	if err := dataQuery.
