@@ -2,6 +2,68 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.6] - 2025-12-29
+
+### 🚀 New Features
+- **NEW**: Custom Agent System
+  - Support for creating, configuring, and selecting custom agents
+  - Agent feature indicators display with MCP service capability support
+  - Built-in agent sorting logic ensuring multi-turn conversation auto-enabled in agent mode
+  - Agent knowledge base selection modes: all/specified/disabled
+
+- **NEW**: Helm Chart for Kubernetes Deployment
+  - Complete Helm chart for Kubernetes deployment
+  - Neo4j template support for GraphRAG functionality
+  - Versioned image tags and official images compatibility
+
+- **NEW**: Enhanced FAQ Management
+  - FAQ entry retrieval API supporting single entry query by ID
+  - FAQ list sorting by update time (ascending/descending)
+  - Enhanced FAQ search with field-specific search (standard question/similar questions/answer/all)
+  - Batch update exclusion for FAQ entries in ByTag operations
+  - Tag deletion with content_only mode to delete only tag contents
+
+- **NEW**: Multi-Platform Model Adaptation
+  - Support for multiple platform model configurations
+  - Title generation model configuration
+  - Knowledge base selection mode without mandatory rerank model check
+
+- **NEW**: Korean Language Support
+  - Added Korean (한국어) internationalization support
+
+### ⚡ Improvements
+- **IMPROVED**: Knowledge Base Operations
+  - Async knowledge base deletion with background cleanup via ProcessKBDelete
+  - Multi-knowledge base search support with specified file ID filtering
+  - Optimized knowledge chunk pagination with type-specific search and sorting logic
+  - Enhanced SearchKnowledgeRequest structure with backward compatibility
+
+- **IMPROVED**: Prompt Template System
+  - Restructured prompt template system with multi-scenario template configuration
+  - Unified system prompts with optimized agent selector interface
+
+- **IMPROVED**: Tag Management
+  - Enhanced tag deletion with ID exclusion support
+  - Async index deletion task for optimized deletion flow
+  - Batch TagID update functionality
+  - Optimized tag name batch queries for improved efficiency
+
+- **IMPROVED**: API Documentation
+  - Updated API documentation links to new paths
+  - Added knowledge search API documentation
+  - Enhanced FAQ and tag deletion interface documentation
+  - Removed hardcoded host configuration from Swagger docs
+
+### 🐛 Bug Fixes
+- **FIXED**: Tag ID handling logic for empty strings and UntaggedTagID conditions
+- **FIXED**: JSON query compatibility for different database types (MySQL/PostgreSQL)
+- **FIXED**: GORM batch insert issue where zero-value fields (IsEnabled, Flags) were ignored
+- **FIXED**: Helm chart versioned image tags and runAsNonRoot compatibility
+
+### 🔧 Refactoring
+- **REFACTORED**: Removed security validation and length limits, simplified input processing logic
+- **REFACTORED**: Enhanced agent configuration with improved selection and state management
+
 ## [0.2.5] - 2025-12-22
 
 ### 🚀 New Features
@@ -397,6 +459,7 @@ All notable changes to this project will be documented in this file.
 - Docker Compose for quick startup and service orchestration.
 - MCP server support for integrating with MCP-compatible clients.
 
+[0.2.6]: https://github.com/Tencent/WeKnora/tree/v0.2.6
 [0.2.5]: https://github.com/Tencent/WeKnora/tree/v0.2.5
 [0.2.4]: https://github.com/Tencent/WeKnora/tree/v0.2.4
 [0.2.3]: https://github.com/Tencent/WeKnora/tree/v0.2.3
