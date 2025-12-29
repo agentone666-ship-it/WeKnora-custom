@@ -89,11 +89,6 @@
                   <OllamaSettings />
                 </div>
 
-                <!-- Agent 配置 -->
-                <div v-if="currentSection === 'agent'" class="section">
-                  <AgentSettings :active-sub-section="currentSubSection || 'modes'" />
-                </div>
-
                 <!-- 网络搜索配置 -->
                 <div v-if="currentSection === 'websearch'" class="section">
                   <WebSearchSettings />
@@ -132,7 +127,6 @@ import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useUIStore } from '@/stores/ui'
 import { useI18n } from 'vue-i18n'
-import AgentSettings from './AgentSettings.vue'
 import SystemInfo from './SystemInfo.vue'
 import TenantInfo from './TenantInfo.vue'
 import ApiInfo from './ApiInfo.vue'
@@ -165,17 +159,6 @@ const navItems = computed(() => [
     ]
   },
   { key: 'ollama', icon: 'server', label: 'Ollama' },
-  { 
-    key: 'agent', 
-    icon: 'chat', 
-    label: t('settings.conversationStrategy'),
-    children: [
-      { key: 'modes', label: t('conversationSettings.menus.modes') },
-      { key: 'models', label: t('conversationSettings.menus.models') },
-      { key: 'thresholds', label: t('conversationSettings.menus.thresholds') },
-      { key: 'advanced', label: t('conversationSettings.menus.advanced') },
-    ]
-  },
   { key: 'websearch', icon: 'search', label: t('settings.webSearchConfig')  },
   { key: 'mcp', icon: 'tools', label: t('settings.mcpService') },
   { key: 'system', icon: 'info-circle', label: t('settings.systemSettings') },

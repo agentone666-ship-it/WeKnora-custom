@@ -117,7 +117,7 @@ func (t *ListKnowledgeChunksTool) Execute(ctx context.Context, args map[string]i
 	}
 
 	chunks, total, err := t.chunkService.GetRepository().ListPagedChunksByKnowledgeID(ctx,
-		t.tenantID, knowledgeID, pagination, []types.ChunkType{types.ChunkTypeText, types.ChunkTypeFAQ}, "", "", "", "")
+		t.tenantID, knowledgeID, pagination, []types.ChunkType{types.ChunkTypeText, types.ChunkTypeFAQ}, "", "", "", "", "")
 	if err != nil {
 		return &types.ToolResult{
 			Success: false,

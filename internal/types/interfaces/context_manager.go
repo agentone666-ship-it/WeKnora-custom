@@ -24,6 +24,10 @@ type ContextManager interface {
 
 	// GetContextStats returns statistics about the context
 	GetContextStats(ctx context.Context, sessionID string) (*ContextStats, error)
+
+	// SetSystemPrompt sets or updates the system prompt for a session
+	// If a system message exists, it will be replaced; otherwise, a new one will be added at the beginning
+	SetSystemPrompt(ctx context.Context, sessionID string, systemPrompt string) error
 }
 
 // ContextStats contains statistics about session context

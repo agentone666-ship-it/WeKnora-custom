@@ -1956,10 +1956,10 @@ func (s *knowledgeService) generateQuestionsWithContext(ctx context.Context,
 	}
 
 	// Replace placeholders
-	prompt = strings.ReplaceAll(prompt, "{{.QuestionCount}}", fmt.Sprintf("%d", questionCount))
-	prompt = strings.ReplaceAll(prompt, "{{.Content}}", content)
-	prompt = strings.ReplaceAll(prompt, "{{.Context}}", contextSection)
-	prompt = strings.ReplaceAll(prompt, "{{.DocName}}", docName)
+	prompt = strings.ReplaceAll(prompt, "{{question_count}}", fmt.Sprintf("%d", questionCount))
+	prompt = strings.ReplaceAll(prompt, "{{content}}", content)
+	prompt = strings.ReplaceAll(prompt, "{{context}}", contextSection)
+	prompt = strings.ReplaceAll(prompt, "{{doc_name}}", docName)
 
 	thinking := false
 	response, err := chatModel.Chat(ctx, []chat.Message{
@@ -2000,11 +2000,11 @@ func (s *knowledgeService) generateQuestionsWithContext(ctx context.Context,
 // Default prompt for question generation with context support
 const defaultQuestionGenerationPrompt = `你是一个专业的问题生成助手。你的任务是根据给定的【主要内容】生成用户可能会问的相关问题。
 
-{{.Context}}
+{{context}}
 ## 主要内容（请基于此内容生成问题）
-文档名称：{{.DocName}}
+文档名称：{{doc_name}}
 文档内容：
-{{.Content}}
+{{content}}
 
 ## 核心要求
 - 生成的问题必须与【主要内容】直接相关
@@ -2013,7 +2013,7 @@ const defaultQuestionGenerationPrompt = `你是一个专业的问题生成助手
 - 问题应该是用户在实际场景中可能会提出的自然问题
 - 问题应该多样化，覆盖内容的不同方面
 - 每个问题应该简洁明了，长度控制在30字以内
-- 生成的问题数量为 {{.QuestionCount}} 个
+- 生成的问题数量为 {{question_count}} 个
 
 ## 问题类型建议
 - 定义类：什么是...？...是什么？
@@ -2550,6 +2550,7 @@ func (s *knowledgeService) CloneChunk(ctx context.Context, src, dst *types.Knowl
 			"",
 			"",
 			"",
+			"",
 		)
 		chunkPage++
 		if err != nil {
@@ -2664,7 +2665,7 @@ func (s *knowledgeService) ListFAQEntries(ctx context.Context,
 	}
 	chunkType := []types.ChunkType{types.ChunkTypeFAQ}
 	chunks, total, err := s.chunkRepo.ListPagedChunksByKnowledgeID(
-		ctx, tenantID, faqKnowledge.ID, page, chunkType, tagID, keyword, searchField, sortOrder,
+		ctx, tenantID, faqKnowledge.ID, page, chunkType, tagID, keyword, searchField, sortOrder, types.KnowledgeTypeFAQ,
 	)
 	if err != nil {
 		return nil, err
@@ -5860,4 +5861,3 @@ func (s *knowledgeService) SearchKnowledge(ctx context.Context, keyword string, 
 	}
 	return s.repo.SearchKnowledge(ctx, tenantID, keyword, offset, limit)
 }
-

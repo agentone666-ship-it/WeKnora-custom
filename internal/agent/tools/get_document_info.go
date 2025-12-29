@@ -139,7 +139,7 @@ func (t *GetDocumentInfoTool) Execute(ctx context.Context, args map[string]inter
 				ListPagedChunksByKnowledgeID(ctx, t.tenantID, id, &types.Pagination{
 					Page:     1,
 					PageSize: 1000,
-				}, []types.ChunkType{"text"}, "", "", "", "")
+				}, []types.ChunkType{"text"}, "", "", "", "", "")
 			if err != nil {
 				mu.Lock()
 				results[id] = &docInfo{

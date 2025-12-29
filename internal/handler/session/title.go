@@ -52,7 +52,7 @@ func (h *Handler) GenerateTitle(c *gin.Context) {
 
 	// Call service to generate title
 	logger.Infof(ctx, "Generating session title, session ID: %s, message count: %d", sessionID, len(request.Messages))
-	title, err := h.sessionService.GenerateTitle(ctx, session, request.Messages)
+	title, err := h.sessionService.GenerateTitle(ctx, session, request.Messages, "")
 	if err != nil {
 		logger.ErrorWithFields(ctx, err, nil)
 		c.Error(errors.NewInternalServerError(err.Error()))

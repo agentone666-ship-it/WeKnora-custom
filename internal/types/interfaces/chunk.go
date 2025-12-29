@@ -18,8 +18,11 @@ type ChunkRepository interface {
 	ListChunksByKnowledgeID(ctx context.Context, tenantID uint64, knowledgeID string) ([]*types.Chunk, error)
 	// ListPagedChunksByKnowledgeID lists paged chunks by knowledge id.
 	// When tagID is non-empty, results are filtered by tag_id.
-	// sortOrder: "asc" for time ascending (updated_at ASC), default is time descending (updated_at DESC)
-	// searchField: specifies which field to search in (for FAQ: "standard_question", "similar_questions", "answers", "" for all)
+	// knowledgeType: "faq" or "manual" - determines sort order and search behavior
+	//   - FAQ: sorts by updated_at, searchField can be "standard_question", "similar_questions", "answers", or "" for all
+	//   - Document (manual): sorts by chunk_index, keyword searches content only
+	// sortOrder: "asc" for ascending, default is descending
+	// searchField: specifies which field to search in (only applicable for FAQ type)
 	ListPagedChunksByKnowledgeID(
 		ctx context.Context,
 		tenantID uint64,
@@ -30,6 +33,7 @@ type ChunkRepository interface {
 		keyword string,
 		searchField string,
 		sortOrder string,
+		knowledgeType string,
 	) ([]*types.Chunk, int64, error)
 	ListChunkByParentID(ctx context.Context, tenantID uint64, parentID string) ([]*types.Chunk, error)
 	// UpdateChunk updates a chunk

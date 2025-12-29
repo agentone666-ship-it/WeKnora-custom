@@ -3,12 +3,11 @@
 package chatpipline
 
 import (
-	"bytes"
 	"context"
-	"html/template"
 	"regexp"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/Tencent/WeKnora/internal/config"
@@ -144,54 +143,27 @@ func (p *PluginRewrite) OnEvent(ctx context.Context,
 	if chatManage.RewritePromptUser != "" {
 		userPrompt = chatManage.RewritePromptUser
 	}
-	userTmpl, err := template.New("rewriteContent").Parse(userPrompt)
-	if err != nil {
-		pipelineError(ctx, "Rewrite", "parse_user_template", map[string]interface{}{
-			"session_id": chatManage.SessionID,
-			"error":      err.Error(),
-		})
-		return next()
-	}
 	systemPrompt := p.config.Conversation.RewritePromptSystem
 	if chatManage.RewritePromptSystem != "" {
 		systemPrompt = chatManage.RewritePromptSystem
 	}
-	systemTmpl, err := template.New("rewriteContent").Parse(systemPrompt)
-	if err != nil {
-		pipelineError(ctx, "Rewrite", "parse_system_template", map[string]interface{}{
-			"session_id": chatManage.SessionID,
-			"error":      err.Error(),
-		})
-		return next()
-	}
+
+	// Format conversation history for template
+	conversationText := formatConversationHistory(historyList)
 	currentTime := time.Now().Format("2006-01-02 15:04:05")
-	var userContent, systemContent bytes.Buffer
-	err = userTmpl.Execute(&userContent, map[string]interface{}{
-		"Query":        chatManage.Query,
-		"CurrentTime":  currentTime,
-		"Yesterday":    time.Now().AddDate(0, 0, -1).Format("2006-01-02"),
-		"Conversation": historyList,
-	})
-	if err != nil {
-		pipelineError(ctx, "Rewrite", "render_user_template", map[string]interface{}{
-			"session_id": chatManage.SessionID,
-			"error":      err.Error(),
-		})
-		return next()
-	}
-	err = systemTmpl.Execute(&systemContent, map[string]interface{}{
-		"Query":        chatManage.Query,
-		"CurrentTime":  currentTime,
-		"Yesterday":    time.Now().AddDate(0, 0, -1).Format("2006-01-02"),
-		"Conversation": historyList,
-	})
-	if err != nil {
-		pipelineError(ctx, "Rewrite", "render_system_template", map[string]interface{}{
-			"session_id": chatManage.SessionID,
-			"error":      err.Error(),
-		})
-		return next()
-	}
+	yesterday := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
+
+	// Replace placeholders in prompts
+	userContent := strings.ReplaceAll(userPrompt, "{{conversation}}", conversationText)
+	userContent = strings.ReplaceAll(userContent, "{{query}}", chatManage.Query)
+	userContent = strings.ReplaceAll(userContent, "{{current_time}}", currentTime)
+	userContent = strings.ReplaceAll(userContent, "{{yesterday}}", yesterday)
+
+	systemContent := strings.ReplaceAll(systemPrompt, "{{conversation}}", conversationText)
+	systemContent = strings.ReplaceAll(systemContent, "{{query}}", chatManage.Query)
+	systemContent = strings.ReplaceAll(systemContent, "{{current_time}}", currentTime)
+	systemContent = strings.ReplaceAll(systemContent, "{{yesterday}}", yesterday)
+
 	rewriteModel, err := p.modelService.GetChatModel(ctx, chatManage.ChatModelID)
 	if err != nil {
 		pipelineError(ctx, "Rewrite", "get_model", map[string]interface{}{
@@ -207,11 +179,11 @@ func (p *PluginRewrite) OnEvent(ctx context.Context,
 	response, err := rewriteModel.Chat(ctx, []chat.Message{
 		{
 			Role:    "system",
-			Content: systemContent.String(),
+			Content: systemContent,
 		},
 		{
 			Role:    "user",
-			Content: userContent.String(),
+			Content: userContent,
 		},
 	}, &chat.ChatOptions{
 		Temperature:         0.3,
@@ -235,4 +207,22 @@ func (p *PluginRewrite) OnEvent(ctx context.Context,
 		"rewrite_query": chatManage.RewriteQuery,
 	})
 	return next()
+}
+
+// formatConversationHistory formats conversation history for prompt template
+func formatConversationHistory(historyList []*types.History) string {
+	if len(historyList) == 0 {
+		return ""
+	}
+
+	var builder strings.Builder
+	for _, h := range historyList {
+		builder.WriteString("------BEGIN------\n")
+		builder.WriteString("用户的问题是：")
+		builder.WriteString(h.Query)
+		builder.WriteString("\n助手的回答是：")
+		builder.WriteString(h.Answer)
+		builder.WriteString("\n------END------\n")
+	}
+	return builder.String()
 }

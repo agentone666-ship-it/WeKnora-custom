@@ -203,20 +203,13 @@ func (h *Handler) createDefaultSummaryConfig(ctx context.Context) *types.Summary
 
 	// Override with tenant-level conversation config if available
 	if tenant != nil && tenant.ConversationConfig != nil {
-		useSystemPrompt := tenant.ConversationConfig.UseCustomSystemPrompt
-		if !useSystemPrompt && tenant.ConversationConfig.Prompt != "" {
-			// Backward compatibility: treat legacy configs without flag as custom
-			useSystemPrompt = true
-		}
-		if useSystemPrompt && tenant.ConversationConfig.Prompt != "" {
+		// Use custom prompt if provided
+		if tenant.ConversationConfig.Prompt != "" {
 			cfg.Prompt = tenant.ConversationConfig.Prompt
 		}
 
-		useContextTemplate := tenant.ConversationConfig.UseCustomContextTemplate
-		if !useContextTemplate && tenant.ConversationConfig.ContextTemplate != "" {
-			useContextTemplate = true
-		}
-		if useContextTemplate && tenant.ConversationConfig.ContextTemplate != "" {
+		// Use custom context template if provided
+		if tenant.ConversationConfig.ContextTemplate != "" {
 			cfg.ContextTemplate = tenant.ConversationConfig.ContextTemplate
 		}
 		if tenant.ConversationConfig.Temperature > 0 {
@@ -242,13 +235,13 @@ func (h *Handler) fillSummaryConfigDefaults(ctx context.Context, config *types.S
 	var defaultMaxCompletionTokens int
 
 	if tenant != nil && tenant.ConversationConfig != nil {
-		useSystemPrompt := tenant.ConversationConfig.UseCustomSystemPrompt
-		if useSystemPrompt && tenant.ConversationConfig.Prompt != "" {
+		// Use custom prompt if provided
+		if tenant.ConversationConfig.Prompt != "" {
 			defaultPrompt = tenant.ConversationConfig.Prompt
 		}
 
-		useContextTemplate := tenant.ConversationConfig.UseCustomContextTemplate
-		if useContextTemplate && tenant.ConversationConfig.ContextTemplate != "" {
+		// Use custom context template if provided
+		if tenant.ConversationConfig.ContextTemplate != "" {
 			defaultContextTemplate = tenant.ConversationConfig.ContextTemplate
 		}
 		defaultTemperature = tenant.ConversationConfig.Temperature

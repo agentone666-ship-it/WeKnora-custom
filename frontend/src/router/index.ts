@@ -52,6 +52,12 @@ const router = createRouter({
           meta: { requiresInit: true, requiresAuth: true }
         },
         {
+          path: "agents",
+          name: "agentList",
+          component: () => import("../views/agent/AgentList.vue"),
+          meta: { requiresInit: true, requiresAuth: true }
+        },
+        {
           path: "creatChat",
           name: "globalCreatChat",
           component: () => import("../views/creatChat/creatChat.vue"),

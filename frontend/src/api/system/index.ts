@@ -29,9 +29,7 @@ export interface AgentConfig {
   allowed_tools: string[]
   temperature: number
   knowledge_bases?: string[]
-  system_prompt_web_enabled?: string  // Custom system prompt when web search is enabled
-  system_prompt_web_disabled?: string // Custom system prompt when web search is disabled
-  use_custom_system_prompt?: boolean
+  system_prompt?: string  // Unified system prompt (uses {{web_search_status}} placeholder)
   available_tools?: ToolDefinition[]  // GET 响应中包含，POST/PUT 不需要
   available_placeholders?: PlaceholderDefinition[]  // GET 响应中包含，POST/PUT 不需要
 }
@@ -41,8 +39,6 @@ export interface ConversationConfig {
   context_template: string
   temperature: number
   max_completion_tokens: number
-  use_custom_system_prompt?: boolean
-  use_custom_context_template?: boolean
   max_rounds: number
   embedding_top_k: number
   keyword_threshold: number
@@ -58,6 +54,23 @@ export interface ConversationConfig {
   rewrite_prompt_system?: string
   rewrite_prompt_user?: string
   enable_query_expansion?: boolean
+}
+
+export interface PromptTemplate {
+  id: string
+  name: string
+  description: string
+  content: string
+  has_knowledge_base?: boolean
+  has_web_search?: boolean
+}
+
+export interface PromptTemplatesConfig {
+  system_prompt: PromptTemplate[]
+  context_template: PromptTemplate[]
+  rewrite_system: PromptTemplate[]
+  rewrite_user: PromptTemplate[]
+  fallback: PromptTemplate[]
 }
 
 export function getSystemInfo(): Promise<{ data: SystemInfo }> {
@@ -78,4 +91,8 @@ export function getConversationConfig(): Promise<{ data: ConversationConfig }> {
 
 export function updateConversationConfig(config: ConversationConfig): Promise<{ data: ConversationConfig }> {
   return put('/api/v1/tenants/kv/conversation-config', config)
+}
+
+export function getPromptTemplates(): Promise<{ data: PromptTemplatesConfig }> {
+  return get('/api/v1/tenants/kv/prompt-templates')
 }

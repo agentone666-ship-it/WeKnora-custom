@@ -16,6 +16,149 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// qaRequestContext holds all the common data needed for QA requests
+type qaRequestContext struct {
+	ctx              context.Context
+	c                *gin.Context
+	sessionID        string
+	requestID        string
+	query            string
+	session          *types.Session
+	customAgent      *types.CustomAgent
+	assistantMessage *types.Message
+	knowledgeBaseIDs []string
+	knowledgeIDs     []string
+	summaryModelID   string
+	webSearchEnabled bool
+	mentionedItems   types.MentionedItems
+}
+
+// parseQARequest parses and validates a QA request, returns the request context
+func (h *Handler) parseQARequest(c *gin.Context, logPrefix string) (*qaRequestContext, *CreateKnowledgeQARequest, error) {
+	ctx := logger.CloneContext(c.Request.Context())
+	logger.Infof(ctx, "[%s] Start processing request", logPrefix)
+
+	// Get session ID from URL parameter
+	sessionID := secutils.SanitizeForLog(c.Param("session_id"))
+	if sessionID == "" {
+		logger.Error(ctx, "Session ID is empty")
+		return nil, nil, errors.NewBadRequestError(errors.ErrInvalidSessionID.Error())
+	}
+
+	// Parse request body
+	var request CreateKnowledgeQARequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		logger.Error(ctx, "Failed to parse request data", err)
+		return nil, nil, errors.NewBadRequestError(err.Error())
+	}
+
+	// Validate query content
+	if request.Query == "" {
+		logger.Error(ctx, "Query content is empty")
+		return nil, nil, errors.NewBadRequestError("Query content cannot be empty")
+	}
+
+	// Log request details
+	if requestJSON, err := json.Marshal(request); err == nil {
+		logger.Infof(ctx, "[%s] Request: session_id=%s, request=%s",
+			logPrefix, sessionID, secutils.SanitizeForLog(string(requestJSON)))
+	}
+
+	// Get session
+	session, err := h.sessionService.GetSession(ctx, sessionID)
+	if err != nil {
+		logger.Errorf(ctx, "Failed to get session, session ID: %s, error: %v", sessionID, err)
+		return nil, nil, errors.NewNotFoundError("Session not found")
+	}
+
+	// Get custom agent if agent_id is provided
+	var customAgent *types.CustomAgent
+	if request.AgentID != "" {
+		logger.Infof(ctx, "Fetching custom agent, agent ID: %s", secutils.SanitizeForLog(request.AgentID))
+		agent, err := h.customAgentService.GetAgentByID(ctx, request.AgentID)
+		if err != nil {
+			logger.Warnf(ctx, "Failed to get custom agent, agent ID: %s, error: %v, using default config",
+				secutils.SanitizeForLog(request.AgentID), err)
+		} else {
+			customAgent = agent
+			logger.Infof(ctx, "Using custom agent: ID=%s, Name=%s, IsBuiltin=%v, AgentMode=%s",
+				customAgent.ID, customAgent.Name, customAgent.IsBuiltin, customAgent.Config.AgentMode)
+		}
+	}
+
+	// Build request context
+	reqCtx := &qaRequestContext{
+		ctx:         ctx,
+		c:           c,
+		sessionID:   sessionID,
+		requestID:   secutils.SanitizeForLog(c.GetString(types.RequestIDContextKey.String())),
+		query:       secutils.SanitizeForLog(request.Query),
+		session:     session,
+		customAgent: customAgent,
+		assistantMessage: &types.Message{
+			SessionID:   sessionID,
+			Role:        "assistant",
+			RequestID:   c.GetString(types.RequestIDContextKey.String()),
+			IsCompleted: false,
+		},
+		knowledgeBaseIDs: secutils.SanitizeForLogArray(request.KnowledgeBaseIDs),
+		knowledgeIDs:     secutils.SanitizeForLogArray(request.KnowledgeIds),
+		summaryModelID:   secutils.SanitizeForLog(request.SummaryModelID),
+		webSearchEnabled: request.WebSearchEnabled,
+		mentionedItems:   convertMentionedItems(request.MentionedItems),
+	}
+
+	return reqCtx, &request, nil
+}
+
+// sseStreamContext holds the context for SSE streaming
+type sseStreamContext struct {
+	eventBus         *event.EventBus
+	asyncCtx         context.Context
+	cancel           context.CancelFunc
+	assistantMessage *types.Message
+}
+
+// setupSSEStream sets up the SSE streaming context
+func (h *Handler) setupSSEStream(reqCtx *qaRequestContext) *sseStreamContext {
+	// Set SSE headers
+	setSSEHeaders(reqCtx.c)
+
+	// Write initial agent_query event
+	h.writeAgentQueryEvent(reqCtx.ctx, reqCtx.sessionID, reqCtx.assistantMessage.ID)
+
+	// Create EventBus and cancellable context
+	eventBus := event.NewEventBus()
+	asyncCtx, cancel := context.WithCancel(logger.CloneContext(reqCtx.ctx))
+
+	streamCtx := &sseStreamContext{
+		eventBus:         eventBus,
+		asyncCtx:         asyncCtx,
+		cancel:           cancel,
+		assistantMessage: reqCtx.assistantMessage,
+	}
+
+	// Setup stop event handler
+	h.setupStopEventHandler(eventBus, reqCtx.sessionID, reqCtx.assistantMessage, cancel)
+
+	// Setup stream handler
+	h.setupStreamHandler(asyncCtx, reqCtx.sessionID, reqCtx.assistantMessage.ID,
+		reqCtx.requestID, reqCtx.assistantMessage, eventBus)
+
+	// Generate title if needed
+	if reqCtx.session.Title == "" {
+		// Use the same model as the conversation for title generation
+		modelID := ""
+		if reqCtx.customAgent != nil && reqCtx.customAgent.Config.ModelID != "" {
+			modelID = reqCtx.customAgent.Config.ModelID
+		}
+		logger.Infof(reqCtx.ctx, "Session has no title, starting async title generation, session ID: %s, model: %s", reqCtx.sessionID, modelID)
+		h.sessionService.GenerateTitleAsync(asyncCtx, reqCtx.session, reqCtx.query, modelID, eventBus)
+	}
+
+	return streamCtx
+}
+
 // SearchKnowledge godoc
 // @Summary      知识搜索
 // @Description  在知识库中搜索（不使用LLM总结）
@@ -30,7 +173,6 @@ import (
 // @Router       /sessions/search [post]
 func (h *Handler) SearchKnowledge(c *gin.Context) {
 	ctx := logger.CloneContext(c.Request.Context())
-
 	logger.Info(ctx, "Start processing knowledge search request")
 
 	// Parse request body
@@ -87,8 +229,6 @@ func (h *Handler) SearchKnowledge(c *gin.Context) {
 	}
 
 	logger.Infof(ctx, "Knowledge search completed, found %d results", len(searchResults))
-
-	// Return search results
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"data":    searchResults,
@@ -109,73 +249,15 @@ func (h *Handler) SearchKnowledge(c *gin.Context) {
 // @Security     ApiKeyAuth
 // @Router       /sessions/{session_id}/knowledge-qa [post]
 func (h *Handler) KnowledgeQA(c *gin.Context) {
-	ctx := logger.CloneContext(c.Request.Context())
-
-	logger.Info(ctx, "Start processing knowledge QA request")
-
-	// Get session ID from URL parameter
-	sessionID := secutils.SanitizeForLog(c.Param("session_id"))
-	if sessionID == "" {
-		logger.Error(ctx, "Session ID is empty")
-		c.Error(errors.NewBadRequestError(errors.ErrInvalidSessionID.Error()))
-		return
-	}
-
-	// Parse request body
-	var request CreateKnowledgeQARequest
-	if err := c.ShouldBindJSON(&request); err != nil {
-		logger.Error(ctx, "Failed to parse request data", err)
-		c.Error(errors.NewBadRequestError(err.Error()))
-		return
-	}
-
-	// Create assistant message
-	assistantMessage := &types.Message{
-		SessionID:   sessionID,
-		Role:        "assistant",
-		RequestID:   c.GetString(types.RequestIDContextKey.String()),
-		IsCompleted: false,
-	}
-
-	// Validate query content
-	if request.Query == "" {
-		logger.Error(ctx, "Query content is empty")
-		c.Error(errors.NewBadRequestError("Query content cannot be empty"))
-		return
-	}
-
-	logger.Infof(
-		ctx,
-		"Knowledge QA request, session ID: %s, query: %s",
-		sessionID,
-		secutils.SanitizeForLog(request.Query),
-	)
-
-	// Get session to prepare knowledge base IDs
-	session, err := h.sessionService.GetSession(ctx, sessionID)
+	// Parse and validate request
+	reqCtx, _, err := h.parseQARequest(c, "KnowledgeQA")
 	if err != nil {
-		logger.Errorf(ctx, "Failed to get session, session ID: %s, error: %v", sessionID, err)
-		c.Error(errors.NewInternalServerError(err.Error()))
+		c.Error(err)
 		return
 	}
 
-	// Prepare knowledge base IDs
-	knowledgeBaseIDs := request.KnowledgeBaseIDs
-	// if len(knowledgeBaseIDs) == 0 && session.KnowledgeBaseID != "" {
-	// 	knowledgeBaseIDs = []string{session.KnowledgeBaseID}
-	// 	logger.Infof(
-	// 		ctx,
-	// 		"No knowledge base IDs in request, using session default: %s",
-	// 		secutils.SanitizeForLog(session.KnowledgeBaseID),
-	// 	)
-	// }
-
-	// Use shared function to handle KnowledgeQA request
-	h.handleKnowledgeQARequest(ctx, c, session, secutils.SanitizeForLog(request.Query),
-		secutils.SanitizeForLogArray(knowledgeBaseIDs),
-		secutils.SanitizeForLogArray(request.KnowledgeIds),
-		assistantMessage, true, secutils.SanitizeForLog(request.SummaryModelID), request.WebSearchEnabled,
-		convertMentionedItems(request.MentionedItems))
+	// Execute normal mode QA
+	h.executeNormalModeQA(reqCtx, true)
 }
 
 // AgentQA godoc
@@ -192,427 +274,100 @@ func (h *Handler) KnowledgeQA(c *gin.Context) {
 // @Security     ApiKeyAuth
 // @Router       /sessions/{session_id}/agent-qa [post]
 func (h *Handler) AgentQA(c *gin.Context) {
-	ctx := logger.CloneContext(c.Request.Context())
-	logger.Info(ctx, "Start processing agent QA request")
-
-	// Get session ID from URL parameter
-	sessionID := secutils.SanitizeForLog(c.Param("session_id"))
-	if sessionID == "" {
-		logger.Error(ctx, "Session ID is empty")
-		c.Error(errors.NewBadRequestError(errors.ErrInvalidSessionID.Error()))
+	// Parse and validate request
+	reqCtx, request, err := h.parseQARequest(c, "AgentQA")
+	if err != nil {
+		c.Error(err)
 		return
 	}
 
-	// Parse request body
-	var request CreateKnowledgeQARequest
-	if err := c.ShouldBindJSON(&request); err != nil {
-		logger.Error(ctx, "Failed to parse request data", err)
-		c.Error(errors.NewBadRequestError(err.Error()))
-		return
+	// Determine if agent mode should be enabled
+	// Priority: customAgent.IsAgentMode() > request.AgentEnabled
+	agentModeEnabled := request.AgentEnabled
+	if reqCtx.customAgent != nil {
+		agentModeEnabled = reqCtx.customAgent.IsAgentMode()
+		logger.Infof(reqCtx.ctx, "Agent mode determined by custom agent: %v (config.agent_mode=%s)",
+			agentModeEnabled, reqCtx.customAgent.Config.AgentMode)
 	}
-	if requestJSON, err := json.Marshal(request); err == nil {
-		logger.Infof(ctx, "Agent QA request, request: %s", secutils.SanitizeForLog(string(requestJSON)))
+
+	// Route to appropriate handler based on agent mode
+	if agentModeEnabled {
+		h.executeAgentModeQA(reqCtx)
 	} else {
-		logger.Warnf(ctx, "failed to marshal for logging: %s", secutils.SanitizeForLog(err.Error()))
+		logger.Infof(reqCtx.ctx, "Agent mode disabled, delegating to normal mode for session: %s", reqCtx.sessionID)
+		// Knowledge bases should be specified in request or from custom agent
+		h.executeNormalModeQA(reqCtx, false)
 	}
-
-	// Validate query content
-	if request.Query == "" {
-		logger.Error(ctx, "Query content is empty")
-		c.Error(errors.NewBadRequestError("Query content cannot be empty"))
-		return
-	}
-
-	tenantInfo := ctx.Value(types.TenantInfoContextKey).(*types.Tenant)
-
-	// Get session information first
-	session, err := h.sessionService.GetSession(ctx, sessionID)
-	if err != nil {
-		logger.Errorf(ctx, "Failed to get session, session ID: %s, error: %v", sessionID, err)
-		c.Error(errors.NewNotFoundError("Session not found"))
-		return
-	}
-	sessionJSON, err := json.Marshal(session)
-	if err != nil {
-		logger.Errorf(ctx, "Failed to marshal session, session ID: %s, error: %v", sessionID, err)
-		c.Error(errors.NewInternalServerError(err.Error()))
-		return
-	}
-	logger.Infof(ctx, "Before AgentQA, Session: %s", secutils.SanitizeForLog(string(sessionJSON)))
-
-	// Create assistant message
-	assistantMessage := &types.Message{
-		SessionID:   sessionID,
-		Role:        "assistant",
-		RequestID:   c.GetString(types.RequestIDContextKey.String()),
-		IsCompleted: false,
-	}
-
-	// Initialize AgentConfig if it doesn't exist
-	if session.AgentConfig == nil {
-		session.AgentConfig = &types.SessionAgentConfig{}
-	}
-
-	// Detect if knowledge bases or agent mode has changed
-	knowledgeBasesChanged := false
-	knowledgeIdsChanged := false
-	configChanged := false
-
-	// Check if knowledge bases array has changed
-	if len(request.KnowledgeBaseIDs) > 0 || len(session.AgentConfig.KnowledgeBases) > 0 {
-		// Compare arrays to detect changes
-		currentKBs := session.AgentConfig.KnowledgeBases
-		if len(currentKBs) != len(request.KnowledgeBaseIDs) {
-			knowledgeBasesChanged = true
-			configChanged = true
-		} else {
-			// Check if contents are different
-			kbMap := make(map[string]bool)
-			for _, kb := range currentKBs {
-				kbMap[kb] = true
-			}
-			for _, kb := range request.KnowledgeBaseIDs {
-				if !kbMap[kb] {
-					knowledgeBasesChanged = true
-					configChanged = true
-					break
-				}
-			}
-		}
-		if knowledgeBasesChanged {
-			logger.Infof(ctx, "Knowledge bases changed from %s to %s",
-				secutils.SanitizeForLog(fmt.Sprintf("%v", session.AgentConfig.KnowledgeBases)),
-				secutils.SanitizeForLog(fmt.Sprintf("%v", request.KnowledgeBaseIDs)),
-			)
-		}
-	}
-
-	// Check if knowledge IDs array has changed
-	if len(request.KnowledgeIds) > 0 || len(session.AgentConfig.KnowledgeIDs) > 0 {
-		// Compare arrays to detect changes
-		currentKIDs := session.AgentConfig.KnowledgeIDs
-		if len(currentKIDs) != len(request.KnowledgeIds) {
-			knowledgeIdsChanged = true
-			configChanged = true
-		} else {
-			// Check if contents are different
-			kidMap := make(map[string]bool)
-			for _, kid := range currentKIDs {
-				kidMap[kid] = true
-			}
-			for _, kid := range request.KnowledgeIds {
-				if !kidMap[kid] {
-					knowledgeIdsChanged = true
-					configChanged = true
-					break
-				}
-			}
-		}
-		if knowledgeIdsChanged {
-			logger.Infof(ctx, "Knowledge IDs changed from %s to %s",
-				secutils.SanitizeForLog(fmt.Sprintf("%v", session.AgentConfig.KnowledgeIDs)),
-				secutils.SanitizeForLog(fmt.Sprintf("%v", request.KnowledgeIds)),
-			)
-		}
-	}
-
-	// Check if agent mode has changed
-	currentAgentEnabled := session.AgentConfig.AgentModeEnabled
-	if request.AgentEnabled != currentAgentEnabled {
-		logger.Infof(ctx, "Agent mode changed from %v to %v", currentAgentEnabled, request.AgentEnabled)
-		configChanged = true
-	}
-	currentWebSearchEnabled := session.AgentConfig.WebSearchEnabled
-	if request.WebSearchEnabled != currentWebSearchEnabled {
-		logger.Infof(ctx, "Web search mode changed from %v to %v", currentWebSearchEnabled, request.WebSearchEnabled)
-		configChanged = true
-	}
-	summaryModelID := secutils.SanitizeForLog(request.SummaryModelID)
-	if summaryModelID == "" {
-		summaryModelID = session.SummaryModelID
-	}
-	if summaryModelID == "" && tenantInfo.ConversationConfig != nil {
-		summaryModelID = tenantInfo.ConversationConfig.SummaryModelID
-	}
-	if summaryModelID != session.SummaryModelID {
-		configChanged = true
-		session.SummaryModelID = summaryModelID
-	}
-
-	// If configuration changed, clear context and update session
-	if configChanged {
-		logger.Warnf(ctx, "Configuration changed, clearing context for session: %s", sessionID)
-		// Clear the LLM context to prevent contamination
-		if err := h.sessionService.ClearContext(ctx, sessionID); err != nil {
-			logger.Errorf(ctx, "Failed to clear context for session %s: %v", sessionID, err)
-			// Continue anyway - this is not a fatal error
-		}
-		if err := h.sessionService.DeleteWebSearchTempKBState(ctx, sessionID); err != nil {
-			logger.Errorf(ctx, "Failed to delete temp knowledge base for session %s: %v", sessionID, err)
-			// Continue anyway - this is not a fatal error
-		}
-		session.AgentConfig.KnowledgeBases = secutils.SanitizeForLogArray(request.KnowledgeBaseIDs)
-		session.AgentConfig.KnowledgeIDs = secutils.SanitizeForLogArray(request.KnowledgeIds)
-		session.AgentConfig.AgentModeEnabled = request.AgentEnabled
-		session.AgentConfig.WebSearchEnabled = request.WebSearchEnabled
-		session.SummaryModelID = secutils.SanitizeForLog(summaryModelID)
-		// Persist the session changes
-		if err := h.sessionService.UpdateSession(ctx, session); err != nil {
-			logger.Errorf(ctx, "Failed to update session %s: %v", sessionID, err)
-			c.Error(errors.NewInternalServerError("Failed to update session configuration"))
-			return
-		}
-		logger.Infof(ctx, "Session configuration updated successfully for session: %s", sessionID)
-	}
-
-	// If Agent mode is disabled, delegate to KnowledgeQA
-	if !request.AgentEnabled {
-		logger.Infof(ctx, "Agent mode disabled, delegating to KnowledgeQA for session: %s", sessionID)
-
-		// Use knowledge bases from request or session config
-		knowledgeBaseIDs := secutils.SanitizeForLogArray(request.KnowledgeBaseIDs)
-		if len(knowledgeBaseIDs) == 0 {
-			knowledgeBaseIDs = session.AgentConfig.KnowledgeBases
-		}
-
-		// If still empty, use session default knowledge base
-		if len(knowledgeBaseIDs) == 0 && session.KnowledgeBaseID != "" {
-			knowledgeBaseIDs = []string{session.KnowledgeBaseID}
-			logger.Infof(
-				ctx,
-				"Using session default knowledge base: %s",
-				secutils.SanitizeForLog(session.KnowledgeBaseID),
-			)
-		}
-
-		logger.Infof(
-			ctx,
-			"Delegating to KnowledgeQA with knowledge bases: %s",
-			secutils.SanitizeForLog(fmt.Sprintf("%v", knowledgeBaseIDs)),
-		)
-
-		// Use shared function to handle KnowledgeQA request (no title generation for AgentQA fallback)
-		h.handleKnowledgeQARequest(
-			ctx,
-			c,
-			session,
-			secutils.SanitizeForLog(request.Query),
-			secutils.SanitizeForLogArray(
-				knowledgeBaseIDs,
-			),
-			secutils.SanitizeForLogArray(
-				request.KnowledgeIds,
-			),
-			assistantMessage,
-			false,
-			secutils.SanitizeForLog(request.SummaryModelID),
-			request.WebSearchEnabled,
-			convertMentionedItems(request.MentionedItems),
-		)
-		return
-	}
-
-	// Emit agent query event to create user message
-	requestID := secutils.SanitizeForLog(c.GetString(types.RequestIDContextKey.String()))
-	if err := event.Emit(ctx, event.Event{
-		Type:      event.EventAgentQuery,
-		SessionID: sessionID,
-		RequestID: requestID,
-		Data: event.AgentQueryData{
-			SessionID: sessionID,
-			Query:     secutils.SanitizeForLog(request.Query),
-			RequestID: requestID,
-		},
-	}); err != nil {
-		logger.Errorf(ctx, "Failed to emit agent query event: %v", err)
-		return
-	}
-
-	// Set headers for SSE immediately
-	setSSEHeaders(c)
-
-	// Create user message
-	if err := h.createUserMessage(ctx, sessionID, secutils.SanitizeForLog(request.Query), requestID, convertMentionedItems(request.MentionedItems)); err != nil {
-		c.Error(errors.NewInternalServerError(err.Error()))
-		return
-	}
-
-	// Create assistant message (response)
-	assistantMessagePtr, err := h.createAssistantMessage(ctx, assistantMessage)
-	if err != nil {
-		c.Error(errors.NewInternalServerError(err.Error()))
-		return
-	}
-	assistantMessage = assistantMessagePtr
-
-	logger.Infof(ctx, "Calling agent QA service, session ID: %s", sessionID)
-
-	// Write initial agent_query event to StreamManager
-	h.writeAgentQueryEvent(ctx, sessionID, assistantMessage.ID)
-
-	eventBus := event.NewEventBus()
-	// Create cancellable context for async operations
-	asyncCtx, cancel := context.WithCancel(logger.CloneContext(ctx))
-	// Create and subscribe stream handler
-	h.setupStreamHandler(asyncCtx, sessionID, assistantMessage.ID, requestID, assistantMessage, eventBus)
-
-	// Start async title generation if session has no title
-	if session.Title == "" {
-		logger.Infof(ctx, "Session has no title, starting async title generation, session ID: %s", sessionID)
-		h.sessionService.GenerateTitleAsync(asyncCtx, session, secutils.SanitizeForLog(request.Query), eventBus)
-	}
-
-	// Register stop event handler to cancel the context
-	h.setupStopEventHandler(eventBus, sessionID, assistantMessage, cancel)
-
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				buf := make([]byte, 1024)
-				runtime.Stack(buf, true)
-				logger.ErrorWithFields(asyncCtx,
-					errors.NewInternalServerError(fmt.Sprintf("Agent QA service panicked: %v\n%s", r, string(buf))),
-					map[string]interface{}{
-						"session_id": sessionID,
-					})
-			}
-			h.completeAssistantMessage(asyncCtx, assistantMessage)
-			logger.Infof(asyncCtx, "Agent QA service completed for session: %s", sessionID)
-		}()
-		err := h.sessionService.AgentQA(
-			asyncCtx,
-			session,
-			secutils.SanitizeForLog(request.Query),
-			assistantMessage.ID,
-			eventBus,
-		)
-		if err != nil {
-			logger.ErrorWithFields(asyncCtx, err, nil)
-			// Emit error event to dedicated EventBus
-			eventBus.Emit(asyncCtx, event.Event{
-				Type:      event.EventError,
-				SessionID: sessionID,
-				Data: event.ErrorData{
-					Error:     err.Error(),
-					Stage:     "agent_execution",
-					SessionID: sessionID,
-				},
-			})
-			return
-		}
-	}()
-
-	// Handle events for SSE (blocking until connection is done)
-	// Wait for title only if session has no title (first message in session)
-	h.handleAgentEventsForSSE(ctx, c, sessionID, assistantMessage.ID, requestID, eventBus, session.Title == "")
 }
 
-// handleKnowledgeQARequest handles a KnowledgeQA request with the given parameters
-// This is a shared function used by both KnowledgeQA endpoint and AgentQA fallback
-func (h *Handler) handleKnowledgeQARequest(
-	ctx context.Context,
-	c *gin.Context,
-	session *types.Session,
-	query string,
-	knowledgeBaseIDs []string,
-	knowledgeIDs []string,
-	assistantMessage *types.Message,
-	generateTitle bool, // Whether to generate title if session has no title
-	summaryModelID string, // Optional summary model ID (overrides session default)
-	webSearchEnabled bool, // Whether web search is enabled
-	mentionedItems types.MentionedItems, // @mentioned knowledge bases and files
-) {
-	sessionID := session.ID
-	requestID := getRequestID(c)
+// executeNormalModeQA executes the normal (KnowledgeQA) mode
+func (h *Handler) executeNormalModeQA(reqCtx *qaRequestContext, generateTitle bool) {
+	ctx := reqCtx.ctx
+	sessionID := reqCtx.sessionID
 
 	// Create user message
-	if err := h.createUserMessage(ctx, sessionID, query, requestID, mentionedItems); err != nil {
-		c.Error(errors.NewInternalServerError(err.Error()))
+	if err := h.createUserMessage(ctx, sessionID, reqCtx.query, reqCtx.requestID, reqCtx.mentionedItems); err != nil {
+		reqCtx.c.Error(errors.NewInternalServerError(err.Error()))
 		return
 	}
 
-	// Create assistant message (response)
-	if _, err := h.createAssistantMessage(ctx, assistantMessage); err != nil {
-		c.Error(errors.NewInternalServerError(err.Error()))
+	// Create assistant message
+	if _, err := h.createAssistantMessage(ctx, reqCtx.assistantMessage); err != nil {
+		reqCtx.c.Error(errors.NewInternalServerError(err.Error()))
 		return
 	}
 
-	logger.Infof(ctx, "Using knowledge bases: %s", secutils.SanitizeForLog(fmt.Sprintf("%v", knowledgeBaseIDs)))
+	logger.Infof(ctx, "Using knowledge bases: %v", reqCtx.knowledgeBaseIDs)
 
-	// Set headers for SSE
-	setSSEHeaders(c)
+	// Setup SSE stream
+	streamCtx := h.setupSSEStream(reqCtx)
 
-	// Write initial agent_query event to StreamManager
-	h.writeAgentQueryEvent(ctx, sessionID, assistantMessage.ID)
-
-	// Create dedicated EventBus for this request
-	eventBus := event.NewEventBus()
-	// Create cancellable context for async operations
-	asyncCtx, cancel := context.WithCancel(logger.CloneContext(ctx))
-
-	// Register stop event handler and setup stream handler
-	h.setupStopEventHandler(eventBus, sessionID, assistantMessage, cancel)
-	h.setupStreamHandler(asyncCtx, sessionID, assistantMessage.ID, requestID, assistantMessage, eventBus)
-
-	// Generate title if needed
-	if generateTitle && session.Title == "" {
-		logger.Infof(ctx, "Session has no title, starting async title generation, session ID: %s", sessionID)
-		h.sessionService.GenerateTitleAsync(asyncCtx, session, query, eventBus)
-	}
-
-	eventBus.On(event.EventAgentFinalAnswer, func(ctx context.Context, evt event.Event) error {
+	// Setup completion handler for normal mode
+	streamCtx.eventBus.On(event.EventAgentFinalAnswer, func(ctx context.Context, evt event.Event) error {
 		data, ok := evt.Data.(event.AgentFinalAnswerData)
 		if !ok {
 			return nil
 		}
-		assistantMessage.Content += data.Content
+		streamCtx.assistantMessage.Content += data.Content
 		if data.Done {
-			logger.Infof(asyncCtx, "Knowledge QA service completed for session: %s", sessionID)
-			h.completeAssistantMessage(asyncCtx, assistantMessage)
-			// Emit completion event when stream finishes
-			if err := eventBus.Emit(asyncCtx, event.Event{
+			logger.Infof(streamCtx.asyncCtx, "Knowledge QA service completed for session: %s", sessionID)
+			h.completeAssistantMessage(streamCtx.asyncCtx, streamCtx.assistantMessage)
+			streamCtx.eventBus.Emit(streamCtx.asyncCtx, event.Event{
 				Type:      event.EventAgentComplete,
 				SessionID: sessionID,
-				Data: event.AgentCompleteData{
-					FinalAnswer: assistantMessage.Content,
-				},
-			}); err != nil {
-				logger.Errorf(asyncCtx, "Failed to emit completion event: %v", err)
-			}
-			cancel() // Clean up context
-			return nil
+				Data:      event.AgentCompleteData{FinalAnswer: streamCtx.assistantMessage.Content},
+			})
+			streamCtx.cancel()
 		}
 		return nil
 	})
 
-	// Call service to perform knowledge QA (async, emits events)
+	// Execute KnowledgeQA asynchronously
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
 				buf := make([]byte, 10240)
 				runtime.Stack(buf, true)
-				logger.ErrorWithFields(
-					asyncCtx,
-					errors.NewInternalServerError(fmt.Sprintf("Knowledge QA service panicked: %v\n%s", r, string(buf))),
-					nil,
-				)
+				logger.ErrorWithFields(streamCtx.asyncCtx,
+					errors.NewInternalServerError(fmt.Sprintf("Knowledge QA service panicked: %v\n%s", r, string(buf))), nil)
 			}
 		}()
+
 		err := h.sessionService.KnowledgeQA(
-			asyncCtx,
-			session,
-			query,
-			knowledgeBaseIDs,
-			knowledgeIDs,
-			assistantMessage.ID,
-			summaryModelID,
-			webSearchEnabled,
-			eventBus,
+			streamCtx.asyncCtx,
+			reqCtx.session,
+			reqCtx.query,
+			reqCtx.knowledgeBaseIDs,
+			reqCtx.knowledgeIDs,
+			reqCtx.assistantMessage.ID,
+			reqCtx.summaryModelID,
+			reqCtx.webSearchEnabled,
+			streamCtx.eventBus,
+			reqCtx.customAgent,
 		)
 		if err != nil {
-			logger.ErrorWithFields(asyncCtx, err, nil)
-			// Emit error event to dedicated EventBus
-			eventBus.Emit(asyncCtx, event.Event{
+			logger.ErrorWithFields(streamCtx.asyncCtx, err, nil)
+			streamCtx.eventBus.Emit(streamCtx.asyncCtx, event.Event{
 				Type:      event.EventError,
 				SessionID: sessionID,
 				Data: event.ErrorData{
@@ -621,13 +376,95 @@ func (h *Handler) handleKnowledgeQARequest(
 					SessionID: sessionID,
 				},
 			})
-			return
 		}
 	}()
 
-	// Handle events for SSE (blocking until connection is done)
-	// Wait for title only if session has no title (first message in session)
-	h.handleAgentEventsForSSE(ctx, c, sessionID, assistantMessage.ID, requestID, eventBus, session.Title == "")
+	// Handle SSE events (blocking)
+	shouldWaitForTitle := generateTitle && reqCtx.session.Title == ""
+	h.handleAgentEventsForSSE(ctx, reqCtx.c, sessionID, reqCtx.assistantMessage.ID,
+		reqCtx.requestID, streamCtx.eventBus, shouldWaitForTitle)
+}
+
+// executeAgentModeQA executes the agent mode
+func (h *Handler) executeAgentModeQA(reqCtx *qaRequestContext) {
+	ctx := reqCtx.ctx
+	sessionID := reqCtx.sessionID
+
+	// Emit agent query event
+	if err := event.Emit(ctx, event.Event{
+		Type:      event.EventAgentQuery,
+		SessionID: sessionID,
+		RequestID: reqCtx.requestID,
+		Data: event.AgentQueryData{
+			SessionID: sessionID,
+			Query:     reqCtx.query,
+			RequestID: reqCtx.requestID,
+		},
+	}); err != nil {
+		logger.Errorf(ctx, "Failed to emit agent query event: %v", err)
+		return
+	}
+
+	// Create user message
+	if err := h.createUserMessage(ctx, sessionID, reqCtx.query, reqCtx.requestID, reqCtx.mentionedItems); err != nil {
+		reqCtx.c.Error(errors.NewInternalServerError(err.Error()))
+		return
+	}
+
+	// Create assistant message
+	assistantMessagePtr, err := h.createAssistantMessage(ctx, reqCtx.assistantMessage)
+	if err != nil {
+		reqCtx.c.Error(errors.NewInternalServerError(err.Error()))
+		return
+	}
+	reqCtx.assistantMessage = assistantMessagePtr
+
+	logger.Infof(ctx, "Calling agent QA service, session ID: %s", sessionID)
+
+	// Setup SSE stream
+	streamCtx := h.setupSSEStream(reqCtx)
+
+	// Execute AgentQA asynchronously
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				buf := make([]byte, 1024)
+				runtime.Stack(buf, true)
+				logger.ErrorWithFields(streamCtx.asyncCtx,
+					errors.NewInternalServerError(fmt.Sprintf("Agent QA service panicked: %v\n%s", r, string(buf))),
+					map[string]interface{}{"session_id": sessionID})
+			}
+			h.completeAssistantMessage(streamCtx.asyncCtx, streamCtx.assistantMessage)
+			logger.Infof(streamCtx.asyncCtx, "Agent QA service completed for session: %s", sessionID)
+		}()
+
+		err := h.sessionService.AgentQA(
+			streamCtx.asyncCtx,
+			reqCtx.session,
+			reqCtx.query,
+			reqCtx.assistantMessage.ID,
+			streamCtx.eventBus,
+			reqCtx.customAgent,
+			reqCtx.knowledgeBaseIDs,
+			reqCtx.knowledgeIDs,
+		)
+		if err != nil {
+			logger.ErrorWithFields(streamCtx.asyncCtx, err, nil)
+			streamCtx.eventBus.Emit(streamCtx.asyncCtx, event.Event{
+				Type:      event.EventError,
+				SessionID: sessionID,
+				Data: event.ErrorData{
+					Error:     err.Error(),
+					Stage:     "agent_execution",
+					SessionID: sessionID,
+				},
+			})
+		}
+	}()
+
+	// Handle SSE events (blocking)
+	h.handleAgentEventsForSSE(ctx, reqCtx.c, sessionID, reqCtx.assistantMessage.ID,
+		reqCtx.requestID, streamCtx.eventBus, reqCtx.session.Title == "")
 }
 
 // completeAssistantMessage marks an assistant message as complete and updates it

@@ -24,6 +24,18 @@
                             </div>
                         </div>
                     </template>
+                    <template v-else-if="showCreateAgentAction">
+                        <div class="menu_item kb-action-item" @click.stop="handleCreateAgent">
+                            <div class="kb-action-icon-wrapper">
+                                <svg class="kb-action-icon" width="18" height="18" viewBox="0 0 18 18" fill="none">
+                                    <path d="M9 3.75V14.25M3.75 9H14.25" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                                </svg>
+                            </div>
+                            <div class="kb-action-content">
+                                <span class="kb-action-title">{{ t('agent.createAgent') }}</span>
+                            </div>
+                        </div>
+                    </template>
                     <template v-else-if="showDocActions">
                         <div class="menu_item kb-action-item" @click.stop="handleDocUploadClick">
                             <div class="kb-action-icon-wrapper">
@@ -138,7 +150,7 @@
                      :class="['menu_item', item.childrenPath && item.childrenPath == currentpath ? 'menu_item_c_active' : isMenuItemActive(item.path) ? 'menu_item_active' : '']">
                     <div class="menu_item-box">
                         <div class="menu_icon">
-                            <img class="icon" :src="getImgSrc(item.icon == 'zhishiku' ? knowledgeIcon : item.icon == 'logout' ? logoutIcon : item.icon == 'setting' ? settingIcon : prefixIcon)" alt="">
+                            <img class="icon" :src="getImgSrc(item.icon == 'zhishiku' ? knowledgeIcon : item.icon == 'agent' ? agentIcon : item.icon == 'logout' ? logoutIcon : item.icon == 'setting' ? settingIcon : prefixIcon)" alt="">
                         </div>
                         <span class="menu_title" :title="item.title">{{ item.title }}</span>
                         <t-icon v-if="item.path === 'creatChat'" name="add" class="menu-create-hint" />
@@ -253,6 +265,9 @@ const isInCreatChat = computed<boolean>(() => {
 // 是否在对话详情页
 const isInChatDetail = computed<boolean>(() => route.name === 'chat');
 
+// 是否在智能体列表页面
+const isInAgentList = computed<boolean>(() => route.name === 'agentList');
+
 // 统一的菜单项激活状态判断
 const isMenuItemActive = (itemPath: string): boolean => {
     const currentRoute = route.name;
@@ -262,6 +277,8 @@ const isMenuItemActive = (itemPath: string): boolean => {
             return currentRoute === 'knowledgeBaseList' || 
                    currentRoute === 'knowledgeBaseDetail' || 
                    currentRoute === 'knowledgeBaseSettings';
+        case 'agents':
+            return currentRoute === 'agentList';
         case 'creatChat':
             return currentRoute === 'kbCreatChat' || currentRoute === 'globalCreatChat';
         case 'settings':
@@ -290,13 +307,13 @@ const getIconActiveState = (itemPath: string) => {
 // 分离上下两部分菜单
 const topMenuItems = computed<MenuItem[]>(() => {
     return (menuArr.value as unknown as MenuItem[]).filter((item: MenuItem) => 
-        item.path === 'knowledge-bases' || item.path === 'creatChat'
+        item.path === 'knowledge-bases' || item.path === 'agents' || item.path === 'creatChat'
     );
 });
 
 const bottomMenuItems = computed<MenuItem[]>(() => {
     return (menuArr.value as unknown as MenuItem[]).filter((item: MenuItem) => {
-        if (item.path === 'knowledge-bases' || item.path === 'creatChat') {
+        if (item.path === 'knowledge-bases' || item.path === 'agents' || item.path === 'creatChat') {
             return false;
         }
         return true;
@@ -325,12 +342,14 @@ const showKbActions = computed(() =>
     (isInKnowledgeBase.value && !!currentKbInfo.value) || 
     isInKnowledgeBaseList.value || 
     isInCreatChat.value ||
-    isInChatDetail.value
+    isInChatDetail.value ||
+    isInAgentList.value
 )
 const currentKbType = computed(() => currentKbInfo.value?.type || 'document')
 const showDocActions = computed(() => showKbActions.value && isInKnowledgeBase.value && currentKbType.value !== 'faq')
 const showFaqActions = computed(() => showKbActions.value && isInKnowledgeBase.value && currentKbType.value === 'faq')
 const showCreateKbAction = computed(() => showKbActions.value && (isInKnowledgeBaseList.value || isInCreatChat.value || isInChatDetail.value))
+const showCreateAgentAction = computed(() => showKbActions.value && isInAgentList.value)
 
 // 时间分组函数
 const getTimeCategory = (dateStr: string): string => {
@@ -570,15 +589,20 @@ let knowledgeIcon = ref('zhishiku-green.svg');
 let prefixIcon = ref('prefixIcon.svg');
 let logoutIcon = ref('logout.svg');
 let settingIcon = ref('setting.svg'); // 设置图标
+let agentIcon = ref('agent.svg'); // 智能体图标
 let pathPrefix = ref(route.name)
   const getIcon = (path: string) => {
       // 根据当前路由状态更新所有图标
       const kbActiveState = getIconActiveState('knowledge-bases');
       const creatChatActiveState = getIconActiveState('creatChat');
       const settingsActiveState = getIconActiveState('settings');
+      const agentsActiveState = route.name === 'agentList';
       
       // 知识库图标：只在知识库页面显示绿色
       knowledgeIcon.value = kbActiveState.isKbActive ? 'zhishiku-green.svg' : 'zhishiku.svg';
+      
+      // 智能体图标：只在智能体页面显示绿色
+      agentIcon.value = agentsActiveState ? 'agent-green.svg' : 'agent.svg';
       
       // 对话图标：只在对话创建页面显示绿色，在知识库页面显示灰色，其他情况显示默认
       prefixIcon.value = creatChatActiveState.isCreatChatActive ? 'prefixIcon-green.svg' : 
@@ -601,6 +625,9 @@ const handleMenuClick = async (path: string) => {
         } else {
             router.push('/platform/knowledge-bases')
         }
+    } else if (path === 'agents') {
+        // 智能体菜单项：跳转到智能体列表
+        router.push('/platform/agents')
     } else if (path === 'settings') {
         // 设置菜单项：打开设置弹窗并跳转路由
         uiStore.openSettings()
@@ -1236,6 +1263,13 @@ const handleFaqBatchActionFromMenu = async (data: { value: string }) => {
 
 const handleCreateKnowledgeBase = () => {
     uiStore.openCreateKB()
+}
+
+const handleCreateAgent = () => {
+    // 触发创建智能体事件，由 AgentList 页面监听处理
+    window.dispatchEvent(new CustomEvent('openAgentEditor', {
+        detail: { mode: 'create' }
+    }))
 }
 
 </script>
