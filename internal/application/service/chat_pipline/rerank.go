@@ -145,6 +145,22 @@ func (p *PluginRerank) OnEvent(ctx context.Context,
 		sr.Metadata["base_score"] = fmt.Sprintf("%.4f", base)
 		modelScore := rr.RelevanceScore
 		sr.Score = compositeScore(sr, modelScore, base)
+
+		// Apply FAQ score boost if enabled
+		if chatManage.FAQPriorityEnabled && chatManage.FAQScoreBoost > 1.0 &&
+			sr.ChunkType == string(types.ChunkTypeFAQ) {
+			originalScore := sr.Score
+			sr.Score = math.Min(sr.Score*chatManage.FAQScoreBoost, 1.0)
+			sr.Metadata["faq_boosted"] = "true"
+			sr.Metadata["faq_original_score"] = fmt.Sprintf("%.4f", originalScore)
+			pipelineInfo(ctx, "Rerank", "faq_boost", map[string]interface{}{
+				"chunk_id":       sr.ID,
+				"original_score": fmt.Sprintf("%.4f", originalScore),
+				"boosted_score":  fmt.Sprintf("%.4f", sr.Score),
+				"boost_factor":   chatManage.FAQScoreBoost,
+			})
+		}
+
 		pipelineInfo(ctx, "Rerank", "composite_calc", map[string]interface{}{
 			"chunk_id":    sr.ID,
 			"base_score":  fmt.Sprintf("%.4f", base),

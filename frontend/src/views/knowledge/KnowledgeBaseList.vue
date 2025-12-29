@@ -116,23 +116,14 @@
         <!-- 卡片底部 -->
         <div class="card-bottom">
           <div class="bottom-left">
-            <div class="type-badge" :class="{ 'document': (kb.type || 'document') === 'document', 'faq': kb.type === 'faq' }">
-              <t-icon :name="kb.type === 'faq' ? 'chat-bubble-help' : 'folder'" size="14px" />
-              <span>
-                {{ kb.type === 'faq' ? $t('knowledgeEditor.basic.typeFAQ') : $t('knowledgeEditor.basic.typeDocument') }}
-                ({{ kb.type === 'faq' ? (kb.chunk_count || 0) : (kb.knowledge_count || 0) }})
-              </span>
-              <t-tooltip 
-                v-if="kb.isProcessing" 
-                :content="kb.type === 'document' && (kb.processing_count || 0) > 0 
-                  ? $t('knowledgeList.processingDocuments', { count: kb.processing_count || 0 })
-                  : $t('knowledgeList.processing')" 
-                placement="top"
-              >
-                <t-icon name="loading" size="14px" class="processing-icon" />
-              </t-tooltip>
-            </div>
             <div class="feature-badges">
+              <t-tooltip :content="kb.type === 'faq' ? $t('knowledgeEditor.basic.typeFAQ') : $t('knowledgeEditor.basic.typeDocument')" placement="top">
+                <div class="feature-badge" :class="{ 'type-document': (kb.type || 'document') === 'document', 'type-faq': kb.type === 'faq' }">
+                  <t-icon :name="kb.type === 'faq' ? 'chat-bubble-help' : 'folder'" size="14px" />
+                  <span class="badge-count">{{ kb.type === 'faq' ? (kb.chunk_count || 0) : (kb.knowledge_count || 0) }}</span>
+                  <t-icon v-if="kb.isProcessing" name="loading" size="12px" class="processing-icon" />
+                </div>
+              </t-tooltip>
               <t-tooltip v-if="kb.extract_config?.enabled" :content="$t('knowledgeList.features.knowledgeGraph')" placement="top">
                 <div class="feature-badge kg">
                   <t-icon name="relation" size="14px" />
@@ -700,27 +691,28 @@ const handleUploadFinishedEvent = (event: Event) => {
 
 .kb-card-wrap {
   display: grid;
-  gap: 20px;
+  gap: 16px;
   grid-template-columns: 1fr;
 }
 
 .kb-card {
-  border: 2px solid #fbfbfb;
-  border-radius: 6px;
+  border: 1px solid #f0f0f0;
+  border-radius: 12px;
   overflow: hidden;
   box-sizing: border-box;
-  box-shadow: 0 0 8px 0 #00000005;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
   background: #fff;
   position: relative;
   cursor: pointer;
-  transition: all 0.2s ease;
-  padding: 12px 16px 14px;
+  transition: all 0.25s ease;
+  padding: 16px 18px;
   display: flex;
   flex-direction: column;
-  min-height: 150px;
+  height: 160px;
 
   &:hover {
     border-color: #07c05f;
+    box-shadow: 0 4px 12px rgba(7, 192, 95, 0.12);
   }
 
   &.uninitialized {
@@ -731,12 +723,12 @@ const handleUploadFinishedEvent = (event: Event) => {
   &.kb-type-document {
     background: linear-gradient(135deg, #ffffff 0%, #f8fcfa 100%);
     border-color: #e8f5ed;
-    
+
     &:hover {
       border-color: #07c05f;
       background: linear-gradient(135deg, #ffffff 0%, #f0fdf4 100%);
     }
-    
+
     // 右上角装饰
     &::after {
       content: '';
@@ -746,7 +738,7 @@ const handleUploadFinishedEvent = (event: Event) => {
       width: 60px;
       height: 60px;
       background: linear-gradient(135deg, rgba(7, 192, 95, 0.08) 0%, transparent 100%);
-      border-radius: 0 6px 0 100%;
+      border-radius: 0 12px 0 100%;
       pointer-events: none;
       z-index: 0;
     }
@@ -756,12 +748,13 @@ const handleUploadFinishedEvent = (event: Event) => {
   &.kb-type-faq {
     background: linear-gradient(135deg, #ffffff 0%, #f8fbff 100%);
     border-color: #e6f0ff;
-    
+
     &:hover {
       border-color: #0052d9;
+      box-shadow: 0 4px 12px rgba(0, 82, 217, 0.12);
       background: linear-gradient(135deg, #ffffff 0%, #eff6ff 100%);
     }
-    
+
     // 右上角装饰
     &::after {
       content: '';
@@ -771,7 +764,7 @@ const handleUploadFinishedEvent = (event: Event) => {
       width: 60px;
       height: 60px;
       background: linear-gradient(135deg, rgba(0, 82, 217, 0.08) 0%, transparent 100%);
-      border-radius: 0 6px 0 100%;
+      border-radius: 0 12px 0 100%;
       pointer-events: none;
       z-index: 0;
     }
@@ -790,42 +783,46 @@ const handleUploadFinishedEvent = (event: Event) => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 8px;
+  margin-bottom: 10px;
 }
 
 .card-title {
-  color: #000000e6;
+  color: #1a1a1a;
   font-family: "PingFang SC";
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 600;
   line-height: 22px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   flex: 1;
-  margin-right: 8px;
+  min-width: 0;
 }
 
 .more-wrap {
   display: flex;
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   justify-content: center;
   align-items: center;
   border-radius: 6px;
   cursor: pointer;
   flex-shrink: 0;
   transition: all 0.2s ease;
-  opacity: 0.7;
+  opacity: 0;
+
+  .kb-card:hover & {
+    opacity: 0.6;
+  }
 
   &:hover {
-    background: rgba(0, 0, 0, 0.06);
-    opacity: 1;
+    background: rgba(0, 0, 0, 0.05);
+    opacity: 1 !important;
   }
 
   &.active-more {
-    background: rgba(0, 0, 0, 0.08);
-    opacity: 1;
+    background: rgba(0, 0, 0, 0.06);
+    opacity: 1 !important;
   }
 
   .more-icon {
@@ -836,7 +833,8 @@ const handleUploadFinishedEvent = (event: Event) => {
 
 .card-content {
   flex: 1;
-  margin-bottom: 10px;
+  margin-bottom: 12px;
+  overflow: hidden;
 }
 
 .card-description {
@@ -845,21 +843,20 @@ const handleUploadFinishedEvent = (event: Event) => {
   -webkit-line-clamp: 2;
   line-clamp: 2;
   overflow: hidden;
-  color: #00000066;
+  color: #666;
   font-family: "PingFang SC";
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 400;
   line-height: 20px;
-  min-height: 40px;
 }
 
 .card-bottom {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 0 0;
-  border-top: 1px solid #f0f0f0;
   margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px solid #f0f0f0;
 }
 
 .bottom-left {
@@ -868,88 +865,90 @@ const handleUploadFinishedEvent = (event: Event) => {
   gap: 8px;
 }
 
-.type-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 3px 10px;
-  border-radius: 4px;
-  font-family: "PingFang SC";
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 18px;
-
-  &.document {
-    background: rgba(7, 192, 95, 0.1);
-    color: #059669;
-    border: 1px solid rgba(7, 192, 95, 0.2);
-  }
-
-  &.faq {
-    background: rgba(0, 82, 217, 0.1);
-    color: #0052d9;
-    border: 1px solid rgba(0, 82, 217, 0.2);
-  }
-
-  .processing-icon {
-    animation: spin 1s linear infinite;
-    margin-left: 4px;
-  }
-
-  &.document .processing-icon {
-    color: #059669;
-  }
-
-  &.faq .processing-icon {
-    color: #0052d9;
-  }
-}
-
 .feature-badges {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
 }
 
 .feature-badge {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
-  border-radius: 4px;
-  cursor: pointer;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  cursor: default;
+  transition: background 0.2s ease;
 
-  &.kg {
-    background: rgba(124, 77, 255, 0.1);
-    color: #7c4dff;
-    border: 1px solid rgba(124, 77, 255, 0.2);
+  &.type-document {
+    background: rgba(7, 192, 95, 0.08);
+    color: #059669;
+    width: auto;
+    padding: 0 8px;
+    gap: 4px;
 
     &:hover {
-      background: rgba(124, 77, 255, 0.15);
+      background: rgba(7, 192, 95, 0.12);
+    }
+
+    .badge-count {
+      font-size: 12px;
+      font-weight: 500;
+    }
+
+    .processing-icon {
+      animation: spin 1s linear infinite;
+    }
+  }
+
+  &.type-faq {
+    background: rgba(0, 82, 217, 0.08);
+    color: #0052d9;
+    width: auto;
+    padding: 0 8px;
+    gap: 4px;
+
+    &:hover {
+      background: rgba(0, 82, 217, 0.12);
+    }
+
+    .badge-count {
+      font-size: 12px;
+      font-weight: 500;
+    }
+
+    .processing-icon {
+      animation: spin 1s linear infinite;
+    }
+  }
+
+  &.kg {
+    background: rgba(124, 77, 255, 0.08);
+    color: #7c4dff;
+
+    &:hover {
+      background: rgba(124, 77, 255, 0.12);
     }
   }
 
   &.multimodal {
-    background: rgba(255, 152, 0, 0.1);
-    color: #ff9800;
-    border: 1px solid rgba(255, 152, 0, 0.2);
+    background: rgba(255, 152, 0, 0.08);
+    color: #f59e0b;
 
     &:hover {
-      background: rgba(255, 152, 0, 0.15);
+      background: rgba(255, 152, 0, 0.12);
     }
   }
 
   &.question {
-    background: rgba(0, 150, 136, 0.1);
+    background: rgba(0, 150, 136, 0.08);
     color: #009688;
-    border: 1px solid rgba(0, 150, 136, 0.2);
 
     &:hover {
-      background: rgba(0, 150, 136, 0.15);
+      background: rgba(0, 150, 136, 0.12);
     }
   }
-
 }
 
 @keyframes spin {
@@ -986,7 +985,7 @@ const handleUploadFinishedEvent = (event: Event) => {
 }
 
 .card-time {
-  color: #00000066;
+  color: #999;
   font-family: "PingFang SC";
   font-size: 12px;
   font-weight: 400;

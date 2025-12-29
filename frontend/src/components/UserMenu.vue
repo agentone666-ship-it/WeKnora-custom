@@ -24,10 +24,6 @@
           <t-icon name="server" class="menu-icon" />
           <span>Ollama</span>
         </div>
-        <div class="menu-item" @click="handleQuickNav('agent')">
-          <t-icon name="chat" class="menu-icon" />
-          <span>{{ $t('settings.conversationStrategy') }}</span>
-        </div>
         <div class="menu-item" @click="handleQuickNav('websearch')">
           <svg 
             width="16" 

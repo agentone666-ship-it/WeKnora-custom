@@ -2,6 +2,8 @@ package chatpipline
 
 import (
 	"context"
+	"strings"
+	"time"
 
 	"github.com/Tencent/WeKnora/internal/common"
 	"github.com/Tencent/WeKnora/internal/logger"
@@ -51,17 +53,15 @@ func prepareChatModel(ctx context.Context, modelService interfaces.ModelService,
 
 // prepareMessagesWithHistory prepare complete messages including history
 func prepareMessagesWithHistory(chatManage *types.ChatManage) []chat.Message {
+	// Replace placeholders in system prompt
+	systemPrompt := renderSystemPromptPlaceholders(chatManage.SummaryConfig.Prompt)
+	
 	chatMessages := []chat.Message{
-		{Role: "system", Content: chatManage.SummaryConfig.Prompt},
+		{Role: "system", Content: systemPrompt},
 	}
 
-	chatHistory := chatManage.History
-	if len(chatHistory) > 2 {
-		chatHistory = chatHistory[len(chatHistory)-2:]
-	}
-
-	// Add conversation history
-	for _, history := range chatHistory {
+	// Add conversation history (already limited by maxRounds in load_history/rewrite plugins)
+	for _, history := range chatManage.History {
 		chatMessages = append(chatMessages, chat.Message{Role: "user", Content: history.Query})
 		chatMessages = append(chatMessages, chat.Message{Role: "assistant", Content: history.Answer})
 	}
@@ -70,4 +70,19 @@ func prepareMessagesWithHistory(chatManage *types.ChatManage) []chat.Message {
 	chatMessages = append(chatMessages, chat.Message{Role: "user", Content: chatManage.UserContent})
 
 	return chatMessages
+}
+
+// renderSystemPromptPlaceholders replaces placeholders in system prompt
+// Supported placeholders:
+//   - {{current_time}} -> current time in RFC3339 format
+func renderSystemPromptPlaceholders(prompt string) string {
+	result := prompt
+	
+	// Replace {{current_time}} placeholder
+	if strings.Contains(result, "{{current_time}}") {
+		currentTime := time.Now().Format(time.RFC3339)
+		result = strings.ReplaceAll(result, "{{current_time}}", currentTime)
+	}
+	
+	return result
 }

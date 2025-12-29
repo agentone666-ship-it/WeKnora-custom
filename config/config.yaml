@@ -23,7 +23,7 @@ conversation:
     - 使用礼貌、专业的语气
 
     ## 用户的问题是:
-    {{.Query}}
+    {{query}}
   enable_rewrite: true
   enable_query_expansion: true
   enable_rerank: true
@@ -82,15 +82,10 @@ conversation:
     改写后: 国外手机号是否可以注册微信账号
   rewrite_prompt_user: |
     ## 历史对话背景
-    {{range .Conversation}}
-    ------BEGIN------
-    用户的问题是：{{.Query}}
-    助手的回答是：{{.Answer}}
-    ------END------
-    {{end}}
+    {{conversation}}
 
     ## 需要改写的用户问题
-    {{.Query}}
+    {{query}}
 
     ## 改写后的问题
   keywords_extraction_prompt: |
@@ -134,7 +129,7 @@ conversation:
     Output: iPhone, 连接WiFi, 使用iPhone连接WiFi
 
     # Real Data
-    USER: {{.Query}}
+    USER: {{query}}
 
   keywords_extraction_prompt_user: |
     Output:
@@ -182,7 +177,6 @@ conversation:
     prompt: |
       你是一个专业的智能信息检索助手，名为WeKnora。你犹如专业的高级秘书，依据检索到的信息回答用户问题，不能利用任何先验知识。
       当用户提出问题时，助手会基于特定的信息进行解答。助手首先在心中思考推理过程，然后向用户提供答案。
-    context_template: |
       ## 回答问题规则
       - 仅根据检索到的信息中的事实进行回复，不得运用任何先验知识，保持回应的客观性和准确性。
       - 复杂问题和答案的按Markdown分结构展示，总述部分不需要拆分
@@ -195,18 +189,7 @@ conversation:
       - 以Markdown图文格式输出你的最终结果
       - 输出内容要保证简短且全面，条理清晰，信息明确，不重复。
 
-      ## 当前时间是：
-      {{.CurrentTime}} {{.CurrentWeek}}
-
-      ## 检索到的信息如下：
-      ------BEGIN------
-      {{range .Contexts}}
-      {{.}}
-      {{end}}
-      ------END------
-
-      ## 用户当前的问题是：
-      {{.Query}}
+    context_template: "{{query}}"
   extract_entities_prompt: |
     ## 任务
     用户提供的文本中，提取所有符合以下实体类型的实体：
@@ -495,11 +478,11 @@ conversation:
   generate_questions_prompt: |
     你是一个专业的问题生成助手。你的任务是根据给定的【主要内容】生成用户可能会问的相关问题。
 
-    {{.Context}}
+    {{context}}
     ## 主要内容（请基于此内容生成问题）
-    文档名称：{{.DocName}}
+    文档名称：{{doc_name}}
     文档内容：
-    {{.Content}}
+    {{content}}
 
     ## 核心要求
     - 生成的问题必须与【主要内容】直接相关
@@ -508,7 +491,7 @@ conversation:
     - 问题应该是用户在实际场景中可能会提出的自然问题
     - 问题应该多样化，覆盖内容的不同方面
     - 每个问题应该简洁明了，长度控制在30字以内
-    - 生成的问题数量为 {{.QuestionCount}} 个
+    - 生成的问题数量为 {{question_count}} 个
 
     ## 问题类型建议
     - 定义类：什么是...？...是什么？

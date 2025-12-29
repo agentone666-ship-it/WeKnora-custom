@@ -166,3 +166,42 @@ func (cm *contextManager) GetContextStats(ctx context.Context, sessionID string)
 
 	return stats, nil
 }
+
+// SetSystemPrompt sets or updates the system prompt for a session
+// If a system message exists, it will be replaced; otherwise, a new one will be added at the beginning
+func (cm *contextManager) SetSystemPrompt(ctx context.Context, sessionID string, systemPrompt string) error {
+	logger.Infof(ctx, "[ContextManager][Session-%s] Setting system prompt, length=%d", sessionID, len(systemPrompt))
+
+	// Load existing messages from storage
+	messages, err := cm.storage.Load(ctx, sessionID)
+	if err != nil {
+		logger.Errorf(ctx, "[ContextManager][Session-%s] Failed to load context: %v", sessionID, err)
+		return fmt.Errorf("failed to load context: %w", err)
+	}
+
+	// Create new system message
+	systemMessage := chat.Message{
+		Role:    "system",
+		Content: systemPrompt,
+	}
+
+	// Check if first message is a system message
+	if len(messages) > 0 && messages[0].Role == "system" {
+		// Replace existing system message
+		logger.Debugf(ctx, "[ContextManager][Session-%s] Replacing existing system prompt", sessionID)
+		messages[0] = systemMessage
+	} else {
+		// Insert system message at the beginning
+		logger.Debugf(ctx, "[ContextManager][Session-%s] Inserting new system prompt at beginning", sessionID)
+		messages = append([]chat.Message{systemMessage}, messages...)
+	}
+
+	// Save updated messages to storage
+	if err := cm.storage.Save(ctx, sessionID, messages); err != nil {
+		logger.Errorf(ctx, "[ContextManager][Session-%s] Failed to save context: %v", sessionID, err)
+		return fmt.Errorf("failed to save context: %w", err)
+	}
+
+	logger.Infof(ctx, "[ContextManager][Session-%s] System prompt set successfully", sessionID)
+	return nil
+}

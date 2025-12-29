@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -10,20 +11,22 @@ import (
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/go-viper/mapstructure/v2"
 	"github.com/spf13/viper"
+	"gopkg.in/yaml.v3"
 )
 
 // Config 应用程序总配置
 type Config struct {
-	Conversation   *ConversationConfig   `yaml:"conversation"    json:"conversation"`
-	Server         *ServerConfig         `yaml:"server"          json:"server"`
-	KnowledgeBase  *KnowledgeBaseConfig  `yaml:"knowledge_base"  json:"knowledge_base"`
-	Tenant         *TenantConfig         `yaml:"tenant"          json:"tenant"`
-	Models         []ModelConfig         `yaml:"models"          json:"models"`
-	VectorDatabase *VectorDatabaseConfig `yaml:"vector_database" json:"vector_database"`
-	DocReader      *DocReaderConfig      `yaml:"docreader"       json:"docreader"`
-	StreamManager  *StreamManagerConfig  `yaml:"stream_manager"  json:"stream_manager"`
-	ExtractManager *ExtractManagerConfig `yaml:"extract"         json:"extract"`
-	WebSearch      *WebSearchConfig      `yaml:"web_search"      json:"web_search"`
+	Conversation    *ConversationConfig    `yaml:"conversation"     json:"conversation"`
+	Server          *ServerConfig          `yaml:"server"           json:"server"`
+	KnowledgeBase   *KnowledgeBaseConfig   `yaml:"knowledge_base"   json:"knowledge_base"`
+	Tenant          *TenantConfig          `yaml:"tenant"           json:"tenant"`
+	Models          []ModelConfig          `yaml:"models"           json:"models"`
+	VectorDatabase  *VectorDatabaseConfig  `yaml:"vector_database"  json:"vector_database"`
+	DocReader       *DocReaderConfig       `yaml:"docreader"        json:"docreader"`
+	StreamManager   *StreamManagerConfig   `yaml:"stream_manager"   json:"stream_manager"`
+	ExtractManager  *ExtractManagerConfig  `yaml:"extract"          json:"extract"`
+	WebSearch       *WebSearchConfig       `yaml:"web_search"       json:"web_search"`
+	PromptTemplates *PromptTemplatesConfig `yaml:"prompt_templates" json:"prompt_templates"`
 }
 
 type DocReaderConfig struct {
@@ -106,6 +109,25 @@ type TenantConfig struct {
 	DefaultSessionDescription string `yaml:"default_session_description" json:"default_session_description"`
 	// EnableCrossTenantAccess enables cross-tenant access for users with permission
 	EnableCrossTenantAccess bool `yaml:"enable_cross_tenant_access" json:"enable_cross_tenant_access"`
+}
+
+// PromptTemplate 提示词模板
+type PromptTemplate struct {
+	ID               string `yaml:"id"                 json:"id"`
+	Name             string `yaml:"name"               json:"name"`
+	Description      string `yaml:"description"        json:"description"`
+	Content          string `yaml:"content"            json:"content"`
+	HasKnowledgeBase bool   `yaml:"has_knowledge_base" json:"has_knowledge_base,omitempty"`
+	HasWebSearch     bool   `yaml:"has_web_search"     json:"has_web_search,omitempty"`
+}
+
+// PromptTemplatesConfig 提示词模板配置
+type PromptTemplatesConfig struct {
+	SystemPrompt    []PromptTemplate `yaml:"system_prompt"    json:"system_prompt"`
+	ContextTemplate []PromptTemplate `yaml:"context_template" json:"context_template"`
+	RewriteSystem   []PromptTemplate `yaml:"rewrite_system"   json:"rewrite_system"`
+	RewriteUser     []PromptTemplate `yaml:"rewrite_user"     json:"rewrite_user"`
+	Fallback        []PromptTemplate `yaml:"fallback"         json:"fallback"`
 }
 
 // ModelConfig 模型配置
@@ -192,7 +214,66 @@ func LoadConfig() (*Config, error) {
 		return nil, fmt.Errorf("unable to decode config into struct: %w", err)
 	}
 	fmt.Printf("Using configuration file: %s\n", viper.ConfigFileUsed())
+
+	// 加载提示词模板（从目录或配置文件）
+	configDir := filepath.Dir(viper.ConfigFileUsed())
+	promptTemplates, err := loadPromptTemplates(configDir)
+	if err != nil {
+		fmt.Printf("Warning: failed to load prompt templates from directory: %v\n", err)
+		// 如果目录加载失败，使用配置文件中的模板（如果有）
+	} else if promptTemplates != nil {
+		cfg.PromptTemplates = promptTemplates
+	}
+
 	return &cfg, nil
+}
+
+// promptTemplateFile 用于解析模板文件
+type promptTemplateFile struct {
+	Templates []PromptTemplate `yaml:"templates"`
+}
+
+// loadPromptTemplates 从目录加载提示词模板
+func loadPromptTemplates(configDir string) (*PromptTemplatesConfig, error) {
+	templatesDir := filepath.Join(configDir, "prompt_templates")
+
+	// 检查目录是否存在
+	if _, err := os.Stat(templatesDir); os.IsNotExist(err) {
+		return nil, nil // 目录不存在，返回nil让调用者使用配置文件中的模板
+	}
+
+	config := &PromptTemplatesConfig{}
+
+	// 定义模板文件映射
+	templateFiles := map[string]*[]PromptTemplate{
+		"system_prompt.yaml":    &config.SystemPrompt,
+		"context_template.yaml": &config.ContextTemplate,
+		"rewrite_system.yaml":   &config.RewriteSystem,
+		"rewrite_user.yaml":     &config.RewriteUser,
+		"fallback.yaml":         &config.Fallback,
+	}
+
+	// 加载每个模板文件
+	for filename, target := range templateFiles {
+		filePath := filepath.Join(templatesDir, filename)
+		if _, err := os.Stat(filePath); os.IsNotExist(err) {
+			continue // 文件不存在，跳过
+		}
+
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read %s: %w", filename, err)
+		}
+
+		var file promptTemplateFile
+		if err := yaml.Unmarshal(data, &file); err != nil {
+			return nil, fmt.Errorf("failed to parse %s: %w", filename, err)
+		}
+
+		*target = file.Templates
+	}
+
+	return config, nil
 }
 
 // WebSearchConfig represents the web search configuration

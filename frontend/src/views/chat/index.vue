@@ -314,6 +314,8 @@ const sendMsg = async (value, modelId = '', mentionedItems = []) => {
     const kbIds = useSettingsStoreInstance.settings.selectedKnowledgeBases || [];
     const knowledgeIds = useSettingsStoreInstance.settings.selectedFiles || [];
     
+    // Get selected agent ID
+    const selectedAgentId = useSettingsStoreInstance.selectedAgentId || '';
 
     
     // Use agent-chat endpoint when agent is enabled, otherwise use knowledge-chat
@@ -327,6 +329,7 @@ const sendMsg = async (value, modelId = '', mentionedItems = []) => {
         knowledge_base_ids: kbIds,
         knowledge_ids: knowledgeIds,
         agent_enabled: agentEnabled,
+        agent_id: selectedAgentId,  // 传递选中的智能体 ID
         web_search_enabled: webSearchEnabled,
         summary_model_id: modelId,
         mcp_service_ids: mcpServiceIds,
