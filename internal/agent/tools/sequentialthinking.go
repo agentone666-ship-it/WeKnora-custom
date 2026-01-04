@@ -87,44 +87,44 @@ Each thought can build on, question, or revise previous insights as understandin
       "type": "string",
       "description": "Your current thinking step. Write in natural, user-friendly language. NEVER mention tool names (like \"grep_chunks\", \"knowledge_search\", \"web_search\", etc.). Instead, describe actions in plain language (e.g., \"I'll search for key terms\" instead of \"I'll use grep_chunks\"). Focus on WHAT you're trying to find and WHY, not HOW (which tools you'll use)."
     },
-    "nextThoughtNeeded": {
+    "next_thought_needed": {
       "type": "boolean",
       "description": "Whether another thought step is needed"
     },
-    "thoughtNumber": {
+    "thought_number": {
       "type": "integer",
       "description": "Current thought number (numeric value, e.g., 1, 2, 3)",
       "minimum": 1
     },
-    "totalThoughts": {
+    "total_thoughts": {
       "type": "integer",
       "description": "Estimated total thoughts needed (numeric value, e.g., 5, 10)",
       "minimum": 5
     },
-    "isRevision": {
+    "is_revision": {
       "type": "boolean",
       "description": "Whether this revises previous thinking"
     },
-    "revisesThought": {
+    "revises_thought": {
       "type": "integer",
       "description": "Which thought is being reconsidered",
       "minimum": 1
     },
-    "branchFromThought": {
+    "branch_from_thought": {
       "type": "integer",
       "description": "Branching point thought number",
       "minimum": 1
     },
-    "branchId": {
+    "branch_id": {
       "type": "string",
       "description": "Branch identifier"
     },
-    "needsMoreThoughts": {
+    "needs_more_thoughts": {
       "type": "boolean",
       "description": "If more thoughts are needed"
     }
   },
-  "required": ["thought", "nextThoughtNeeded", "thoughtNumber", "totalThoughts"]
+  "required": ["thought", "next_thought_needed", "thought_number", "total_thoughts"]
 }`),
 }
 
@@ -139,6 +139,7 @@ type SequentialThinkingTool struct {
 // SequentialThinkingInput defines the input parameters for sequential thinking tool
 type SequentialThinkingInput struct {
 	Thought           string `json:"thought"`
+	NextThoughtNeeded bool   `json:"next_thought_needed"`
 	ThoughtNumber     int    `json:"thought_number"`
 	TotalThoughts     int    `json:"total_thoughts"`
 	IsRevision        bool   `json:"is_revision,omitempty"`
@@ -146,7 +147,6 @@ type SequentialThinkingInput struct {
 	BranchFromThought *int   `json:"branch_from_thought,omitempty"`
 	BranchID          string `json:"branch_id,omitempty"`
 	NeedsMoreThoughts bool   `json:"needs_more_thoughts,omitempty"`
-	NextThoughtNeeded bool   `json:"next_thought_needed"`
 }
 
 // NewSequentialThinkingTool creates a new sequential thinking tool instance
