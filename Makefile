@@ -227,6 +227,9 @@ build-prod:
 	LDFLAGS="-X 'github.com/Tencent/WeKnora/internal/handler.Version=$$VERSION' -X 'github.com/Tencent/WeKnora/internal/handler.CommitID=$$COMMIT_ID' -X 'github.com/Tencent/WeKnora/internal/handler.BuildTime=$$BUILD_TIME' -X 'github.com/Tencent/WeKnora/internal/handler.GoVersion=$$GO_VERSION'"; \
 	go build -ldflags="-w -s $$LDFLAGS" -o $(BINARY_NAME) $(MAIN_PATH)
 
+download_spatial:
+	go run cmd/download/duckdb/duckdb.go
+
 clean-db:
 	@echo "Cleaning database..."
 	@if [ $$(docker volume ls -q -f name=weknora_postgres-data) ]; then \

@@ -11,7 +11,6 @@ import (
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
 	"github.com/Tencent/WeKnora/internal/utils"
-	_ "github.com/duckdb/duckdb-go/v2"
 )
 
 var dataAnalysisTool = BaseTool{

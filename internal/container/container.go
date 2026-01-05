@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	_ "github.com/duckdb/duckdb-go/v2"
 	esv7 "github.com/elastic/go-elasticsearch/v7"
 	"github.com/elastic/go-elasticsearch/v8"
 	"github.com/neo4j/neo4j-go-driver/v6/neo4j"
@@ -636,30 +637,10 @@ func NewDuckDB() (*sql.DB, error) {
 		return nil, fmt.Errorf("failed to open duckdb: %w", err)
 	}
 
-	// Install and load the spatial extension with timeout to avoid blocking startup
-	// The extension installation may download from network which can be slow or hang
-	installTimeout := 30 * time.Second
-	ctx, cancel := context.WithTimeout(context.Background(), installTimeout)
-	defer cancel()
-
-	// Try to install spatial extension (may already be installed or network unavailable)
-	installSQL := "INSTALL spatial;"
-	if _, err := sqlDB.ExecContext(ctx, installSQL); err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			logger.Warnf(context.Background(), "[DuckDB] Spatial extension installation timed out after %v, skipping", installTimeout)
-		} else {
-			logger.Warnf(context.Background(), "[DuckDB] Failed to install spatial extension (may already be installed): %v", err)
-		}
-	}
-
 	// Try to load spatial extension
 	loadSQL := "LOAD spatial;"
-	if _, err := sqlDB.ExecContext(ctx, loadSQL); err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			logger.Warnf(context.Background(), "[DuckDB] Spatial extension loading timed out, skipping")
-		} else {
-			logger.Warnf(context.Background(), "[DuckDB] Failed to load spatial extension: %v", err)
-		}
+	if _, err := sqlDB.ExecContext(context.Background(), loadSQL); err != nil {
+		logger.Warnf(context.Background(), "[DuckDB] Failed to load spatial extension: %v", err)
 	}
 
 	return sqlDB, nil
