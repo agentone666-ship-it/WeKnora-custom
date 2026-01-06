@@ -59,13 +59,15 @@ func (r *tenantRepository) SearchTenants(ctx context.Context, keyword string, te
 
 	query := r.db.WithContext(ctx).Model(&types.Tenant{})
 
-	// Filter by tenant ID if provided
-	if tenantID > 0 {
+	// Build search conditions
+	if tenantID > 0 && keyword != "" {
+		// When both tenantID and keyword are provided, use OR to match either
+		query = query.Where("id = ? OR name LIKE ? OR description LIKE ?", tenantID, "%"+keyword+"%", "%"+keyword+"%")
+	} else if tenantID > 0 {
+		// Filter by tenant ID only
 		query = query.Where("id = ?", tenantID)
-	}
-
-	// Filter by keyword if provided (search in name and description)
-	if keyword != "" {
+	} else if keyword != "" {
+		// Filter by keyword only (search in name and description)
 		query = query.Where("name LIKE ? OR description LIKE ?", "%"+keyword+"%", "%"+keyword+"%")
 	}
 
