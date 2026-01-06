@@ -86,15 +86,9 @@ type KnowledgeService interface {
 		sortOrder string,
 	) (*types.PageResult, error)
 	// UpsertFAQEntries imports or appends FAQ entries asynchronously.
+	// When DryRun is true, only validates entries without actually importing.
 	// Returns task ID (Knowledge ID) for tracking import progress.
 	UpsertFAQEntries(ctx context.Context, kbID string, payload *types.FAQBatchUpsertPayload) (string, error)
-	// ValidateFAQEntriesDryRun validates FAQ entries asynchronously without actually importing them.
-	// Returns task ID for tracking validation progress.
-	ValidateFAQEntriesDryRun(ctx context.Context, kbID string, payload *types.FAQBatchUpsertPayload) (string, error)
-	// GetFAQDryRunProgress retrieves the progress of an FAQ dry run validation task.
-	GetFAQDryRunProgress(ctx context.Context, taskID string) (*types.FAQDryRunProgress, error)
-	// ProcessFAQDryRun handles Asynq FAQ dry run validation tasks.
-	ProcessFAQDryRun(ctx context.Context, t *asynq.Task) error
 	// CreateFAQEntry creates a single FAQ entry synchronously.
 	CreateFAQEntry(ctx context.Context, kbID string, payload *types.FAQEntryPayload) (*types.FAQEntry, error)
 	// GetFAQEntry retrieves a single FAQ entry by ID.

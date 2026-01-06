@@ -70,7 +70,7 @@ func (h *FAQHandler) ListEntries(c *gin.Context) {
 // UpsertEntries godoc
 // @Summary      批量更新/插入FAQ条目
 // @Description  异步批量更新或插入FAQ条目。支持 dry_run 模式（设置 dry_run=true），异步验证不实际导入。
-// @Description  dry_run 模式是异步操作，返回 task_id，通过 /faq/dryrun/progress/{task_id} 查询进度和结果。
+// @Description  dry_run 模式是异步操作，返回 task_id，通过 /faq/import/progress/{task_id} 查询进度和结果。
 // @Description  验证内容包括：1) 条目基本格式 2) 重复问题（批次内和知识库已有） 3) 内容安全检查。
 // @Tags         FAQ管理
 // @Accept       json
@@ -93,23 +93,7 @@ func (h *FAQHandler) UpsertEntries(c *gin.Context) {
 
 	kbID := secutils.SanitizeForLog(c.Param("id"))
 
-	// dry_run 模式：异步验证，不实际导入
-	if req.DryRun {
-		taskID, err := h.knowledgeService.ValidateFAQEntriesDryRun(ctx, kbID, &req)
-		if err != nil {
-			logger.ErrorWithFields(ctx, err, nil)
-			c.Error(err)
-			return
-		}
-		c.JSON(http.StatusOK, gin.H{
-			"success": true,
-			"data": gin.H{
-				"task_id": taskID,
-			},
-		})
-		return
-	}
-
+	// 统一使用 UpsertFAQEntries，通过 DryRun 字段区分模式
 	taskID, err := h.knowledgeService.UpsertFAQEntries(ctx, kbID, &req)
 	if err != nil {
 		logger.ErrorWithFields(ctx, err, nil)
@@ -427,35 +411,6 @@ func (h *FAQHandler) GetImportProgress(c *gin.Context) {
 	taskID := secutils.SanitizeForLog(c.Param("task_id"))
 
 	progress, err := h.knowledgeService.GetFAQImportProgress(ctx, taskID)
-	if err != nil {
-		logger.ErrorWithFields(ctx, err, nil)
-		c.Error(err)
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"data":    progress,
-	})
-}
-
-// GetDryRunProgress godoc
-// @Summary      获取FAQ预检进度
-// @Description  获取FAQ导入预检任务的进度和结果
-// @Tags         FAQ管理
-// @Accept       json
-// @Produce      json
-// @Param        task_id  path      string  true  "任务ID"
-// @Success      200      {object}  map[string]interface{}  "预检进度和结果"
-// @Failure      404      {object}  errors.AppError         "任务不存在"
-// @Security     Bearer
-// @Security     ApiKeyAuth
-// @Router       /faq/dryrun/progress/{task_id} [get]
-func (h *FAQHandler) GetDryRunProgress(c *gin.Context) {
-	ctx := c.Request.Context()
-	taskID := secutils.SanitizeForLog(c.Param("task_id"))
-
-	progress, err := h.knowledgeService.GetFAQDryRunProgress(ctx, taskID)
 	if err != nil {
 		logger.ErrorWithFields(ctx, err, nil)
 		c.Error(err)
