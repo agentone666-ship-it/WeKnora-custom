@@ -200,6 +200,11 @@ func RegisterFAQRoutes(r *gin.RouterGroup, handler *handler.FAQHandler) {
 	{
 		faqImport.GET("/progress/:task_id", handler.GetImportProgress)
 	}
+	// FAQ dry run progress route (outside of knowledge-base scope)
+	faqDryRun := r.Group("/faq/dryrun")
+	{
+		faqDryRun.GET("/progress/:task_id", handler.GetDryRunProgress)
+	}
 }
 
 // RegisterKnowledgeBaseRoutes 注册知识库相关的路由

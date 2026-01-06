@@ -2808,6 +2808,518 @@ func (s *knowledgeService) UpsertFAQEntries(ctx context.Context,
 	return taskID, nil
 }
 
+// ValidateFAQEntriesDryRun validates FAQ entries asynchronously without actually importing them.
+// Returns task ID for tracking validation progress.
+func (s *knowledgeService) ValidateFAQEntriesDryRun(ctx context.Context,
+	kbID string, payload *types.FAQBatchUpsertPayload,
+) (string, error) {
+	if payload == nil || len(payload.Entries) == 0 {
+		return "", werrors.NewBadRequestError("FAQ 条目不能为空")
+	}
+	if payload.Mode == "" {
+		payload.Mode = types.FAQBatchModeAppend
+	}
+	if payload.Mode != types.FAQBatchModeAppend && payload.Mode != types.FAQBatchModeReplace {
+		return "", werrors.NewBadRequestError("模式仅支持 append 或 replace")
+	}
+
+	// 验证知识库是否存在且有效
+	_, err := s.validateFAQKnowledgeBase(ctx, kbID)
+	if err != nil {
+		return "", err
+	}
+
+	tenantID := ctx.Value(types.TenantIDContextKey).(uint64)
+
+	// 使用传入的 task_id，如果不存在则生成新的
+	taskID := payload.TaskID
+	if taskID == "" {
+		taskID = uuid.New().String()
+	}
+
+	// 初始化 dry run 任务状态到 Redis
+	progress := &types.FAQDryRunProgress{
+		TaskID:        taskID,
+		KBID:          kbID,
+		Status:        types.FAQImportStatusPending,
+		Progress:      0,
+		Total:         len(payload.Entries),
+		Processed:     0,
+		SuccessCount:  0,
+		FailedCount:   0,
+		FailedEntries: make([]types.FAQDryRunFailedEntry, 0),
+		Message:       "任务已创建，等待处理",
+		CreatedAt:     time.Now().Unix(),
+		UpdatedAt:     time.Now().Unix(),
+	}
+	if err := s.saveFAQDryRunProgress(ctx, progress); err != nil {
+		logger.Errorf(ctx, "Failed to initialize FAQ dry run task status: %v", err)
+		return "", fmt.Errorf("failed to initialize task: %w", err)
+	}
+
+	logger.Infof(ctx, "FAQ dry run task initialized: %s, kb_id: %s, total entries: %d", taskID, kbID, len(payload.Entries))
+
+	// Enqueue FAQ dry run task to Asynq
+	taskPayload := types.FAQDryRunPayload{
+		TenantID: tenantID,
+		TaskID:   taskID,
+		KBID:     kbID,
+		Entries:  payload.Entries,
+		Mode:     payload.Mode,
+	}
+
+	payloadBytes, err := json.Marshal(taskPayload)
+	if err != nil {
+		logger.Errorf(ctx, "Failed to marshal FAQ dry run task payload: %v", err)
+		return "", fmt.Errorf("failed to marshal task payload: %w", err)
+	}
+
+	task := asynq.NewTask(
+		types.TypeFAQDryRun,
+		payloadBytes,
+		asynq.Queue(getAsynqQueueName("default")),
+		asynq.MaxRetry(3),
+	)
+	info, err := s.task.Enqueue(task)
+	if err != nil {
+		logger.Errorf(ctx, "Failed to enqueue FAQ dry run task: %v", err)
+		return "", fmt.Errorf("failed to enqueue task: %w", err)
+	}
+	logger.Infof(ctx, "Enqueued FAQ dry run task: id=%s queue=%s task_id=%s", info.ID, info.Queue, taskID)
+
+	return taskID, nil
+}
+
+// ProcessFAQDryRun handles Asynq FAQ dry run validation tasks.
+func (s *knowledgeService) ProcessFAQDryRun(ctx context.Context, t *asynq.Task) error {
+	var payload types.FAQDryRunPayload
+	if err := json.Unmarshal(t.Payload(), &payload); err != nil {
+		return fmt.Errorf("failed to unmarshal FAQ dry run payload: %w", err)
+	}
+
+	logger.Infof(ctx, "Processing FAQ dry run task: %s, kb_id: %s, entries: %d",
+		payload.TaskID, payload.KBID, len(payload.Entries))
+
+	// 更新状态为处理中
+	progress := &types.FAQDryRunProgress{
+		TaskID:        payload.TaskID,
+		KBID:          payload.KBID,
+		Status:        types.FAQImportStatusProcessing,
+		Progress:      0,
+		Total:         len(payload.Entries),
+		Processed:     0,
+		SuccessCount:  0,
+		FailedCount:   0,
+		FailedEntries: make([]types.FAQDryRunFailedEntry, 0),
+		Message:       "正在验证条目...",
+		CreatedAt:     time.Now().Unix(),
+		UpdatedAt:     time.Now().Unix(),
+	}
+	if err := s.saveFAQDryRunProgress(ctx, progress); err != nil {
+		logger.Warnf(ctx, "Failed to update FAQ dry run progress: %v", err)
+	}
+
+	// 执行验证
+	s.executeFAQDryRunValidation(ctx, &payload, progress)
+
+	// 更新最终状态
+	progress.Status = types.FAQImportStatusCompleted
+	progress.Progress = 100
+	progress.SuccessCount = progress.Total - progress.FailedCount
+	progress.Message = fmt.Sprintf("验证完成: 成功 %d 条, 失败 %d 条", progress.SuccessCount, progress.FailedCount)
+	progress.UpdatedAt = time.Now().Unix()
+
+	// 如果失败条目超过阈值，生成 CSV 文件
+	csvURL, err := s.generateFailedEntriesCSV(ctx, payload.TenantID, payload.TaskID, progress.FailedEntries)
+	if err != nil {
+		logger.Warnf(ctx, "Failed to generate failed entries CSV: %v", err)
+	} else {
+		progress.FailedEntriesURL = csvURL
+		progress.FailedEntries = nil // 清空内联数据，使用 URL
+		progress.Message += " (失败记录已导出为CSV)"
+	}
+
+	if err := s.saveFAQDryRunProgress(ctx, progress); err != nil {
+		logger.Warnf(ctx, "Failed to save final FAQ dry run progress: %v", err)
+	}
+
+	logger.Infof(ctx, "FAQ dry run task completed: %s, success: %d, failed: %d",
+		payload.TaskID, progress.SuccessCount, progress.FailedCount)
+
+	return nil
+}
+
+// generateFailedEntriesCSV 生成失败条目的 CSV 文件并上传
+func (s *knowledgeService) generateFailedEntriesCSV(ctx context.Context,
+	tenantID uint64, taskID string, failedEntries []types.FAQDryRunFailedEntry,
+) (string, error) {
+	// 生成 CSV 内容
+	var buf strings.Builder
+
+	// 写入 BOM 以支持 Excel 正确识别 UTF-8
+	buf.WriteString("\xEF\xBB\xBF")
+
+	// 写入表头
+	buf.WriteString("错误原因,分类(必填),问题(必填),相似问题(选填-多个用##分隔),反例问题(选填-多个用##分隔),机器人回答(必填-多个用##分隔),是否全部回复(选填-默认FALSE),是否停用(选填-默认FALSE)\n")
+
+	// 写入数据行
+	for _, entry := range failedEntries {
+		// CSV 转义：如果内容包含逗号、引号或换行，需要用引号包裹并转义内部引号
+		reason := csvEscape(entry.Reason)
+		tagName := csvEscape(entry.TagName)
+		standardQ := csvEscape(entry.StandardQuestion)
+		similarQs := ""
+		if len(entry.SimilarQuestions) > 0 {
+			similarQs = csvEscape(strings.Join(entry.SimilarQuestions, "##"))
+		}
+		negativeQs := ""
+		if len(entry.NegativeQuestions) > 0 {
+			negativeQs = csvEscape(strings.Join(entry.NegativeQuestions, "##"))
+		}
+		answers := ""
+		if len(entry.Answers) > 0 {
+			answers = csvEscape(strings.Join(entry.Answers, "##"))
+		}
+		answerAll := "false"
+		if entry.AnswerAll {
+			answerAll = "true"
+		}
+		isDisabled := "false"
+		if entry.IsDisabled {
+			isDisabled = "true"
+		}
+
+		buf.WriteString(fmt.Sprintf("%s,%s,%s,%s,%s,%s,%s,%s\n",
+			reason, tagName, standardQ, similarQs, negativeQs, answers, answerAll, isDisabled))
+	}
+
+	// 上传 CSV 文件到临时存储（会自动过期）
+	fileName := fmt.Sprintf("faq_dryrun_failed_%s.csv", taskID)
+	filePath, err := s.fileSvc.SaveBytes(ctx, []byte(buf.String()), tenantID, fileName, true)
+	if err != nil {
+		return "", fmt.Errorf("failed to save CSV file: %w", err)
+	}
+
+	// 获取下载 URL
+	fileURL, err := s.fileSvc.GetFileURL(ctx, filePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to get file URL: %w", err)
+	}
+
+	logger.Infof(ctx, "Generated failed entries CSV: %s, entries: %d", fileURL, len(failedEntries))
+	return fileURL, nil
+}
+
+// csvEscape 转义 CSV 字段
+func csvEscape(s string) string {
+	if strings.ContainsAny(s, ",\"\n\r") {
+		// 将内部引号替换为两个引号，并用引号包裹整个字段
+		return "\"" + strings.ReplaceAll(s, "\"", "\"\"") + "\""
+	}
+	return s
+}
+
+// buildFAQDryRunFailedEntry 构建 FAQDryRunFailedEntry
+func buildFAQDryRunFailedEntry(idx int, reason string, entry *types.FAQEntryPayload) types.FAQDryRunFailedEntry {
+	answerAll := false
+	if entry.AnswerStrategy != nil && *entry.AnswerStrategy == types.AnswerStrategyAll {
+		answerAll = true
+	}
+	isDisabled := false
+	if entry.IsEnabled != nil && !*entry.IsEnabled {
+		isDisabled = true
+	}
+	return types.FAQDryRunFailedEntry{
+		Index:             idx,
+		Reason:            reason,
+		TagName:           entry.TagName,
+		StandardQuestion:  strings.TrimSpace(entry.StandardQuestion),
+		SimilarQuestions:  entry.SimilarQuestions,
+		NegativeQuestions: entry.NegativeQuestions,
+		Answers:           entry.Answers,
+		AnswerAll:         answerAll,
+		IsDisabled:        isDisabled,
+	}
+}
+
+// executeFAQDryRunValidation 执行 FAQ dry run 验证
+func (s *knowledgeService) executeFAQDryRunValidation(ctx context.Context,
+	payload *types.FAQDryRunPayload, progress *types.FAQDryRunProgress,
+) {
+	entries := payload.Entries
+
+	// 用于记录已通过基本验证和重复检查的条目索引，后续进行安全检查
+	validEntryIndices := make([]int, 0, len(entries))
+
+	// 根据模式选择不同的验证逻辑
+	if payload.Mode == types.FAQBatchModeAppend {
+		validEntryIndices = s.validateEntriesForAppendModeWithProgress(ctx, payload.TenantID, payload.KBID, entries, progress)
+	} else {
+		validEntryIndices = s.validateEntriesForReplaceModeWithProgress(ctx, entries, progress)
+	}
+
+	// 安全检查：对通过基本验证的条目进行安全检查（检查所有条目）
+	if s.securityClient != nil && len(validEntryIndices) > 0 {
+		s.validateEntriesSecurityWithProgress(ctx, payload.TenantID, entries, validEntryIndices, progress)
+	}
+}
+
+// validateEntriesSecurityWithProgress 对条目进行安全检查（检查所有条目）
+func (s *knowledgeService) validateEntriesSecurityWithProgress(ctx context.Context,
+	tenantID uint64, entries []types.FAQEntryPayload, validIndices []int, progress *types.FAQDryRunProgress,
+) {
+	for _, idx := range validIndices {
+		entry := entries[idx]
+		blockStatus, err := s.CheckFAQContent(ctx, tenantID, &entry)
+		if err != nil {
+			// 安全检查服务出错，记录但不阻止
+			logger.Warnf(ctx, "Security check failed for entry %d: %v", idx, err)
+			continue
+		}
+		if blockStatus != 0 {
+			progress.FailedCount++
+			progress.FailedEntries = append(progress.FailedEntries, buildFAQDryRunFailedEntry(idx, "内容安全检查不通过", &entry))
+		}
+	}
+}
+
+// validateEntriesForAppendModeWithProgress 验证 Append 模式下的条目（带进度更新）
+func (s *knowledgeService) validateEntriesForAppendModeWithProgress(ctx context.Context,
+	tenantID uint64, kbID string, entries []types.FAQEntryPayload, progress *types.FAQDryRunProgress,
+) []int {
+	validIndices := make([]int, 0, len(entries))
+
+	// 查询知识库中已有的所有FAQ chunks的metadata
+	existingChunks, err := s.chunkRepo.ListAllFAQChunksWithMetadataByKnowledgeBaseID(ctx, tenantID, kbID)
+	if err != nil {
+		logger.Warnf(ctx, "Failed to list existing FAQ chunks for dry run: %v", err)
+		// 无法获取已有数据时，仅做批次内验证
+	}
+
+	// 构建已存在的标准问和相似问集合
+	existingQuestions := make(map[string]bool)
+	for _, chunk := range existingChunks {
+		meta, err := chunk.FAQMetadata()
+		if err != nil || meta == nil {
+			continue
+		}
+		if meta.StandardQuestion != "" {
+			existingQuestions[meta.StandardQuestion] = true
+		}
+		for _, q := range meta.SimilarQuestions {
+			if q != "" {
+				existingQuestions[q] = true
+			}
+		}
+	}
+
+	// 构建当前批次的标准问和相似问集合（用于批次内去重）
+	batchQuestions := make(map[string]int) // value 为首次出现的索引
+
+	for i, entry := range entries {
+		// 验证条目基本格式
+		if err := validateFAQEntryPayloadBasic(&entry); err != nil {
+			progress.FailedCount++
+			progress.FailedEntries = append(progress.FailedEntries, buildFAQDryRunFailedEntry(i, err.Error(), &entry))
+			progress.Processed++
+			continue
+		}
+
+		standardQ := strings.TrimSpace(entry.StandardQuestion)
+
+		// 检查标准问是否与已有知识库重复
+		if existingQuestions[standardQ] {
+			progress.FailedCount++
+			progress.FailedEntries = append(progress.FailedEntries, buildFAQDryRunFailedEntry(i, "标准问与知识库中已有问题重复", &entry))
+			progress.Processed++
+			continue
+		}
+
+		// 检查标准问是否与同批次重复
+		if firstIdx, exists := batchQuestions[standardQ]; exists {
+			progress.FailedCount++
+			progress.FailedEntries = append(progress.FailedEntries, buildFAQDryRunFailedEntry(i, fmt.Sprintf("标准问与批次内第 %d 条重复", firstIdx+1), &entry))
+			progress.Processed++
+			continue
+		}
+
+		// 检查相似问是否有重复
+		hasDuplicate := false
+		for _, q := range entry.SimilarQuestions {
+			q = strings.TrimSpace(q)
+			if q == "" {
+				continue
+			}
+			if existingQuestions[q] {
+				progress.FailedCount++
+				progress.FailedEntries = append(progress.FailedEntries, buildFAQDryRunFailedEntry(i, fmt.Sprintf("相似问 \"%s\" 与知识库中已有问题重复", q), &entry))
+				hasDuplicate = true
+				break
+			}
+			if firstIdx, exists := batchQuestions[q]; exists {
+				progress.FailedCount++
+				progress.FailedEntries = append(progress.FailedEntries, buildFAQDryRunFailedEntry(i, fmt.Sprintf("相似问 \"%s\" 与批次内第 %d 条重复", q, firstIdx+1), &entry))
+				hasDuplicate = true
+				break
+			}
+		}
+		if hasDuplicate {
+			progress.Processed++
+			continue
+		}
+
+		// 将当前条目的标准问和相似问加入批次集合
+		batchQuestions[standardQ] = i
+		for _, q := range entry.SimilarQuestions {
+			q = strings.TrimSpace(q)
+			if q != "" {
+				batchQuestions[q] = i
+			}
+		}
+
+		// 记录通过验证的条目索引
+		validIndices = append(validIndices, i)
+		progress.Processed++
+
+		// 定期更新进度
+		if progress.Processed%100 == 0 {
+			progress.Progress = progress.Processed * 80 / progress.Total // 前80%用于基本验证
+			progress.UpdatedAt = time.Now().Unix()
+			if err := s.saveFAQDryRunProgress(ctx, progress); err != nil {
+				logger.Warnf(ctx, "Failed to update FAQ dry run progress: %v", err)
+			}
+		}
+	}
+
+	return validIndices
+}
+
+// validateEntriesForReplaceModeWithProgress 验证 Replace 模式下的条目（带进度更新）
+func (s *knowledgeService) validateEntriesForReplaceModeWithProgress(ctx context.Context,
+	entries []types.FAQEntryPayload, progress *types.FAQDryRunProgress,
+) []int {
+	validIndices := make([]int, 0, len(entries))
+
+	// Replace 模式下只检查批次内重复
+	batchQuestions := make(map[string]int) // value 为首次出现的索引
+
+	for i, entry := range entries {
+		// 验证条目基本格式
+		if err := validateFAQEntryPayloadBasic(&entry); err != nil {
+			progress.FailedCount++
+			progress.FailedEntries = append(progress.FailedEntries, buildFAQDryRunFailedEntry(i, err.Error(), &entry))
+			progress.Processed++
+			continue
+		}
+
+		standardQ := strings.TrimSpace(entry.StandardQuestion)
+
+		// 检查标准问是否与同批次重复
+		if firstIdx, exists := batchQuestions[standardQ]; exists {
+			progress.FailedCount++
+			progress.FailedEntries = append(progress.FailedEntries, buildFAQDryRunFailedEntry(i, fmt.Sprintf("标准问与批次内第 %d 条重复", firstIdx+1), &entry))
+			progress.Processed++
+			continue
+		}
+
+		// 检查相似问是否有重复
+		hasDuplicate := false
+		for _, q := range entry.SimilarQuestions {
+			q = strings.TrimSpace(q)
+			if q == "" {
+				continue
+			}
+			if firstIdx, exists := batchQuestions[q]; exists {
+				progress.FailedCount++
+				progress.FailedEntries = append(progress.FailedEntries, buildFAQDryRunFailedEntry(i, fmt.Sprintf("相似问 \"%s\" 与批次内第 %d 条重复", q, firstIdx+1), &entry))
+				hasDuplicate = true
+				break
+			}
+		}
+		if hasDuplicate {
+			progress.Processed++
+			continue
+		}
+
+		// 将当前条目的标准问和相似问加入批次集合
+		batchQuestions[standardQ] = i
+		for _, q := range entry.SimilarQuestions {
+			q = strings.TrimSpace(q)
+			if q != "" {
+				batchQuestions[q] = i
+			}
+		}
+
+		// 记录通过验证的条目索引
+		validIndices = append(validIndices, i)
+		progress.Processed++
+
+		// 定期更新进度
+		if progress.Processed%100 == 0 {
+			progress.Progress = progress.Processed * 80 / progress.Total // 前80%用于基本验证
+			progress.UpdatedAt = time.Now().Unix()
+			if err := s.saveFAQDryRunProgress(ctx, progress); err != nil {
+				logger.Warnf(ctx, "Failed to update FAQ dry run progress: %v", err)
+			}
+		}
+	}
+
+	return validIndices
+}
+
+// saveFAQDryRunProgress 保存 FAQ dry run 进度到 Redis
+func (s *knowledgeService) saveFAQDryRunProgress(ctx context.Context, progress *types.FAQDryRunProgress) error {
+	key := fmt.Sprintf("faq:dryrun:progress:%s", progress.TaskID)
+	data, err := json.Marshal(progress)
+	if err != nil {
+		return fmt.Errorf("failed to marshal progress: %w", err)
+	}
+	// 设置 24 小时过期
+	return s.redisClient.Set(ctx, key, data, 24*time.Hour).Err()
+}
+
+// GetFAQDryRunProgress 获取 FAQ dry run 进度
+func (s *knowledgeService) GetFAQDryRunProgress(ctx context.Context, taskID string) (*types.FAQDryRunProgress, error) {
+	key := fmt.Sprintf("faq:dryrun:progress:%s", taskID)
+	data, err := s.redisClient.Get(ctx, key).Bytes()
+	if err != nil {
+		if err == redis.Nil {
+			return nil, werrors.NewNotFoundError("任务不存在或已过期")
+		}
+		return nil, fmt.Errorf("failed to get progress: %w", err)
+	}
+	var progress types.FAQDryRunProgress
+	if err := json.Unmarshal(data, &progress); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal progress: %w", err)
+	}
+	return &progress, nil
+}
+
+// validateFAQEntryPayloadBasic 验证 FAQ 条目的基本格式
+func validateFAQEntryPayloadBasic(entry *types.FAQEntryPayload) error {
+	if entry == nil {
+		return fmt.Errorf("条目不能为空")
+	}
+	standardQ := strings.TrimSpace(entry.StandardQuestion)
+	if standardQ == "" {
+		return fmt.Errorf("标准问不能为空")
+	}
+	if len(entry.Answers) == 0 {
+		return fmt.Errorf("答案不能为空")
+	}
+	hasValidAnswer := false
+	for _, a := range entry.Answers {
+		if strings.TrimSpace(a) != "" {
+			hasValidAnswer = true
+			break
+		}
+	}
+	if !hasValidAnswer {
+		return fmt.Errorf("答案不能全为空")
+	}
+	return nil
+}
+
 // calculateAppendOperations 计算Append模式下需要处理的条目，跳过已存在且内容相同的条目
 // 同时过滤掉标准问或相似问与同批次或已有知识库中重复的条目
 func (s *knowledgeService) calculateAppendOperations(ctx context.Context,

@@ -1,11 +1,13 @@
 package file
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"mime/multipart"
 	"path/filepath"
+	"time"
 
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
 	"github.com/google/uuid"
@@ -124,4 +126,44 @@ func (s *minioFileService) DeleteFile(ctx context.Context, filePath string) erro
 	}
 
 	return nil
+}
+
+// SaveBytes saves bytes data to MinIO and returns the file path
+// temp parameter is ignored for MinIO (no auto-expiration support in this implementation)
+func (s *minioFileService) SaveBytes(ctx context.Context, data []byte, tenantID uint64, fileName string, temp bool) (string, error) {
+	ext := filepath.Ext(fileName)
+	objectName := fmt.Sprintf("%d/exports/%s%s", tenantID, uuid.New().String(), ext)
+
+	// Upload bytes to MinIO
+	reader := bytes.NewReader(data)
+	_, err := s.client.PutObject(ctx, s.bucketName, objectName, reader, int64(len(data)), minio.PutObjectOptions{
+		ContentType: "text/csv; charset=utf-8",
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to upload bytes to MinIO: %w", err)
+	}
+
+	return fmt.Sprintf("minio://%s/%s", s.bucketName, objectName), nil
+}
+
+// GetFileURL returns a presigned download URL for the file
+func (s *minioFileService) GetFileURL(ctx context.Context, filePath string) (string, error) {
+	// Parse MinIO path
+	if len(filePath) < 9 || filePath[:8] != "minio://" {
+		return "", fmt.Errorf("invalid MinIO file path: %s", filePath)
+	}
+
+	// Extract object name
+	objectName := filePath[9+len(s.bucketName):]
+	if objectName[0] == '/' {
+		objectName = objectName[1:]
+	}
+
+	// Generate presigned URL (valid for 24 hours)
+	presignedURL, err := s.client.PresignedGetObject(ctx, s.bucketName, objectName, 24*time.Hour, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate presigned URL: %w", err)
+	}
+
+	return presignedURL.String(), nil
 }

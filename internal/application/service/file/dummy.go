@@ -36,3 +36,13 @@ func (s *DummyFileService) GetFile(ctx context.Context, filePath string) (io.Rea
 func (s *DummyFileService) DeleteFile(ctx context.Context, filePath string) error {
 	return nil
 }
+
+// SaveBytes pretends to save bytes but just returns a random UUID
+func (s *DummyFileService) SaveBytes(ctx context.Context, data []byte, tenantID uint64, fileName string, temp bool) (string, error) {
+	return uuid.New().String(), nil
+}
+
+// GetFileURL returns the file path as URL (dummy implementation)
+func (s *DummyFileService) GetFileURL(ctx context.Context, filePath string) (string, error) {
+	return filePath, nil
+}

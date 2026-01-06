@@ -79,6 +79,9 @@ func RunAsynqServer(params AsynqTaskParams) *asynq.ServeMux {
 	// Register FAQ import handler
 	mux.HandleFunc(types.TypeFAQImport, params.KnowledgeService.ProcessFAQImport)
 
+	// Register FAQ dry run handler
+	mux.HandleFunc(types.TypeFAQDryRun, params.KnowledgeService.ProcessFAQDryRun)
+
 	// Register question generation handler
 	mux.HandleFunc(types.TypeQuestionGeneration, params.KnowledgeService.ProcessQuestionGeneration)
 

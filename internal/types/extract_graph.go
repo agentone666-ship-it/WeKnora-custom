@@ -4,6 +4,7 @@ const (
 	TypeChunkExtract       = "chunk:extract"
 	TypeDocumentProcess    = "document:process"    // 文档处理任务
 	TypeFAQImport          = "faq:import"          // FAQ导入任务
+	TypeFAQDryRun          = "faq:dryrun"          // FAQ导入预检任务
 	TypeQuestionGeneration = "question:generation" // 问题生成任务
 	TypeSummaryGeneration  = "summary:generation"  // 摘要生成任务
 	TypeKBClone            = "kb:clone"            // 知识库复制任务
@@ -43,6 +44,15 @@ type FAQImportPayload struct {
 	KnowledgeID string            `json:"knowledge_id"`
 	Entries     []FAQEntryPayload `json:"entries"`
 	Mode        string            `json:"mode"`
+}
+
+// FAQDryRunPayload represents the FAQ dry run validation task payload
+type FAQDryRunPayload struct {
+	TenantID uint64            `json:"tenant_id"`
+	TaskID   string            `json:"task_id"`
+	KBID     string            `json:"kb_id"`
+	Entries  []FAQEntryPayload `json:"entries"`
+	Mode     string            `json:"mode"`
 }
 
 // QuestionGenerationPayload represents the question generation task payload

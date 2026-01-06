@@ -51,6 +51,8 @@ type FAQBatchUpsertPayload struct {
 	Entries     []FAQEntryPayload `json:"entries"`
 	Mode        string            `json:"mode"`
 	KnowledgeID string            `json:"knowledge_id,omitempty"`
+	TaskID      string            `json:"task_id,omitempty"` // Optional, if not provided, a UUID will be generated
+	DryRun      bool              `json:"dry_run,omitempty"` // If true, only validate without importing
 }
 
 // FAQEntryFieldsUpdate represents the fields that can be updated for a single FAQ entry.
@@ -374,6 +376,60 @@ func (c *Client) GetFAQImportProgress(ctx context.Context, taskID string) (*FAQI
 	}
 
 	var response FAQImportProgressResponse
+	if err := parseResponse(resp, &response); err != nil {
+		return nil, err
+	}
+	return response.Data, nil
+}
+
+// FAQDryRunFailedEntry represents a failed entry in dry run validation.
+type FAQDryRunFailedEntry struct {
+	Index             int      `json:"index"`
+	Reason            string   `json:"reason"`
+	TagName           string   `json:"tag_name,omitempty"`
+	StandardQuestion  string   `json:"standard_question"`
+	SimilarQuestions  []string `json:"similar_questions,omitempty"`
+	NegativeQuestions []string `json:"negative_questions,omitempty"`
+	Answers           []string `json:"answers,omitempty"`
+	AnswerAll         bool     `json:"answer_all,omitempty"`
+	IsDisabled        bool     `json:"is_disabled,omitempty"`
+}
+
+// FAQDryRunProgress represents the progress of an async FAQ dry run validation task.
+type FAQDryRunProgress struct {
+	TaskID           string                 `json:"task_id"`
+	KBID             string                 `json:"kb_id"`
+	Status           string                 `json:"status"`
+	Progress         int                    `json:"progress"`
+	Total            int                    `json:"total"`
+	Processed        int                    `json:"processed"`
+	SuccessCount     int                    `json:"success_count"`
+	FailedCount      int                    `json:"failed_count"`
+	FailedEntries    []FAQDryRunFailedEntry `json:"failed_entries,omitempty"`
+	FailedEntriesURL string                 `json:"failed_entries_url,omitempty"` // CSV download URL when too many failures
+	Message          string                 `json:"message"`
+	Error            string                 `json:"error,omitempty"`
+	CreatedAt        int64                  `json:"created_at"`
+	UpdatedAt        int64                  `json:"updated_at"`
+}
+
+// FAQDryRunProgressResponse wraps the FAQ dry run progress response.
+type FAQDryRunProgressResponse struct {
+	Success bool               `json:"success"`
+	Data    *FAQDryRunProgress `json:"data"`
+	Message string             `json:"message,omitempty"`
+	Code    string             `json:"code,omitempty"`
+}
+
+// GetFAQDryRunProgress retrieves the progress of an async FAQ dry run validation task.
+func (c *Client) GetFAQDryRunProgress(ctx context.Context, taskID string) (*FAQDryRunProgress, error) {
+	path := fmt.Sprintf("/api/v1/faq/dryrun/progress/%s", taskID)
+	resp, err := c.doRequest(ctx, http.MethodGet, path, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var response FAQDryRunProgressResponse
 	if err := parseResponse(resp, &response); err != nil {
 		return nil, err
 	}
