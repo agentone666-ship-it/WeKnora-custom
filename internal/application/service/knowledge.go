@@ -4590,6 +4590,7 @@ func (s *knowledgeService) checkFAQQuestionDuplicate(
 }
 
 // resolveTagID resolves tag ID from payload, prioritizing tag_id over tag_name
+// If no tag is specified, creates or finds the "未分类" tag
 func (s *knowledgeService) resolveTagID(ctx context.Context, kbID string, payload *types.FAQEntryPayload) (string, error) {
 	// 如果提供了 tag_id，优先使用 tag_id
 	if payload.TagID != "" {
@@ -4597,7 +4598,7 @@ func (s *knowledgeService) resolveTagID(ctx context.Context, kbID string, payloa
 	}
 
 	// 如果提供了 tag_name，查找或创建标签
-	if payload.TagName != "" && payload.TagName != "未分类" {
+	if payload.TagName != "" {
 		tag, err := s.tagService.FindOrCreateTagByName(ctx, kbID, payload.TagName)
 		if err != nil {
 			return "", fmt.Errorf("failed to resolve tag by name '%s': %w", payload.TagName, err)
@@ -4605,8 +4606,12 @@ func (s *knowledgeService) resolveTagID(ctx context.Context, kbID string, payloa
 		return tag.ID, nil
 	}
 
-	// 都没有提供，返回空字符串
-	return "", nil
+	// 都没有提供，使用"未分类"标签
+	tag, err := s.tagService.FindOrCreateTagByName(ctx, kbID, types.UntaggedTagName)
+	if err != nil {
+		return "", fmt.Errorf("failed to get or create default untagged tag: %w", err)
+	}
+	return tag.ID, nil
 }
 
 func sanitizeFAQEntryPayload(payload *types.FAQEntryPayload) (*types.FAQChunkMetadata, error) {

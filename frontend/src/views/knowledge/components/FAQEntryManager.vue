@@ -183,16 +183,12 @@
                   v-for="tag in filteredTags"
                   :key="tag.id"
                   class="faq-tag-item"
-                  :class="{ active: selectedTagId === tag.id, editing: editingTagId === tag.id && tag.id !== UNTAGGED_FILTER }"
-                  @click="tag.id === UNTAGGED_FILTER ? handleUntaggedClick() : handleTagRowClick(tag.id)"
+                  :class="{ active: selectedTagId === tag.id, editing: editingTagId === tag.id }"
+                  @click="handleTagRowClick(tag.id)"
                 >
                   <div class="faq-tag-left">
                     <t-icon name="folder" size="18px" />
-                    <!-- Untagged pseudo-tag: show translated name, no editing -->
-                    <template v-if="tag.id === UNTAGGED_FILTER">
-                      <span class="tag-name">{{ $t('knowledgeBase.untagged') }}</span>
-                    </template>
-                    <template v-else-if="editingTagId === tag.id">
+                    <template v-if="editingTagId === tag.id">
                       <div class="tag-edit-input" @click.stop>
                         <t-input
                           :ref="setEditingTagInputRefByTag(tag.id)"
@@ -210,11 +206,7 @@
                   </div>
                   <div class="faq-tag-right">
                     <span class="faq-tag-count">{{ tag.chunk_count || 0 }}</span>
-                    <!-- Untagged pseudo-tag: no edit/delete actions, just a placeholder -->
-                    <template v-if="tag.id === UNTAGGED_FILTER">
-                      <div class="tag-more-placeholder"></div>
-                    </template>
-                    <template v-else-if="editingTagId === tag.id">
+                    <template v-if="editingTagId === tag.id">
                       <div class="tag-inline-actions" @click.stop>
                         <t-button
                           variant="text"
@@ -1185,9 +1177,8 @@ type TagInputInstance = ComponentPublicInstance<{ focus: () => void; select: () 
 const tagList = ref<any[]>([])
 const tagLoading = ref(false)
 const tagListRef = ref<HTMLElement | null>(null)
-// Special value to represent "untagged" filter - must match backend constant
-const UNTAGGED_FILTER = '__untagged__'
-const selectedTagId = ref<string>(UNTAGGED_FILTER)
+// Selected tag ID for filtering (empty string means show all)
+const selectedTagId = ref<string>('')
 const overallFAQTotal = ref(0)
 const tagSearchQuery = ref('')
 const TAG_PAGE_SIZE = 20
@@ -1221,16 +1212,14 @@ const tagMap = computed<Record<string, any>>(() => {
   })
   return map
 })
-// Filter out the __untagged__ pseudo-tag for tag select options (when assigning tags)
-const regularTags = computed(() => tagList.value.filter((tag) => tag.id !== UNTAGGED_FILTER))
-const tagDropdownOptions = computed(() => [
-  { content: t('knowledgeBase.untagged') || '未分类', value: '' },
-  ...regularTags.value.map((tag: any) => ({ content: tag.name, value: tag.id })),
-])
-const tagSelectOptions = computed(() => [
-  { label: t('knowledgeBase.untagged') || '未分类', value: '' },
-  ...regularTags.value.map((tag: any) => ({ label: tag.name, value: tag.id })),
-])
+// All tags are now regular tags (no pseudo-tag)
+const regularTags = computed(() => tagList.value)
+const tagDropdownOptions = computed(() =>
+  regularTags.value.map((tag: any) => ({ content: tag.name, value: tag.id })),
+)
+const tagSelectOptions = computed(() =>
+  regularTags.value.map((tag: any) => ({ label: tag.name, value: tag.id })),
+)
 const sidebarCategoryCount = computed(() => tagList.value.length)
 const filteredTags = computed(() => {
   const query = tagSearchQuery.value.trim().toLowerCase()
@@ -1418,17 +1407,6 @@ const handleTagRowClick = (tagId: string) => {
   handleTagFilterChange(normalizedId)
 }
 
-const handleUntaggedClick = () => {
-  if (creatingTag.value) {
-    cancelCreateTag()
-  }
-  if (editingTagId.value) {
-    cancelEditTag()
-  }
-  if (selectedTagId.value === UNTAGGED_FILTER) return
-  handleTagFilterChange(UNTAGGED_FILTER)
-}
-
 const startCreateTag = () => {
   if (!props.kbId) {
     MessagePlugin.warning(t('knowledgeEditor.messages.missingId'))
@@ -1536,7 +1514,9 @@ const confirmDeleteTag = (tag: any) => {
         await deleteKnowledgeBaseTag(props.kbId, tag.id, { force: true })
         MessagePlugin.success(t('knowledgeBase.tagDeleteSuccess'))
         if (selectedTagId.value === tag.id) {
-          handleTagFilterChange(UNTAGGED_FILTER)
+          // Reset to show all entries when current tag is deleted
+          selectedTagId.value = ''
+          handleTagFilterChange('')
         }
         await loadTags()
         await loadEntries()
@@ -2253,7 +2233,7 @@ const startPolling = (taskId: string) => {
           if (status === 'success') {
             MessagePlugin.success(t('knowledgeEditor.faqImport.importSuccess'))
             // 清除筛选条件，确保用户能看到所有新导入的数据
-            selectedTagId.value = UNTAGGED_FILTER
+            selectedTagId.value = ''
             entrySearchKeyword.value = ''
             overallFAQTotal.value = 0  // Reset to trigger re-fetch
             await loadEntries()
@@ -2610,7 +2590,7 @@ watch(
   async (newKbId) => {
     currentPage = 1
     hasMore.value = true
-    selectedTagId.value = UNTAGGED_FILTER
+    selectedTagId.value = ''
     overallFAQTotal.value = 0  // Reset to trigger re-fetch
     cancelCreateTag()
     cancelEditTag()

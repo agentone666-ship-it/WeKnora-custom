@@ -91,10 +91,7 @@ func (r *chunkRepository) ListPagedChunksByKnowledgeID(
 	baseFilter := func(db *gorm.DB) *gorm.DB {
 		db = db.Where("tenant_id = ? AND knowledge_id = ? AND chunk_type IN (?) AND status in (?)",
 			tenantID, knowledgeID, chunkType, []int{int(types.ChunkStatusIndexed), int(types.ChunkStatusDefault)})
-		if tagID == types.UntaggedTagID {
-			// Special value to filter entries without a tag
-			db = db.Where("tag_id = ''")
-		} else if tagID != "" {
+		if tagID != "" {
 			db = db.Where("tag_id = ?", tagID)
 		}
 		if keyword != "" {
@@ -640,9 +637,7 @@ func (r *chunkRepository) UpdateChunkFieldsByTagID(
 			Select("id").
 			Where("tenant_id = ? AND knowledge_base_id = ? AND chunk_type = ?",
 				tenantID, kbID, types.ChunkTypeFAQ)
-		if tagID == "" || tagID == types.UntaggedTagID {
-			query = query.Where("(tag_id = '' OR tag_id IS NULL)")
-		} else {
+		if tagID != "" {
 			query = query.Where("tag_id = ?", tagID)
 		}
 
@@ -669,22 +664,16 @@ func (r *chunkRepository) UpdateChunkFieldsByTagID(
 		updates["is_enabled"] = *isEnabled
 	}
 
-	// Handle newTagID update (__untagged__ is stored as empty string)
+	// Handle newTagID update
 	if newTagID != nil {
-		if *newTagID == types.UntaggedTagID || *newTagID == "" {
-			updates["tag_id"] = ""
-		} else {
-			updates["tag_id"] = *newTagID
-		}
+		updates["tag_id"] = *newTagID
 	}
 
 	query := r.db.WithContext(ctx).Model(&types.Chunk{}).
 		Where("tenant_id = ? AND knowledge_base_id = ? AND chunk_type = ?",
 			tenantID, kbID, types.ChunkTypeFAQ)
 
-	if tagID == "" || tagID == types.UntaggedTagID {
-		query = query.Where("(tag_id = '' OR tag_id IS NULL)")
-	} else {
+	if tagID != "" {
 		query = query.Where("tag_id = ?", tagID)
 	}
 

@@ -230,8 +230,8 @@ type FAQSearchRequest struct {
 	SecondPriorityTagIDs []string `json:"second_priority_tag_ids"` // 第二优先级标签ID列表，限定命中范围，优先级低于第一优先级
 }
 
-// UntaggedTagID is the special tag ID representing uncategorized entries
-const UntaggedTagID = "__untagged__"
+// UntaggedTagName is the default tag name for entries without a tag
+const UntaggedTagName = "未分类"
 
 // FAQEntryFieldsUpdate 单个FAQ条目的字段更新
 type FAQEntryFieldsUpdate struct {
@@ -248,7 +248,7 @@ type FAQEntryFieldsUpdate struct {
 type FAQEntryFieldsBatchUpdate struct {
 	// ByID 按条目ID更新，key为条目ID
 	ByID map[string]FAQEntryFieldsUpdate `json:"by_id,omitempty"`
-	// ByTag 按Tag批量更新，key为TagID（__untagged__表示未分类）
+	// ByTag 按Tag批量更新，key为TagID
 	ByTag map[string]FAQEntryFieldsUpdate `json:"by_tag,omitempty"`
 	// ExcludeIDs 在ByTag操作中需要排除的ID列表
 	ExcludeIDs []string `json:"exclude_ids,omitempty"`

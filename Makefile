@@ -220,7 +220,7 @@ deps:
 
 # Build for production
 build-prod:
-	VERSION=$${VERSION:-unknown}; \
+	VERSION=$${VERSION:-$$(git describe --tags --abbrev=0 2>/dev/null || echo "unknown")}; \
 	COMMIT_ID=$${COMMIT_ID:-unknown}; \
 	BUILD_TIME=$${BUILD_TIME:-unknown}; \
 	GO_VERSION=$${GO_VERSION:-unknown}; \

@@ -1114,6 +1114,7 @@ export default {
       questionIndexModeDescription: 'Combined: Standard and similar questions are indexed together. Separate: Each question is indexed independently for more precise retrieval but requires more storage.',
       entryGuide: 'Each FAQ entry contains a primary question, similar questions, negative examples, and multiple answers. Manage them in the FAQ knowledge base detail view.',
       tagDesc: 'Select category for FAQ entries',
+      tagPlaceholder: 'Please select a category',
       modes: {
         questionOnly: 'Questions only',
         questionAnswer: 'Question + answer',
