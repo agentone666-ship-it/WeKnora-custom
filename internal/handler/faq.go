@@ -422,3 +422,82 @@ func (h *FAQHandler) GetImportProgress(c *gin.Context) {
 		"data":    progress,
 	})
 }
+
+// GetLastImportResult godoc
+// @Summary      获取FAQ最后一次导入结果统计
+// @Description  获取FAQ知识库的最后一次导入结果统计信息
+// @Tags         FAQ管理
+// @Accept       json
+// @Produce      json
+// @Param        id  path      string  true  "知识库ID"
+// @Success      200      {object}  map[string]interface{}  "导入结果统计"
+// @Failure      404      {object}  errors.AppError         "知识库不存在或无导入记录"
+// @Security     Bearer
+// @Security     ApiKeyAuth
+// @Router       /knowledge-bases/{id}/faq/import/last-result [get]
+func (h *FAQHandler) GetLastImportResult(c *gin.Context) {
+	ctx := c.Request.Context()
+	kbID := secutils.SanitizeForLog(c.Param("id"))
+
+	result, err := h.knowledgeService.GetLastFAQImportResult(ctx, kbID)
+	if err != nil {
+		logger.ErrorWithFields(ctx, err, nil)
+		c.Error(err)
+		return
+	}
+
+	if result == nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success": true,
+			"data":    nil,
+			"message": "暂无导入记录",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data":    result,
+	})
+}
+
+// updateLastFAQImportResultDisplayStatusRequest is the request payload for UpdateLastImportResultDisplayStatus
+type updateLastFAQImportResultDisplayStatusRequest struct {
+	DisplayStatus string `json:"display_status" binding:"required,oneof=open close"`
+}
+
+// UpdateLastImportResultDisplayStatus godoc
+// @Summary      更新FAQ最后一次导入结果显示状态
+// @Description  更新FAQ知识库导入结果统计卡片的显示或隐藏状态
+// @Tags         FAQ管理
+// @Accept       json
+// @Produce      json
+// @Param        id      path      string                                         true  "知识库ID"
+// @Param        request body      updateLastFAQImportResultDisplayStatusRequest  true  "状态更新请求"
+// @Success      200     {object}  map[string]interface{}                         "更新成功"
+// @Failure      400     {object}  errors.AppError                                "请求参数错误"
+// @Failure      404     {object}  errors.AppError                                "知识库不存在或无导入记录"
+// @Security     Bearer
+// @Security     ApiKeyAuth
+// @Router       /knowledge-bases/{id}/faq/import/last-result/display [put]
+func (h *FAQHandler) UpdateLastImportResultDisplayStatus(c *gin.Context) {
+	ctx := c.Request.Context()
+	kbID := secutils.SanitizeForLog(c.Param("id"))
+
+	var req updateLastFAQImportResultDisplayStatusRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		logger.Error(ctx, "Failed to bind display status update payload", err)
+		c.Error(errors.NewBadRequestError("请求参数不合法").WithDetails(err.Error()))
+		return
+	}
+
+	if err := h.knowledgeService.UpdateLastFAQImportResultDisplayStatus(ctx, kbID, req.DisplayStatus); err != nil {
+		logger.ErrorWithFields(ctx, err, nil)
+		c.Error(err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+	})
+}

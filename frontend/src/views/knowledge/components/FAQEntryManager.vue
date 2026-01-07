@@ -54,6 +54,57 @@
         </div>
       </div>
 
+      <!-- 导入结果统计（持久化显示） -->
+      <div v-if="importResult && importResult.display_status === 'open' && !importState.taskId" class="faq-import-result-card">
+        <div class="import-result-content">
+          <div class="import-result-header">
+            <t-icon name="check-circle" size="18px" class="result-icon" />
+            <span class="result-title">最近导入结果</span>
+            <span class="result-time">{{ formatImportTime(importResult.imported_at) }}</span>
+          </div>
+          <div class="import-result-stats">
+            <div class="stat-item">
+              <span class="stat-label">导入数据</span>
+              <span class="stat-value">{{ importResult.total_entries }}条</span>
+            </div>
+            <div class="stat-item success">
+              <span class="stat-label">成功</span>
+              <span class="stat-value">{{ importResult.success_count }}条</span>
+            </div>
+            <div v-if="importResult.failed_count > 0" class="stat-item failed">
+              <span class="stat-label">失败</span>
+              <span class="stat-value">{{ importResult.failed_count }}条</span>
+              <t-button
+                v-if="importResult.failed_entries_url"
+                variant="text"
+                theme="primary"
+                size="small"
+                class="download-failed-btn"
+                @click="downloadFailedEntries"
+              >
+                下载原因
+              </t-button>
+            </div>
+            <div v-if="importResult.skipped_count > 0" class="stat-item skipped">
+              <span class="stat-label">跳过</span>
+              <span class="stat-value">{{ importResult.skipped_count }}条</span>
+            </div>
+          </div>
+          <div class="import-result-footer">
+            <span class="import-mode">{{ importResult.import_mode === 'append' ? '追加模式' : '替换模式' }}</span>
+            <t-button
+              variant="text"
+              theme="default"
+              size="small"
+              class="result-close-btn"
+              @click="closeImportResult"
+            >
+              <t-icon name="close" size="14px" />
+            </t-button>
+          </div>
+        </div>
+      </div>
+
       <!-- 导入进度条（显示在列表页面顶部） -->
       <div v-if="importState.taskId && importState.taskStatus" class="faq-import-progress-bar">
         <div class="progress-bar-content">
@@ -103,6 +154,57 @@
           <p v-if="importState.taskStatus.error" class="progress-error">
             {{ importState.taskStatus.error }}
           </p>
+        </div>
+      </div>
+
+      <!-- 导入结果统计（持久化显示） -->
+      <div v-if="importResult && importResult.display_status === 'open' && !importState.taskId" class="faq-import-result-card">
+        <div class="import-result-content">
+          <div class="import-result-header">
+            <t-icon name="check-circle" size="18px" class="result-icon" />
+            <span class="result-title">最近导入结果</span>
+            <span class="result-time">{{ formatImportTime(importResult.imported_at) }}</span>
+          </div>
+          <div class="import-result-stats">
+            <div class="stat-item">
+              <span class="stat-label">导入数据</span>
+              <span class="stat-value">{{ importResult.total_entries }}条</span>
+            </div>
+            <div class="stat-item success">
+              <span class="stat-label">成功</span>
+              <span class="stat-value">{{ importResult.success_count }}条</span>
+            </div>
+            <div v-if="importResult.failed_count > 0" class="stat-item failed">
+              <span class="stat-label">失败</span>
+              <span class="stat-value">{{ importResult.failed_count }}条</span>
+              <t-button
+                v-if="importResult.failed_entries_url"
+                variant="text"
+                theme="primary"
+                size="small"
+                class="download-failed-btn"
+                @click="downloadFailedEntries"
+              >
+                下载原因
+              </t-button>
+            </div>
+            <div v-if="importResult.skipped_count > 0" class="stat-item skipped">
+              <span class="stat-label">跳过</span>
+              <span class="stat-value">{{ importResult.skipped_count }}条</span>
+            </div>
+          </div>
+          <div class="import-result-footer">
+            <span class="import-mode">{{ importResult.import_mode === 'append' ? '追加模式' : '替换模式' }}</span>
+            <t-button
+              variant="text"
+              theme="default"
+              size="small"
+              class="result-close-btn"
+              @click="closeImportResult"
+            >
+              <t-icon name="close" size="14px" />
+            </t-button>
+          </div>
         </div>
       </div>
 
@@ -516,6 +618,57 @@
           <div v-if="hasMore === false && entries.length > 0" class="faq-no-more">
             {{ $t('common.noMoreData') }}
           </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 导入结果统计（持久化显示） -->
+      <div v-if="importResult && importResult.display_status === 'open' && !importState.taskId" class="faq-import-result-card">
+        <div class="import-result-content">
+          <div class="import-result-header">
+            <t-icon name="check-circle" size="18px" class="result-icon" />
+            <span class="result-title">最近导入结果</span>
+            <span class="result-time">{{ formatImportTime(importResult.imported_at) }}</span>
+          </div>
+          <div class="import-result-stats">
+            <div class="stat-item">
+              <span class="stat-label">导入数据</span>
+              <span class="stat-value">{{ importResult.total_entries }}条</span>
+            </div>
+            <div class="stat-item success">
+              <span class="stat-label">成功</span>
+              <span class="stat-value">{{ importResult.success_count }}条</span>
+            </div>
+            <div v-if="importResult.failed_count > 0" class="stat-item failed">
+              <span class="stat-label">失败</span>
+              <span class="stat-value">{{ importResult.failed_count }}条</span>
+              <t-button
+                v-if="importResult.failed_entries_url"
+                variant="text"
+                theme="primary"
+                size="small"
+                class="download-failed-btn"
+                @click="downloadFailedEntries"
+              >
+                下载原因
+              </t-button>
+            </div>
+            <div v-if="importResult.skipped_count > 0" class="stat-item skipped">
+              <span class="stat-label">跳过</span>
+              <span class="stat-value">{{ importResult.skipped_count }}条</span>
+            </div>
+          </div>
+          <div class="import-result-footer">
+            <span class="import-mode">{{ importResult.import_mode === 'append' ? '追加模式' : '替换模式' }}</span>
+            <t-button
+              variant="text"
+              theme="default"
+              size="small"
+              class="result-close-btn"
+              @click="closeImportResult"
+            >
+              <t-icon name="close" size="14px" />
+            </t-button>
           </div>
         </div>
       </div>
@@ -1084,6 +1237,57 @@
           </div>
         </div>
       </div>
+
+      <!-- 导入结果统计（持久化显示） -->
+      <div v-if="importResult && importResult.display_status === 'open' && !importState.taskId" class="faq-import-result-card">
+        <div class="import-result-content">
+          <div class="import-result-header">
+            <t-icon name="check-circle" size="18px" class="result-icon" />
+            <span class="result-title">最近导入结果</span>
+            <span class="result-time">{{ formatImportTime(importResult.imported_at) }}</span>
+          </div>
+          <div class="import-result-stats">
+            <div class="stat-item">
+              <span class="stat-label">导入数据</span>
+              <span class="stat-value">{{ importResult.total_entries }}条</span>
+            </div>
+            <div class="stat-item success">
+              <span class="stat-label">成功</span>
+              <span class="stat-value">{{ importResult.success_count }}条</span>
+            </div>
+            <div v-if="importResult.failed_count > 0" class="stat-item failed">
+              <span class="stat-label">失败</span>
+              <span class="stat-value">{{ importResult.failed_count }}条</span>
+              <t-button
+                v-if="importResult.failed_entries_url"
+                variant="text"
+                theme="primary"
+                size="small"
+                class="download-failed-btn"
+                @click="downloadFailedEntries"
+              >
+                下载原因
+              </t-button>
+            </div>
+            <div v-if="importResult.skipped_count > 0" class="stat-item skipped">
+              <span class="stat-label">跳过</span>
+              <span class="stat-value">{{ importResult.skipped_count }}条</span>
+            </div>
+          </div>
+          <div class="import-result-footer">
+            <span class="import-mode">{{ importResult.import_mode === 'append' ? '追加模式' : '替换模式' }}</span>
+            <t-button
+              variant="text"
+              theme="default"
+              size="small"
+              class="result-close-btn"
+              @click="closeImportResult"
+            >
+              <t-icon name="close" size="14px" />
+            </t-button>
+          </div>
+        </div>
+      </div>
     </t-drawer>
   </div>
 </template>
@@ -1112,6 +1316,8 @@ import {
   getKnowledgeBaseById,
   listKnowledgeBases,
   getFAQImportProgress,
+  getFAQImportResult,
+  updateFAQImportResultDisplayStatus,
 } from '@/api/knowledge-base'
 import * as XLSX from 'xlsx'
 import Papa from 'papaparse'
@@ -1304,6 +1510,20 @@ const importState = reactive({
   } | null,
   pollingInterval: null as ReturnType<typeof setInterval> | null,
 })
+
+// FAQ导入结果状态（持久化的）
+const importResult = ref<{
+  total_entries: number
+  success_count: number
+  failed_count: number
+  skipped_count: number
+  import_mode: string
+  imported_at: string
+  task_id: string
+  processing_time: number
+  failed_entries_url?: string
+  display_status: string
+} | null>(null)
 
 // Search test state
 const searchDrawerVisible = ref(false)
@@ -2238,6 +2458,7 @@ const startPolling = (taskId: string) => {
             overallFAQTotal.value = 0  // Reset to trigger re-fetch
             await loadEntries()
             await loadTags()
+            await loadImportResult() // 加载最新的导入结果统计
             // 任务完成后，3秒后自动关闭进度条
             setTimeout(() => {
               if (importState.taskStatus?.status === 'success') {
@@ -2364,6 +2585,46 @@ const restoreImportTask = async () => {
     if (error?.response?.status === 404 || error?.message?.includes('not found')) {
       clearTaskIdFromStorage()
     }
+  }
+}
+
+// 加载持久化的导入结果统计
+const loadImportResult = async () => {
+  if (!props.kbId) return
+  try {
+    const res: any = await getFAQImportResult(props.kbId)
+    if (res?.data) {
+      importResult.value = res.data
+    } else {
+      importResult.value = null
+    }
+  } catch (error) {
+    console.error('Failed to load FAQ import result:', error)
+    importResult.value = null
+  }
+}
+
+// 关闭导入结果统计卡片
+const closeImportResult = async () => {
+  if (!props.kbId) return
+  try {
+    await updateFAQImportResultDisplayStatus(props.kbId, 'close')
+    if (importResult.value) {
+      importResult.value.display_status = 'close'
+    }
+  } catch (error) {
+    console.error('Failed to close import result:', error)
+  }
+}
+
+// 格式化导入时间
+const formatImportTime = (timeStr?: string) => {
+  if (!timeStr) return ''
+  try {
+    const date = new Date(timeStr)
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+  } catch (e) {
+    return timeStr
   }
 }
 
@@ -2827,6 +3088,7 @@ onMounted(async () => {
   // 如果已有kbId，恢复导入任务状态
   if (props.kbId) {
     await restoreImportTask()
+    await loadImportResult() // 加载导入结果
   }
   // 主动触发一次选中数量事件，确保左侧菜单能接收到初始状态
   nextTick(() => {

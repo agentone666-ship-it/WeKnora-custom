@@ -2897,6 +2897,57 @@ func csvEscape(s string) string {
 	return s
 }
 
+// saveFAQImportResultToDatabase 保存FAQ导入结果统计到数据库
+func (s *knowledgeService) saveFAQImportResultToDatabase(ctx context.Context,
+	payload *types.FAQImportPayload, progress *types.FAQImportProgress, originalTotalEntries int) error {
+
+	// 获取FAQ知识库实例
+	tenantID := ctx.Value(types.TenantIDContextKey).(uint64)
+	knowledge, err := s.repo.GetKnowledgeByID(ctx, tenantID, payload.KnowledgeID)
+	if err != nil {
+		return fmt.Errorf("failed to get FAQ knowledge: %w", err)
+	}
+
+	// 计算跳过的条目数（总数 - 成功 - 失败）
+	skippedCount := originalTotalEntries - progress.SuccessCount - progress.FailedCount
+	if skippedCount < 0 {
+		skippedCount = 0
+	}
+
+	// 创建导入结果统计
+	importResult := &types.FAQImportResult{
+		TotalEntries:   originalTotalEntries,
+		SuccessCount:   progress.SuccessCount,
+		FailedCount:    progress.FailedCount,
+		SkippedCount:   skippedCount,
+		ImportMode:     payload.Mode,
+		ImportedAt:     time.Now(),
+		TaskID:         payload.TaskID,
+		ProcessingTime: time.Now().Unix() - progress.CreatedAt, // 处理耗时（秒）
+		DisplayStatus:  "open",                                 // 新导入的结果默认显示
+	}
+
+	// 如果有失败条目且提供了下载URL，设置失败URL
+	if progress.FailedCount > 0 && progress.FailedEntriesURL != "" {
+		importResult.FailedEntriesURL = progress.FailedEntriesURL
+	}
+
+	// 设置导入结果到Knowledge的metadata中
+	if err := knowledge.SetLastFAQImportResult(importResult); err != nil {
+		return fmt.Errorf("failed to set FAQ import result: %w", err)
+	}
+
+	// 更新数据库
+	if err := s.repo.UpdateKnowledge(ctx, knowledge); err != nil {
+		return fmt.Errorf("failed to update knowledge with import result: %w", err)
+	}
+
+	logger.Infof(ctx, "Saved FAQ import result to database: knowledge_id=%s, task_id=%s, total=%d, success=%d, failed=%d, skipped=%d",
+		payload.KnowledgeID, payload.TaskID, originalTotalEntries, progress.SuccessCount, progress.FailedCount, skippedCount)
+
+	return nil
+}
+
 // buildFAQFailedEntry 构建 FAQFailedEntry
 func buildFAQFailedEntry(idx int, reason string, entry *types.FAQEntryPayload) types.FAQFailedEntry {
 	answerAll := false
@@ -5967,6 +6018,13 @@ func (s *knowledgeService) finalizeFAQValidation(ctx context.Context, payload *t
 		}
 	}
 
+	// 如果不是 dry run 模式，保存导入结果统计到数据库
+	if !payload.DryRun {
+		if err := s.saveFAQImportResultToDatabase(ctx, payload, progress, originalTotalEntries); err != nil {
+			logger.Warnf(ctx, "Failed to save FAQ import result to database: %v", err)
+		}
+	}
+
 	// 使用 updateFAQImportProgressStatus 来确保正确清理 running key
 	// 但是需要先保存其他字段，因为 updateFAQImportProgressStatus 不会保存所有字段
 	if err := s.saveFAQImportProgress(ctx, progress); err != nil {
@@ -6038,6 +6096,94 @@ func (s *knowledgeService) GetFAQImportProgress(ctx context.Context, taskID stri
 		return nil, fmt.Errorf("failed to unmarshal FAQ import progress: %w", err)
 	}
 	return &progress, nil
+}
+
+// GetLastFAQImportResult retrieves the latest FAQ import result for a knowledge base
+func (s *knowledgeService) GetLastFAQImportResult(ctx context.Context, kbID string) (*types.FAQImportResult, error) {
+	// 获取当前租户ID
+	tenantID := ctx.Value(types.TenantIDContextKey).(uint64)
+
+	// 查找FAQ类型的knowledge
+	knowledgeList, err := s.repo.ListKnowledgeByKnowledgeBaseID(ctx, tenantID, kbID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list knowledge: %w", err)
+	}
+
+	// 查找FAQ类型的knowledge
+	var faqKnowledge *types.Knowledge
+	for _, k := range knowledgeList {
+		if k.Type == types.KnowledgeTypeFAQ {
+			faqKnowledge = k
+			break
+		}
+	}
+
+	if faqKnowledge == nil {
+		return nil, werrors.NewNotFoundError("FAQ knowledge not found in this knowledge base")
+	}
+
+	// 解析导入结果
+	result, err := faqKnowledge.GetLastFAQImportResult()
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse FAQ import result: %w", err)
+	}
+
+	return result, nil
+}
+
+// UpdateLastFAQImportResultDisplayStatus updates the display status of FAQ import result
+func (s *knowledgeService) UpdateLastFAQImportResultDisplayStatus(ctx context.Context, kbID string, displayStatus string) error {
+	// 验证displayStatus参数
+	if displayStatus != "open" && displayStatus != "close" {
+		return werrors.NewBadRequestError("invalid display status, must be 'open' or 'close'")
+	}
+
+	// 获取当前租户ID
+	tenantID := ctx.Value(types.TenantIDContextKey).(uint64)
+
+	// 查找FAQ类型的knowledge
+	knowledgeList, err := s.repo.ListKnowledgeByKnowledgeBaseID(ctx, tenantID, kbID)
+	if err != nil {
+		return fmt.Errorf("failed to list knowledge: %w", err)
+	}
+
+	// 查找FAQ类型的knowledge
+	var faqKnowledge *types.Knowledge
+	for _, k := range knowledgeList {
+		if k.Type == types.KnowledgeTypeFAQ {
+			faqKnowledge = k
+			break
+		}
+	}
+
+	if faqKnowledge == nil {
+		return werrors.NewNotFoundError("FAQ knowledge not found in this knowledge base")
+	}
+
+	// 解析当前的导入结果
+	result, err := faqKnowledge.GetLastFAQImportResult()
+	if err != nil {
+		return fmt.Errorf("failed to parse FAQ import result: %w", err)
+	}
+
+	if result == nil {
+		return werrors.NewNotFoundError("no FAQ import result found")
+	}
+
+	// 更新显示状态
+	result.DisplayStatus = displayStatus
+
+	// 保存更新后的结果
+	if err := faqKnowledge.SetLastFAQImportResult(result); err != nil {
+		return fmt.Errorf("failed to set FAQ import result: %w", err)
+	}
+
+	// 更新数据库
+	if err := s.repo.UpdateKnowledge(ctx, faqKnowledge); err != nil {
+		return fmt.Errorf("failed to update knowledge: %w", err)
+	}
+
+	return nil
 }
 
 // ProcessKBClone handles Asynq knowledge base clone tasks

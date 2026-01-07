@@ -320,12 +320,48 @@ type FAQImportMetadata struct {
 	ImportProcessed int `json:"import_processed"`
 }
 
+// FAQImportResult 存储FAQ导入完成后的统计结果
+// 这个信息是持久化的，不跟随进度状态，直到下次导入时被替换
+type FAQImportResult struct {
+	// 导入统计信息
+	TotalEntries   int `json:"total_entries"`   // 总条目数
+	SuccessCount   int `json:"success_count"`   // 成功导入的条目数
+	FailedCount    int `json:"failed_count"`    // 失败的条目数
+	SkippedCount   int `json:"skipped_count"`   // 跳过的条目数（如重复等）
+	
+	// 导入模式和时间信息
+	ImportMode     string    `json:"import_mode"`     // 导入模式：append 或 replace
+	ImportedAt     time.Time `json:"imported_at"`     // 导入完成时间
+	TaskID         string    `json:"task_id"`         // 导入任务ID
+	
+	// 失败详情URL（失败条目较多时提供下载链接）
+	FailedEntriesURL string `json:"failed_entries_url,omitempty"` // 失败条目CSV下载URL
+	
+	// 显示控制
+	DisplayStatus string `json:"display_status"` // 显示状态：open 或 close
+	
+	// 额外统计信息
+	ProcessingTime int64 `json:"processing_time"` // 处理耗时（毫秒）
+}
+
 // ToJSON converts the metadata to JSON type.
 func (m *FAQImportMetadata) ToJSON() (JSON, error) {
 	if m == nil {
 		return nil, nil
 	}
 	bytes, err := json.Marshal(m)
+	if err != nil {
+		return nil, err
+	}
+	return JSON(bytes), nil
+}
+
+// ToJSON converts the import result to JSON type.
+func (r *FAQImportResult) ToJSON() (JSON, error) {
+	if r == nil {
+		return nil, nil
+	}
+	bytes, err := json.Marshal(r)
 	if err != nil {
 		return nil, err
 	}

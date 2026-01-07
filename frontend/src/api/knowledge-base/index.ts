@@ -232,6 +232,16 @@ export function getFAQImportProgress(taskId: string) {
   return get(`/api/v1/faq/import/progress/${taskId}`);
 }
 
+export function getFAQImportResult(knowledgeBaseId: string) {
+  return get(`/api/v1/knowledge-bases/${knowledgeBaseId}/faq/import/last-result`);
+}
+
+export function updateFAQImportResultDisplayStatus(knowledgeBaseId: string, displayStatus: 'open' | 'close') {
+  return put(`/api/v1/knowledge-bases/${knowledgeBaseId}/faq/import/last-result/display`, {
+    display_status: displayStatus
+  });
+}
+
 export function searchKnowledge(keyword: string, offset = 0, limit = 20, fileTypes?: string[]) {
   let url = `/api/v1/knowledge/search?keyword=${encodeURIComponent(keyword)}&offset=${offset}&limit=${limit}`;
   if (fileTypes && fileTypes.length > 0) {
