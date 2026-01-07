@@ -10,9 +10,9 @@ import (
 	"github.com/Tencent/WeKnora/internal/logger"
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
+	"github.com/Tencent/WeKnora/internal/utils"
 	secutils "github.com/Tencent/WeKnora/internal/utils"
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
 )
 
@@ -375,7 +375,7 @@ func (h *KnowledgeBaseHandler) CopyKnowledgeBase(c *gin.Context) {
 	// Generate task ID if not provided
 	taskID := req.TaskID
 	if taskID == "" {
-		taskID = uuid.New().String()
+		taskID = utils.GenerateTaskID("kb_clone", tenantID.(uint64), req.SourceID)
 	}
 
 	// Create KB clone payload
@@ -394,7 +394,8 @@ func (h *KnowledgeBaseHandler) CopyKnowledgeBase(c *gin.Context) {
 	}
 
 	// Enqueue KB clone task to Asynq
-	task := asynq.NewTask(types.TypeKBClone, payloadBytes, asynq.Queue("default"), asynq.MaxRetry(3))
+	task := asynq.NewTask(types.TypeKBClone, payloadBytes,
+		asynq.TaskID(taskID), asynq.Queue("default"), asynq.MaxRetry(3))
 	info, err := h.asynqClient.Enqueue(task)
 	if err != nil {
 		logger.Errorf(ctx, "Failed to enqueue KB clone task: %v", err)

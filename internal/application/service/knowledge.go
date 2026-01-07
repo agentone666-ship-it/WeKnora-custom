@@ -2736,10 +2736,10 @@ func (s *knowledgeService) UpsertFAQEntries(ctx context.Context,
 
 	tenantID := ctx.Value(types.TenantIDContextKey).(uint64)
 
-	// 使用传入的TaskID，如果没传则生成UUID
+	// 使用传入的TaskID，如果没传则生成增强的TaskID
 	taskID := payload.TaskID
 	if taskID == "" {
-		taskID = uuid.New().String()
+		taskID = secutils.GenerateTaskID("faq_import", tenantID, kbID)
 	}
 
 	var knowledgeID string
@@ -2810,13 +2810,19 @@ func (s *knowledgeService) UpsertFAQEntries(ctx context.Context,
 		return "", fmt.Errorf("failed to marshal task payload: %w", err)
 	}
 
-	task := asynq.NewTask(types.TypeFAQImport, payloadBytes, asynq.Queue("default"), asynq.MaxRetry(5))
+	task := asynq.NewTask(types.TypeFAQImport, payloadBytes, asynq.TaskID(taskID), asynq.Queue("default"), asynq.MaxRetry(5))
 	info, err := s.task.Enqueue(task)
 	if err != nil {
 		logger.Errorf(ctx, "Failed to enqueue FAQ import task: %v", err)
 		return "", fmt.Errorf("failed to enqueue task: %w", err)
 	}
 	logger.Infof(ctx, "Enqueued FAQ import task: id=%s queue=%s task_id=%s dry_run=%v", info.ID, info.Queue, taskID, payload.DryRun)
+
+	// 设置 running key 标记任务正在进行
+	if err := s.setRunningFAQImportTaskID(ctx, kbID, taskID); err != nil {
+		logger.Errorf(ctx, "Failed to set running FAQ import task ID: %v", err)
+		// 这个错误不影响任务执行，只是会影响重复提交检查
+	}
 
 	return taskID, nil
 }
@@ -5961,8 +5967,16 @@ func (s *knowledgeService) finalizeFAQValidation(ctx context.Context, payload *t
 		}
 	}
 
+	// 使用 updateFAQImportProgressStatus 来确保正确清理 running key
+	// 但是需要先保存其他字段，因为 updateFAQImportProgressStatus 不会保存所有字段
 	if err := s.saveFAQImportProgress(ctx, progress); err != nil {
 		logger.Warnf(ctx, "Failed to save final FAQ import progress: %v", err)
+	}
+
+	// 然后调用状态更新来清理 running key
+	if err := s.updateFAQImportProgressStatus(ctx, payload.TaskID, types.FAQImportStatusCompleted,
+		100, originalTotalEntries, originalTotalEntries, progress.Message, ""); err != nil {
+		logger.Warnf(ctx, "Failed to update final FAQ import status: %v", err)
 	}
 
 	logger.Infof(ctx, "FAQ task completed: %s, dry_run=%v, success: %d, failed: %d",
