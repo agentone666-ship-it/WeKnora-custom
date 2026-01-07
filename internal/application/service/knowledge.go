@@ -4192,6 +4192,44 @@ func (s *knowledgeService) SearchFAQEntries(ctx context.Context,
 		entries = entries[:req.MatchCount]
 	}
 
+	// 批量查询TagName并补充到结果中
+	if len(entries) > 0 {
+		// 收集所有需要查询的TagID
+		tagIDs := make([]string, 0)
+		tagIDSet := make(map[string]struct{})
+		for _, entry := range entries {
+			if entry.TagID != "" {
+				if _, exists := tagIDSet[entry.TagID]; !exists {
+					tagIDs = append(tagIDs, entry.TagID)
+					tagIDSet[entry.TagID] = struct{}{}
+				}
+			}
+		}
+
+		// 批量查询标签
+		if len(tagIDs) > 0 {
+			tags, err := s.tagRepo.GetByIDs(ctx, tenantID, tagIDs)
+			if err != nil {
+				logger.Warnf(ctx, "Failed to batch query tags: %v", err)
+			} else {
+				// 构建TagID到TagName的映射
+				tagNameMap := make(map[string]string)
+				for _, tag := range tags {
+					tagNameMap[tag.ID] = tag.Name
+				}
+
+				// 补充TagName
+				for _, entry := range entries {
+					if entry.TagID != "" {
+						if tagName, exists := tagNameMap[entry.TagID]; exists {
+							entry.TagName = tagName
+						}
+					}
+				}
+			}
+		}
+	}
+
 	return entries, nil
 }
 
