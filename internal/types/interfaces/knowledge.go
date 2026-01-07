@@ -93,7 +93,7 @@ type KnowledgeService interface {
 	// GetFAQEntry retrieves a single FAQ entry by ID.
 	GetFAQEntry(ctx context.Context, kbID string, entryID string) (*types.FAQEntry, error)
 	// UpdateFAQEntry updates a single FAQ entry.
-	UpdateFAQEntry(ctx context.Context, kbID string, entryID string, payload *types.FAQEntryPayload) error
+	UpdateFAQEntry(ctx context.Context, kbID string, entryID string, payload *types.FAQEntryPayload) (*types.FAQEntry, error)
 	// UpdateFAQEntryFieldsBatch updates multiple fields for FAQ entries in batch.
 	// Supports updating is_enabled, is_recommended, tag_id, and other fields in a single call.
 	UpdateFAQEntryFieldsBatch(ctx context.Context, kbID string, req *types.FAQEntryFieldsBatchUpdate) error

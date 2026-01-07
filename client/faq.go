@@ -242,15 +242,18 @@ func (c *Client) GetFAQEntry(ctx context.Context,
 // UpdateFAQEntry updates a single FAQ entry.
 func (c *Client) UpdateFAQEntry(ctx context.Context,
 	knowledgeBaseID, entryID string, payload *FAQEntryPayload,
-) error {
+) (*FAQEntry, error) {
 	path := fmt.Sprintf("/api/v1/knowledge-bases/%s/faq/entries/%s", knowledgeBaseID, entryID)
 	resp, err := c.doRequest(ctx, http.MethodPut, path, payload, nil)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	var response faqSimpleResponse
-	return parseResponse(resp, &response)
+	var response FAQEntryResponse
+	if err := parseResponse(resp, &response); err != nil {
+		return nil, err
+	}
+	return response.Data, nil
 }
 
 // UpdateFAQEntryFieldsBatch updates multiple fields for FAQ entries in bulk.

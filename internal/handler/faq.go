@@ -162,8 +162,9 @@ func (h *FAQHandler) UpdateEntry(c *gin.Context) {
 		return
 	}
 
-	if err := h.knowledgeService.UpdateFAQEntry(ctx,
-		secutils.SanitizeForLog(c.Param("id")), secutils.SanitizeForLog(c.Param("entry_id")), &req); err != nil {
+	entry, err := h.knowledgeService.UpdateFAQEntry(ctx,
+		secutils.SanitizeForLog(c.Param("id")), secutils.SanitizeForLog(c.Param("entry_id")), &req)
+	if err != nil {
 		logger.ErrorWithFields(ctx, err, nil)
 		c.Error(err)
 		return
@@ -171,6 +172,7 @@ func (h *FAQHandler) UpdateEntry(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
+		"data":    entry,
 	})
 }
 

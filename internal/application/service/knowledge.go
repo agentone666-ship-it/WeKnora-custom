@@ -3420,41 +3420,41 @@ func (s *knowledgeService) GetFAQEntry(ctx context.Context,
 // UpdateFAQEntry updates a single FAQ entry.
 func (s *knowledgeService) UpdateFAQEntry(ctx context.Context,
 	kbID string, entryID string, payload *types.FAQEntryPayload,
-) error {
+) (*types.FAQEntry, error) {
 	if payload == nil {
-		return werrors.NewBadRequestError("请求体不能为空")
+		return nil, werrors.NewBadRequestError("请求体不能为空")
 	}
 	kb, err := s.validateFAQKnowledgeBase(ctx, kbID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	kb.EnsureDefaults()
 	tenantID := ctx.Value(types.TenantIDContextKey).(uint64)
 	chunk, err := s.chunkRepo.GetChunkByID(ctx, tenantID, entryID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if chunk.KnowledgeBaseID != kb.ID {
-		return werrors.NewForbiddenError("无权操作该 FAQ 条目")
+		return nil, werrors.NewForbiddenError("无权操作该 FAQ 条目")
 	}
 	if chunk.ChunkType != types.ChunkTypeFAQ {
-		return werrors.NewBadRequestError("仅支持更新 FAQ 条目")
+		return nil, werrors.NewBadRequestError("仅支持更新 FAQ 条目")
 	}
 	meta, err := sanitizeFAQEntryPayload(payload)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// 检查标准问和相似问是否与其他条目重复
 	if err := s.checkFAQQuestionDuplicate(ctx, tenantID, kb.ID, entryID, meta); err != nil {
-		return err
+		return nil, err
 	}
 
 	if existing, err := chunk.FAQMetadata(); err == nil && existing != nil {
 		meta.Version = existing.Version + 1
 	}
 	if err := chunk.SetFAQMetadata(meta); err != nil {
-		return err
+		return nil, err
 	}
 	// 获取索引模式
 	indexMode := types.FAQIndexModeQuestionOnly
@@ -3479,7 +3479,7 @@ func (s *knowledgeService) UpdateFAQEntry(ctx context.Context,
 	}
 	chunk.UpdatedAt = time.Now()
 	if err := s.chunkService.UpdateChunk(ctx, chunk); err != nil {
-		return err
+		return nil, err
 	}
 
 	// Sync is_enabled status to retriever engines if it was updated
@@ -3491,22 +3491,40 @@ func (s *knowledgeService) UpdateFAQEntry(ctx context.Context,
 			tenantInfo.GetEffectiveEngines(),
 		)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if err := retrieveEngine.BatchUpdateChunkEnabledStatus(ctx, chunkStatusMap); err != nil {
-			return err
+			return nil, err
 		}
 	}
 
 	faqKnowledge, err := s.repo.GetKnowledgeByID(ctx, tenantID, chunk.KnowledgeID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	embeddingModel, err := s.modelService.GetEmbeddingModel(ctx, kb.EmbeddingModelID)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return s.indexFAQChunks(ctx, kb, faqKnowledge, []*types.Chunk{chunk}, embeddingModel, false, true)
+	if err := s.indexFAQChunks(ctx, kb, faqKnowledge, []*types.Chunk{chunk}, embeddingModel, false, true); err != nil {
+		return nil, err
+	}
+
+	// 转换为FAQEntry返回
+	entry, err := s.chunkToFAQEntry(chunk, kb)
+	if err != nil {
+		return nil, err
+	}
+
+	// 查询TagName
+	if entry.TagID != "" {
+		tag, tagErr := s.tagRepo.GetByID(ctx, tenantID, entry.TagID)
+		if tagErr == nil && tag != nil {
+			entry.TagName = tag.Name
+		}
+	}
+
+	return entry, nil
 }
 
 // UpdateFAQEntryStatus updates enable status for a FAQ entry.
