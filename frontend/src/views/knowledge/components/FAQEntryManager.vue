@@ -1316,7 +1316,6 @@ import {
   getKnowledgeBaseById,
   listKnowledgeBases,
   getFAQImportProgress,
-  getFAQImportResult,
   updateFAQImportResultDisplayStatus,
 } from '@/api/knowledge-base'
 import * as XLSX from 'xlsx'
@@ -2451,6 +2450,10 @@ const startPolling = (taskId: string) => {
         if (status === 'success' || status === 'failed') {
           stopPolling()
           if (status === 'success') {
+            // 保存已完成的 taskId 用于后续加载结果
+            if (importState.taskId) {
+              saveLastCompletedTaskId(importState.taskId)
+            }
             MessagePlugin.success(t('knowledgeEditor.faqImport.importSuccess'))
             // 清除筛选条件，确保用户能看到所有新导入的数据
             selectedTagId.value = ''
@@ -2588,13 +2591,61 @@ const restoreImportTask = async () => {
   }
 }
 
+// localStorage key for last completed task
+const getLastCompletedTaskKey = () => {
+  return `faq_import_last_completed_${props.kbId}`
+}
+
+const saveLastCompletedTaskId = (taskId: string) => {
+  if (!props.kbId) return
+  try {
+    localStorage.setItem(getLastCompletedTaskKey(), taskId)
+  } catch (error) {
+    console.error('Failed to save last completed taskId:', error)
+  }
+}
+
+const getLastCompletedTaskId = (): string | null => {
+  if (!props.kbId) return null
+  try {
+    return localStorage.getItem(getLastCompletedTaskKey())
+  } catch (error) {
+    return null
+  }
+}
+
 // 加载持久化的导入结果统计
 const loadImportResult = async () => {
   if (!props.kbId) return
+  
+  const lastTaskId = getLastCompletedTaskId()
+  if (!lastTaskId) {
+    importResult.value = null
+    return
+  }
+  
   try {
-    const res: any = await getFAQImportResult(props.kbId)
-    if (res?.data) {
-      importResult.value = res.data
+    const res: any = await getFAQImportProgress(lastTaskId)
+    const data = res?.data
+    if (data && data.status === 'completed') {
+      // 检查后端返回的 display_status，如果是 close 则不显示
+      if (data.display_status === 'close') {
+        importResult.value = null
+        return
+      }
+      // Map progress fields to importResult format
+      importResult.value = {
+        total_entries: data.total,
+        success_count: data.success_count,
+        failed_count: data.failed_count,
+        skipped_count: data.skipped_count || 0,
+        import_mode: data.import_mode || 'append',
+        imported_at: data.imported_at,
+        task_id: data.task_id,
+        failed_entries_url: data.failed_entries_url,
+        display_status: data.display_status || 'open',
+        processing_time: data.processing_time || 0,
+      }
     } else {
       importResult.value = null
     }

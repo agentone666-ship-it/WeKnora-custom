@@ -194,8 +194,7 @@ func RegisterFAQRoutes(r *gin.RouterGroup, handler *handler.FAQHandler) {
 		faq.PUT("/entries/tags", handler.UpdateEntryTagBatch)
 		faq.DELETE("/entries", handler.DeleteEntries)
 		faq.POST("/search", handler.SearchFAQ)
-		// FAQ import result API
-		faq.GET("/import/last-result", handler.GetLastImportResult)
+		// FAQ import result display status
 		faq.PUT("/import/last-result/display", handler.UpdateLastImportResultDisplayStatus)
 	}
 	// FAQ import progress route (outside of knowledge-base scope)

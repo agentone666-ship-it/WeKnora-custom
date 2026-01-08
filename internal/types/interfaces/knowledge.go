@@ -126,8 +126,6 @@ type KnowledgeService interface {
 	SaveKBCloneProgress(ctx context.Context, progress *types.KBCloneProgress) error
 	// GetFAQImportProgress retrieves the progress of an FAQ import task
 	GetFAQImportProgress(ctx context.Context, taskID string) (*types.FAQImportProgress, error)
-	// GetLastFAQImportResult retrieves the latest FAQ import result for a knowledge base
-	GetLastFAQImportResult(ctx context.Context, kbID string) (*types.FAQImportResult, error)
 	// UpdateLastFAQImportResultDisplayStatus updates the display status of FAQ import result
 	UpdateLastFAQImportResultDisplayStatus(ctx context.Context, kbID string, displayStatus string) error
 	// SearchKnowledge searches knowledge items by keyword across the tenant.

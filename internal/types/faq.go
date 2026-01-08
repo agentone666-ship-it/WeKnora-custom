@@ -293,6 +293,7 @@ const (
 )
 
 // FAQImportProgress represents the progress of an FAQ import task stored in Redis
+// When Status is "completed", the result fields (SkippedCount, ImportMode, ImportedAt, DisplayStatus, ProcessingTime) are populated.
 type FAQImportProgress struct {
 	TaskID           string              `json:"task_id"`                      // UUID for the import task
 	KBID             string              `json:"kb_id"`                        // Knowledge Base ID
@@ -303,6 +304,7 @@ type FAQImportProgress struct {
 	Processed        int                 `json:"processed"`                    // Entries processed so far
 	SuccessCount     int                 `json:"success_count"`                // 成功导入/验证通过的条目数
 	FailedCount      int                 `json:"failed_count"`                 // 失败的条目数
+	SkippedCount     int                 `json:"skipped_count,omitempty"`      // 跳过的条目数（如重复等）
 	FailedEntries    []FAQFailedEntry    `json:"failed_entries,omitempty"`     // 失败条目详情（少量时直接返回）
 	FailedEntriesURL string              `json:"failed_entries_url,omitempty"` // 失败条目CSV下载URL（大量时返回URL）
 	Message          string              `json:"message"`                      // Status message
@@ -310,6 +312,12 @@ type FAQImportProgress struct {
 	CreatedAt        int64               `json:"created_at"`                   // Task creation timestamp
 	UpdatedAt        int64               `json:"updated_at"`                   // Last update timestamp
 	DryRun           bool                `json:"dry_run,omitempty"`            // 是否为 dry run 模式
+
+	// Result fields (populated when Status == "completed")
+	ImportMode     string    `json:"import_mode,omitempty"`     // 导入模式：append 或 replace
+	ImportedAt     time.Time `json:"imported_at,omitempty"`     // 导入完成时间
+	DisplayStatus  string    `json:"display_status,omitempty"`  // 显示状态：open 或 close
+	ProcessingTime int64     `json:"processing_time,omitempty"` // 处理耗时（毫秒）
 }
 
 // FAQImportMetadata 存储在Knowledge.Metadata中的FAQ导入任务信息

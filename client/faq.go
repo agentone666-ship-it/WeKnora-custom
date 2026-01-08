@@ -358,6 +358,7 @@ type FAQFailedEntry struct {
 }
 
 // FAQImportProgress represents the progress of an async FAQ import task.
+// When Status is "completed", the result fields (SkippedCount, ImportMode, ImportedAt, DisplayStatus, ProcessingTime) are populated.
 type FAQImportProgress struct {
 	TaskID           string           `json:"task_id"`
 	KBID             string           `json:"kb_id"`
@@ -368,6 +369,7 @@ type FAQImportProgress struct {
 	Processed        int              `json:"processed"`
 	SuccessCount     int              `json:"success_count"`
 	FailedCount      int              `json:"failed_count"`
+	SkippedCount     int              `json:"skipped_count,omitempty"`
 	FailedEntries    []FAQFailedEntry `json:"failed_entries,omitempty"`
 	FailedEntriesURL string           `json:"failed_entries_url,omitempty"` // CSV download URL when too many failures
 	Message          string           `json:"message"`
@@ -375,6 +377,12 @@ type FAQImportProgress struct {
 	CreatedAt        int64            `json:"created_at"`
 	UpdatedAt        int64            `json:"updated_at"`
 	DryRun           bool             `json:"dry_run,omitempty"` // Whether this is a dry run validation
+
+	// Result fields (populated when Status == "completed")
+	ImportMode     string    `json:"import_mode,omitempty"`
+	ImportedAt     time.Time `json:"imported_at,omitempty"`
+	DisplayStatus  string    `json:"display_status,omitempty"`
+	ProcessingTime int64     `json:"processing_time,omitempty"`
 }
 
 // FAQImportProgressResponse wraps the FAQ import progress response.
@@ -399,70 +407,4 @@ func (c *Client) GetFAQImportProgress(ctx context.Context, taskID string) (*FAQI
 		return nil, err
 	}
 	return response.Data, nil
-}
-
-// FAQImportResult stores statistics of the last FAQ import.
-// It matches server response from GET /knowledge-bases/{id}/faq/import/last-result.
-type FAQImportResult struct {
-	TotalEntries int `json:"total_entries"`
-	SuccessCount int `json:"success_count"`
-	FailedCount  int `json:"failed_count"`
-	SkippedCount int `json:"skipped_count"`
-
-	ImportMode string    `json:"import_mode"`
-	ImportedAt time.Time `json:"imported_at"`
-	TaskID     string    `json:"task_id"`
-
-	FailedEntriesURL string `json:"failed_entries_url,omitempty"`
-
-	DisplayStatus  string `json:"display_status"`
-	ProcessingTime int64  `json:"processing_time"`
-}
-
-type faqImportResultResponse struct {
-	Success bool             `json:"success"`
-	Data    *FAQImportResult `json:"data"`
-	Message string           `json:"message,omitempty"`
-	Code    string           `json:"code,omitempty"`
-}
-
-type updateLastFAQImportResultDisplayStatusRequest struct {
-	DisplayStatus string `json:"display_status"`
-}
-
-// GetLastFAQImportResult retrieves the last FAQ import result summary for a knowledge base.
-func (c *Client) GetLastFAQImportResult(ctx context.Context, knowledgeBaseID string) (*FAQImportResult, error) {
-	path := fmt.Sprintf("/api/v1/knowledge-bases/%s/faq/import/last-result", knowledgeBaseID)
-	resp, err := c.doRequest(ctx, http.MethodGet, path, nil, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var response faqImportResultResponse
-	if err := parseResponse(resp, &response); err != nil {
-		return nil, err
-	}
-	return response.Data, nil
-}
-
-// UpdateLastFAQImportResultDisplayStatus updates the display status (open/close) of the last FAQ import result.
-func (c *Client) UpdateLastFAQImportResultDisplayStatus(ctx context.Context, knowledgeBaseID string, displayStatus string) error {
-	path := fmt.Sprintf("/api/v1/knowledge-bases/%s/faq/import/last-result/display", knowledgeBaseID)
-	resp, err := c.doRequest(ctx, http.MethodPut, path, &updateLastFAQImportResultDisplayStatusRequest{DisplayStatus: displayStatus}, nil)
-	if err != nil {
-		return err
-	}
-
-	var response faqSimpleResponse
-	return parseResponse(resp, &response)
-}
-
-// GetFAQImportResult is kept for backward compatibility; it now calls GetLastFAQImportResult.
-func (c *Client) GetFAQImportResult(ctx context.Context, knowledgeBaseID string) (*FAQImportResult, error) {
-	return c.GetLastFAQImportResult(ctx, knowledgeBaseID)
-}
-
-// UpdateFAQImportResultDisplayStatus is kept for backward compatibility; it now calls UpdateLastFAQImportResultDisplayStatus.
-func (c *Client) UpdateFAQImportResultDisplayStatus(ctx context.Context, knowledgeBaseID string, displayStatus string) error {
-	return c.UpdateLastFAQImportResultDisplayStatus(ctx, knowledgeBaseID, displayStatus)
 }

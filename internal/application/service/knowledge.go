@@ -6095,40 +6095,23 @@ func (s *knowledgeService) GetFAQImportProgress(ctx context.Context, taskID stri
 	if err := json.Unmarshal(data, &progress); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal FAQ import progress: %w", err)
 	}
-	return &progress, nil
-}
 
-// GetLastFAQImportResult retrieves the latest FAQ import result for a knowledge base
-func (s *knowledgeService) GetLastFAQImportResult(ctx context.Context, kbID string) (*types.FAQImportResult, error) {
-	// 获取当前租户ID
-	tenantID := ctx.Value(types.TenantIDContextKey).(uint64)
-
-	// 查找FAQ类型的knowledge
-	knowledgeList, err := s.repo.ListKnowledgeByKnowledgeBaseID(ctx, tenantID, kbID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list knowledge: %w", err)
-	}
-
-	// 查找FAQ类型的knowledge
-	var faqKnowledge *types.Knowledge
-	for _, k := range knowledgeList {
-		if k.Type == types.KnowledgeTypeFAQ {
-			faqKnowledge = k
-			break
+	// If task is completed, enrich with persisted result fields from database
+	if progress.Status == types.FAQImportStatusCompleted && progress.KnowledgeID != "" {
+		tenantID := ctx.Value(types.TenantIDContextKey).(uint64)
+		knowledge, err := s.repo.GetKnowledgeByID(ctx, tenantID, progress.KnowledgeID)
+		if err == nil && knowledge != nil {
+			if result, err := knowledge.GetLastFAQImportResult(); err == nil && result != nil {
+				progress.SkippedCount = result.SkippedCount
+				progress.ImportMode = result.ImportMode
+				progress.ImportedAt = result.ImportedAt
+				progress.DisplayStatus = result.DisplayStatus
+				progress.ProcessingTime = result.ProcessingTime
+			}
 		}
 	}
 
-	if faqKnowledge == nil {
-		return nil, werrors.NewNotFoundError("FAQ knowledge not found in this knowledge base")
-	}
-
-	// 解析导入结果
-	result, err := faqKnowledge.GetLastFAQImportResult()
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse FAQ import result: %w", err)
-	}
-
-	return result, nil
+	return &progress, nil
 }
 
 // UpdateLastFAQImportResultDisplayStatus updates the display status of FAQ import result

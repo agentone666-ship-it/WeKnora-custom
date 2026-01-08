@@ -232,10 +232,6 @@ export function getFAQImportProgress(taskId: string) {
   return get(`/api/v1/faq/import/progress/${taskId}`);
 }
 
-export function getFAQImportResult(knowledgeBaseId: string) {
-  return get(`/api/v1/knowledge-bases/${knowledgeBaseId}/faq/import/last-result`);
-}
-
 export function updateFAQImportResultDisplayStatus(knowledgeBaseId: string, displayStatus: 'open' | 'close') {
   return put(`/api/v1/knowledge-bases/${knowledgeBaseId}/faq/import/last-result/display`, {
     display_status: displayStatus
