@@ -408,3 +408,19 @@ func (c *Client) GetFAQImportProgress(ctx context.Context, taskID string) (*FAQI
 	}
 	return response.Data, nil
 }
+
+type updateLastFAQImportResultDisplayStatusRequest struct {
+	DisplayStatus string `json:"display_status"`
+}
+
+// UpdateLastFAQImportResultDisplayStatus updates the display status (open/close) of the last FAQ import result.
+func (c *Client) UpdateLastFAQImportResultDisplayStatus(ctx context.Context, knowledgeBaseID string, displayStatus string) error {
+	path := fmt.Sprintf("/api/v1/knowledge-bases/%s/faq/import/last-result/display", knowledgeBaseID)
+	resp, err := c.doRequest(ctx, http.MethodPut, path, &updateLastFAQImportResultDisplayStatusRequest{DisplayStatus: displayStatus}, nil)
+	if err != nil {
+		return err
+	}
+
+	var response faqSimpleResponse
+	return parseResponse(resp, &response)
+}
