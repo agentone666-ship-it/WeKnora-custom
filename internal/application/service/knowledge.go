@@ -3937,12 +3937,26 @@ func (s *knowledgeService) UpdateFAQEntry(ctx context.Context,
 	}
 
 	// 检查标准问和相似问是否与其他条目重复
-	if err := s.checkFAQQuestionDuplicate(ctx, tenantID, kb.ID, chunk.ID, meta); err != nil {
+	if err := s.checkFAQQuestionDuplicate(ctx, tenantID, kb.ID, "", meta); err != nil {
 		return nil, err
 	}
 
+	// 获取旧的相似问列表，用于增量更新
+	var oldSimilarQuestions []string
+	var oldStandardQuestion string
+	var oldAnswers []string
+	questionIndexMode := types.FAQQuestionIndexModeCombined
+	if kb.FAQConfig != nil && kb.FAQConfig.QuestionIndexMode != "" {
+		questionIndexMode = kb.FAQConfig.QuestionIndexMode
+	}
 	if existing, err := chunk.FAQMetadata(); err == nil && existing != nil {
 		meta.Version = existing.Version + 1
+		// 保存旧的内容用于增量比较
+		if questionIndexMode == types.FAQQuestionIndexModeSeparate {
+			oldSimilarQuestions = existing.SimilarQuestions
+			oldStandardQuestion = existing.StandardQuestion
+			oldAnswers = existing.Answers
+		}
 	}
 	if err := chunk.SetFAQMetadata(meta); err != nil {
 		return nil, err
@@ -3953,7 +3967,6 @@ func (s *knowledgeService) UpdateFAQEntry(ctx context.Context,
 		indexMode = kb.FAQConfig.IndexMode
 	}
 	chunk.Content = buildFAQChunkContent(meta, indexMode)
-	isEnabledUpdated := false
 
 	// Convert tag seq_id to UUID
 	if payload.TagID > 0 {
@@ -3967,9 +3980,7 @@ func (s *knowledgeService) UpdateFAQEntry(ctx context.Context,
 	}
 
 	if payload.IsEnabled != nil {
-		oldEnabled := chunk.IsEnabled
 		chunk.IsEnabled = *payload.IsEnabled
-		isEnabledUpdated = (oldEnabled != chunk.IsEnabled)
 	}
 	// 处理推荐状态
 	if payload.IsRecommended != nil {
@@ -3984,32 +3995,53 @@ func (s *knowledgeService) UpdateFAQEntry(ctx context.Context,
 		return nil, err
 	}
 
-	// Sync is_enabled status to retriever engines if it was updated
-	if isEnabledUpdated {
-		chunkStatusMap := map[string]bool{chunk.ID: chunk.IsEnabled}
-		tenantInfo := ctx.Value(types.TenantInfoContextKey).(*types.Tenant)
-		retrieveEngine, err := retriever.NewCompositeRetrieveEngine(
-			s.retrieveEngine,
-			tenantInfo.GetEffectiveEngines(),
-		)
-		if err != nil {
-			return nil, err
-		}
-		if err := retrieveEngine.BatchUpdateChunkEnabledStatus(ctx, chunkStatusMap); err != nil {
-			return nil, err
-		}
-	}
+	// Note: We don't need to call BatchUpdateChunkEnabledStatus here because
+	// indexFAQChunks will delete old vectors and re-insert with the latest chunk data
+	// (including the updated is_enabled status). Calling both would cause version conflicts.
 
 	faqKnowledge, err := s.repo.GetKnowledgeByID(ctx, tenantID, chunk.KnowledgeID)
 	if err != nil {
 		return nil, err
 	}
+
 	embeddingModel, err := s.modelService.GetEmbeddingModel(ctx, kb.EmbeddingModelID)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.indexFAQChunks(ctx, kb, faqKnowledge, []*types.Chunk{chunk}, embeddingModel, false, true); err != nil {
-		return nil, err
+
+	// 增量索引优化：只对变化的内容进行索引操作
+	if questionIndexMode == types.FAQQuestionIndexModeSeparate && len(oldSimilarQuestions) > 0 {
+		// 分别索引模式下的增量更新
+		if err := s.incrementalIndexFAQEntry(ctx, kb, faqKnowledge, chunk, embeddingModel,
+			oldStandardQuestion, oldSimilarQuestions, oldAnswers, meta); err != nil {
+			return nil, err
+		}
+	} else {
+		// Combined 模式或首次创建，使用全量索引
+		// 增量删除：只删除被移除的相似问索引
+		oldSimilarQuestionCount := len(oldSimilarQuestions)
+		newSimilarQuestionCount := len(meta.SimilarQuestions)
+		if questionIndexMode == types.FAQQuestionIndexModeSeparate && oldSimilarQuestionCount > newSimilarQuestionCount {
+			tenantInfo := ctx.Value(types.TenantInfoContextKey).(*types.Tenant)
+			retrieveEngine, engineErr := retriever.NewCompositeRetrieveEngine(s.retrieveEngine, tenantInfo.GetEffectiveEngines())
+			if engineErr == nil {
+				sourceIDsToDelete := make([]string, 0, oldSimilarQuestionCount-newSimilarQuestionCount)
+				for i := newSimilarQuestionCount; i < oldSimilarQuestionCount; i++ {
+					sourceIDsToDelete = append(sourceIDsToDelete, fmt.Sprintf("%s-%d", chunk.ID, i))
+				}
+				if len(sourceIDsToDelete) > 0 {
+					logger.Debugf(ctx, "UpdateFAQEntry: incremental delete %d obsolete source IDs", len(sourceIDsToDelete))
+					if delErr := retrieveEngine.DeleteBySourceIDList(ctx, sourceIDsToDelete, embeddingModel.GetDimensions(), types.KnowledgeTypeFAQ); delErr != nil {
+						logger.Warnf(ctx, "UpdateFAQEntry: failed to delete obsolete source IDs: %v", delErr)
+					}
+				}
+			}
+		}
+
+		// 使用 needDelete=false，因为 EFPutDocument 会自动覆盖相同 SourceID 的文档
+		if err := s.indexFAQChunks(ctx, kb, faqKnowledge, []*types.Chunk{chunk}, embeddingModel, false, false); err != nil {
+			return nil, err
+		}
 	}
 
 	// Build tag seq_id map for conversion
@@ -5604,6 +5636,156 @@ func (s *knowledgeService) buildFAQIndexInfoList(
 	}
 
 	return indexInfoList, nil
+}
+
+// incrementalIndexFAQEntry 增量更新FAQ条目的索引
+// 只对内容变化的部分进行embedding计算和索引更新，跳过未变化的部分
+func (s *knowledgeService) incrementalIndexFAQEntry(
+	ctx context.Context,
+	kb *types.KnowledgeBase,
+	knowledge *types.Knowledge,
+	chunk *types.Chunk,
+	embeddingModel embedding.Embedder,
+	oldStandardQuestion string,
+	oldSimilarQuestions []string,
+	oldAnswers []string,
+	newMeta *types.FAQChunkMetadata,
+) error {
+	indexStartTime := time.Now()
+
+	tenantInfo := ctx.Value(types.TenantInfoContextKey).(*types.Tenant)
+	retrieveEngine, err := retriever.NewCompositeRetrieveEngine(s.retrieveEngine, tenantInfo.GetEffectiveEngines())
+	if err != nil {
+		return err
+	}
+
+	indexMode := types.FAQIndexModeQuestionAnswer
+	if kb.FAQConfig != nil && kb.FAQConfig.IndexMode != "" {
+		indexMode = kb.FAQConfig.IndexMode
+	}
+
+	// 构建旧的内容（用于比较）
+	buildOldContent := func(question string) string {
+		if indexMode == types.FAQIndexModeQuestionAnswer && len(oldAnswers) > 0 {
+			var builder strings.Builder
+			builder.WriteString(question)
+			for _, ans := range oldAnswers {
+				builder.WriteString("\n")
+				builder.WriteString(ans)
+			}
+			return builder.String()
+		}
+		return question
+	}
+
+	// 构建新的内容
+	buildNewContent := func(question string) string {
+		if indexMode == types.FAQIndexModeQuestionAnswer && len(newMeta.Answers) > 0 {
+			var builder strings.Builder
+			builder.WriteString(question)
+			for _, ans := range newMeta.Answers {
+				builder.WriteString("\n")
+				builder.WriteString(ans)
+			}
+			return builder.String()
+		}
+		return question
+	}
+
+	// 检查答案是否变化
+	answersChanged := !slices.Equal(oldAnswers, newMeta.Answers)
+
+	// 收集需要更新的索引项
+	var indexInfoToUpdate []*types.IndexInfo
+
+	// 1. 检查标准问是否需要更新
+	oldStdContent := buildOldContent(oldStandardQuestion)
+	newStdContent := buildNewContent(newMeta.StandardQuestion)
+	if oldStdContent != newStdContent {
+		indexInfoToUpdate = append(indexInfoToUpdate, &types.IndexInfo{
+			Content:         newStdContent,
+			SourceID:        chunk.ID,
+			SourceType:      types.ChunkSourceType,
+			ChunkID:         chunk.ID,
+			KnowledgeID:     chunk.KnowledgeID,
+			KnowledgeBaseID: chunk.KnowledgeBaseID,
+			KnowledgeType:   types.KnowledgeTypeFAQ,
+			TagID:           chunk.TagID,
+			IsEnabled:       chunk.IsEnabled,
+			IsRecommended:   chunk.Flags.HasFlag(types.ChunkFlagRecommended),
+		})
+	}
+
+	// 2. 检查每个相似问是否需要更新
+	oldCount := len(oldSimilarQuestions)
+	newCount := len(newMeta.SimilarQuestions)
+
+	for i, newQ := range newMeta.SimilarQuestions {
+		needUpdate := false
+		if i >= oldCount {
+			// 新增的相似问
+			needUpdate = true
+		} else {
+			// 已存在的相似问，检查内容是否变化
+			oldQ := oldSimilarQuestions[i]
+			if oldQ != newQ || answersChanged {
+				needUpdate = true
+			}
+		}
+
+		if needUpdate {
+			sourceID := fmt.Sprintf("%s-%d", chunk.ID, i)
+			indexInfoToUpdate = append(indexInfoToUpdate, &types.IndexInfo{
+				Content:         buildNewContent(newQ),
+				SourceID:        sourceID,
+				SourceType:      types.ChunkSourceType,
+				ChunkID:         chunk.ID,
+				KnowledgeID:     chunk.KnowledgeID,
+				KnowledgeBaseID: chunk.KnowledgeBaseID,
+				KnowledgeType:   types.KnowledgeTypeFAQ,
+				TagID:           chunk.TagID,
+				IsEnabled:       chunk.IsEnabled,
+				IsRecommended:   chunk.Flags.HasFlag(types.ChunkFlagRecommended),
+			})
+		}
+	}
+
+	// 3. 删除多余的旧相似问索引
+	if oldCount > newCount {
+		sourceIDsToDelete := make([]string, 0, oldCount-newCount)
+		for i := newCount; i < oldCount; i++ {
+			sourceIDsToDelete = append(sourceIDsToDelete, fmt.Sprintf("%s-%d", chunk.ID, i))
+		}
+		logger.Debugf(ctx, "incrementalIndexFAQEntry: deleting %d obsolete source IDs", len(sourceIDsToDelete))
+		if delErr := retrieveEngine.DeleteBySourceIDList(ctx, sourceIDsToDelete, embeddingModel.GetDimensions(), types.KnowledgeTypeFAQ); delErr != nil {
+			logger.Warnf(ctx, "incrementalIndexFAQEntry: failed to delete obsolete source IDs: %v", delErr)
+		}
+	}
+
+	// 4. 批量索引需要更新的内容
+	if len(indexInfoToUpdate) > 0 {
+		logger.Debugf(ctx, "incrementalIndexFAQEntry: updating %d index entries (skipped %d unchanged)",
+			len(indexInfoToUpdate), 1+newCount-len(indexInfoToUpdate))
+		if err := retrieveEngine.BatchIndex(ctx, embeddingModel, indexInfoToUpdate); err != nil {
+			return err
+		}
+	} else {
+		logger.Debugf(ctx, "incrementalIndexFAQEntry: all %d entries unchanged, skipping index update", 1+newCount)
+	}
+
+	// 5. 更新 knowledge 记录
+	now := time.Now()
+	knowledge.UpdatedAt = now
+	knowledge.ProcessedAt = &now
+	if err := s.repo.UpdateKnowledge(ctx, knowledge); err != nil {
+		return err
+	}
+
+	totalDuration := time.Since(indexStartTime)
+	logger.Debugf(ctx, "incrementalIndexFAQEntry: completed in %v, updated %d/%d entries",
+		totalDuration, len(indexInfoToUpdate), 1+newCount)
+
+	return nil
 }
 
 func (s *knowledgeService) indexFAQChunks(ctx context.Context,
