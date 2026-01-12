@@ -12,6 +12,7 @@ import (
 // Tag represents a knowledge base tag.
 type Tag struct {
 	ID              string    `json:"id"`
+	SeqID           int64     `json:"seq_id"`
 	TenantID        uint64    `json:"tenant_id"`
 	KnowledgeBaseID string    `json:"knowledge_base_id"`
 	Name            string    `json:"name"`
@@ -121,6 +122,7 @@ func (c *Client) CreateTag(ctx context.Context,
 }
 
 // UpdateTag updates an existing tag.
+// tagID can be either UUID or seq_id (as string).
 func (c *Client) UpdateTag(ctx context.Context,
 	knowledgeBaseID, tagID string, payload *UpdateTagPayload,
 ) (*Tag, error) {
@@ -137,12 +139,20 @@ func (c *Client) UpdateTag(ctx context.Context,
 	return response.Data, nil
 }
 
+// UpdateTagBySeqID updates an existing tag by seq_id.
+func (c *Client) UpdateTagBySeqID(ctx context.Context,
+	knowledgeBaseID string, tagSeqID int64, payload *UpdateTagPayload,
+) (*Tag, error) {
+	return c.UpdateTag(ctx, knowledgeBaseID, strconv.FormatInt(tagSeqID, 10), payload)
+}
+
 // DeleteTag deletes a tag.
+// tagID can be either UUID or seq_id (as string).
 // Set force to true to delete even if the tag is referenced.
 // Set contentOnly to true to only delete the content under the tag but keep the tag itself.
-// excludeIDs: IDs of chunks to exclude from deletion.
+// excludeIDs: seq_ids of chunks to exclude from deletion.
 func (c *Client) DeleteTag(ctx context.Context,
-	knowledgeBaseID, tagID string, force bool, contentOnly bool, excludeIDs []string,
+	knowledgeBaseID, tagID string, force bool, contentOnly bool, excludeIDs []int64,
 ) error {
 	path := fmt.Sprintf("/api/v1/knowledge-bases/%s/tags/%s", knowledgeBaseID, tagID)
 	query := url.Values{}
@@ -167,4 +177,11 @@ func (c *Client) DeleteTag(ctx context.Context,
 
 	var response tagSimpleResponse
 	return parseResponse(resp, &response)
+}
+
+// DeleteTagBySeqID deletes a tag by seq_id.
+func (c *Client) DeleteTagBySeqID(ctx context.Context,
+	knowledgeBaseID string, tagSeqID int64, force bool, contentOnly bool, excludeIDs []int64,
+) error {
+	return c.DeleteTag(ctx, knowledgeBaseID, strconv.FormatInt(tagSeqID, 10), force, contentOnly, excludeIDs)
 }

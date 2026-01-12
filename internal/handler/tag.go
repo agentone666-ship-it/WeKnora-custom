@@ -1,7 +1,9 @@
 package handler
 
 import (
+	"context"
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 
@@ -15,16 +17,44 @@ import (
 // TagHandler handles knowledge base tag operations.
 type TagHandler struct {
 	tagService interfaces.KnowledgeTagService
+	tagRepo    interfaces.KnowledgeTagRepository
+	chunkRepo  interfaces.ChunkRepository
 }
 
 // DeleteTagRequest represents the request body for deleting a tag
 type DeleteTagRequest struct {
-	ExcludeIDs []string `json:"exclude_ids"` // Chunk IDs to exclude from deletion
+	ExcludeIDs []int64 `json:"exclude_ids"` // Chunk seq_ids to exclude from deletion
 }
 
 // NewTagHandler creates a new TagHandler.
-func NewTagHandler(tagService interfaces.KnowledgeTagService) *TagHandler {
-	return &TagHandler{tagService: tagService}
+func NewTagHandler(tagService interfaces.KnowledgeTagService, tagRepo interfaces.KnowledgeTagRepository, chunkRepo interfaces.ChunkRepository) *TagHandler {
+	return &TagHandler{tagService: tagService, tagRepo: tagRepo, chunkRepo: chunkRepo}
+}
+
+// resolveTagID resolves tag_id parameter which can be either UUID or seq_id (integer).
+// Returns the UUID of the tag.
+func (h *TagHandler) resolveTagID(c *gin.Context) (string, error) {
+	ctx := c.Request.Context()
+	tagIDParam := secutils.SanitizeForLog(c.Param("tag_id"))
+
+	// Try to parse as integer (seq_id)
+	if seqID, err := strconv.ParseInt(tagIDParam, 10, 64); err == nil {
+		// It's an integer, look up by seq_id
+		tenantID := ctx.Value(types.TenantIDContextKey).(uint64)
+		tag, err := h.tagRepo.GetBySeqID(ctx, tenantID, seqID)
+		if err != nil {
+			return "", errors.NewNotFoundError("标签不存在")
+		}
+		return tag.ID, nil
+	}
+
+	// It's a UUID string
+	return tagIDParam, nil
+}
+
+// getChunksBySeqIDs retrieves chunks by their seq_ids.
+func (h *TagHandler) getChunksBySeqIDs(ctx context.Context, tenantID uint64, seqIDs []int64) ([]*types.Chunk, error) {
+	return h.chunkRepo.ListChunksBySeqID(ctx, tenantID, seqIDs)
 }
 
 // ListTags godoc
@@ -127,7 +157,7 @@ type updateTagRequest struct {
 // @Accept       json
 // @Produce      json
 // @Param        id       path      string  true  "知识库ID"
-// @Param        tag_id   path      string  true  "标签ID"
+// @Param        tag_id   path      string  true  "标签ID (UUID或seq_id)"
 // @Param        request  body      object  true  "标签更新信息"
 // @Success      200      {object}  map[string]interface{}  "更新后的标签"
 // @Failure      400      {object}  errors.AppError         "请求参数错误"
@@ -137,7 +167,12 @@ type updateTagRequest struct {
 func (h *TagHandler) UpdateTag(c *gin.Context) {
 	ctx := c.Request.Context()
 
-	tagID := secutils.SanitizeForLog(c.Param("tag_id"))
+	tagID, err := h.resolveTagID(c)
+	if err != nil {
+		c.Error(err)
+		return
+	}
+
 	var req updateTagRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		logger.Error(ctx, "Failed to bind update tag payload", err)
@@ -167,7 +202,7 @@ func (h *TagHandler) UpdateTag(c *gin.Context) {
 // @Accept       json
 // @Produce      json
 // @Param        id            path      string              true   "知识库ID"
-// @Param        tag_id        path      string              true   "标签ID"
+// @Param        tag_id        path      string              true   "标签ID (UUID或seq_id)"
 // @Param        force         query     bool                false  "强制删除"
 // @Param        content_only  query     bool                false  "仅删除内容，保留标签"
 // @Param        body          body      DeleteTagRequest    false  "删除选项"
@@ -178,7 +213,12 @@ func (h *TagHandler) UpdateTag(c *gin.Context) {
 // @Router       /knowledge-bases/{id}/tags/{tag_id} [delete]
 func (h *TagHandler) DeleteTag(c *gin.Context) {
 	ctx := c.Request.Context()
-	tagID := secutils.SanitizeForLog(c.Param("tag_id"))
+
+	tagID, err := h.resolveTagID(c)
+	if err != nil {
+		c.Error(err)
+		return
+	}
 
 	force := c.Query("force") == "true"
 	contentOnly := c.Query("content_only") == "true"
@@ -187,7 +227,22 @@ func (h *TagHandler) DeleteTag(c *gin.Context) {
 	// Ignore bind error since body is optional
 	_ = c.ShouldBindJSON(&req)
 
-	if err := h.tagService.DeleteTag(ctx, tagID, force, contentOnly, req.ExcludeIDs); err != nil {
+	// Convert seq_ids to UUIDs for excludeIDs
+	var excludeUUIDs []string
+	if len(req.ExcludeIDs) > 0 {
+		tenantID := ctx.Value(types.TenantIDContextKey).(uint64)
+		chunks, err := h.getChunksBySeqIDs(ctx, tenantID, req.ExcludeIDs)
+		if err != nil {
+			logger.Warnf(ctx, "Failed to resolve exclude_ids: %v", err)
+		} else {
+			excludeUUIDs = make([]string, len(chunks))
+			for i, chunk := range chunks {
+				excludeUUIDs[i] = chunk.ID
+			}
+		}
+	}
+
+	if err := h.tagService.DeleteTag(ctx, tagID, force, contentOnly, excludeUUIDs); err != nil {
 		logger.ErrorWithFields(ctx, err, map[string]interface{}{
 			"tag_id": tagID,
 		})

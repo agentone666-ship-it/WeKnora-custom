@@ -15,6 +15,7 @@ import (
 // Chunks are the basic units of storage and indexing in the knowledge base
 type Chunk struct {
 	ID                     string `json:"id"`                        // Unique identifier of the chunk
+	SeqID                  int64  `json:"seq_id"`                    // Auto-increment integer ID for external API usage
 	KnowledgeID            string `json:"knowledge_id"`              // Identifier of the parent knowledge
 	KnowledgeBaseID        string `json:"knowledge_base_id"`         // ID of the knowledge base
 	TenantID               uint64 `json:"tenant_id"`                 // Tenant ID

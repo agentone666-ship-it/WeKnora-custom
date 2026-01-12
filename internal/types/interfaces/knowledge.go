@@ -73,14 +73,14 @@ type KnowledgeService interface {
 	// UpdateImageInfo updates image information for a knowledge chunk.
 	UpdateImageInfo(ctx context.Context, knowledgeID string, chunkID string, imageInfo string) error
 	// ListFAQEntries lists FAQ entries under a FAQ knowledge base.
-	// When tagID is non-empty, results are filtered by tag_id on FAQ chunks.
+	// When tagSeqID is non-zero, results are filtered by tag seq_id on FAQ chunks.
 	// searchField: specifies which field to search in ("standard_question", "similar_questions", "answers", "" for all)
 	// sortOrder: "asc" for time ascending (updated_at ASC), default is time descending (updated_at DESC)
 	ListFAQEntries(
 		ctx context.Context,
 		kbID string,
 		page *types.Pagination,
-		tagID string,
+		tagSeqID int64,
 		keyword string,
 		searchField string,
 		sortOrder string,
@@ -91,15 +91,15 @@ type KnowledgeService interface {
 	UpsertFAQEntries(ctx context.Context, kbID string, payload *types.FAQBatchUpsertPayload) (string, error)
 	// CreateFAQEntry creates a single FAQ entry synchronously.
 	CreateFAQEntry(ctx context.Context, kbID string, payload *types.FAQEntryPayload) (*types.FAQEntry, error)
-	// GetFAQEntry retrieves a single FAQ entry by ID.
-	GetFAQEntry(ctx context.Context, kbID string, entryID string) (*types.FAQEntry, error)
+	// GetFAQEntry retrieves a single FAQ entry by seq_id.
+	GetFAQEntry(ctx context.Context, kbID string, entrySeqID int64) (*types.FAQEntry, error)
 	// UpdateFAQEntry updates a single FAQ entry.
-	UpdateFAQEntry(ctx context.Context, kbID string, entryID string, payload *types.FAQEntryPayload) (*types.FAQEntry, error)
+	UpdateFAQEntry(ctx context.Context, kbID string, entrySeqID int64, payload *types.FAQEntryPayload) (*types.FAQEntry, error)
 	// UpdateFAQEntryFieldsBatch updates multiple fields for FAQ entries in batch.
 	// Supports updating is_enabled, is_recommended, tag_id, and other fields in a single call.
 	UpdateFAQEntryFieldsBatch(ctx context.Context, kbID string, req *types.FAQEntryFieldsBatchUpdate) error
-	// DeleteFAQEntries deletes FAQ entries in batch.
-	DeleteFAQEntries(ctx context.Context, kbID string, entryIDs []string) error
+	// DeleteFAQEntries deletes FAQ entries in batch by seq_id.
+	DeleteFAQEntries(ctx context.Context, kbID string, entrySeqIDs []int64) error
 	// SearchFAQEntries searches FAQ entries using hybrid search.
 	SearchFAQEntries(ctx context.Context, kbID string, req *types.FAQSearchRequest) ([]*types.FAQEntry, error)
 	// ExportFAQEntries exports all FAQ entries for a knowledge base as CSV data.
@@ -107,7 +107,8 @@ type KnowledgeService interface {
 	// UpdateKnowledgeTagBatch updates tag for document knowledge items in batch.
 	UpdateKnowledgeTagBatch(ctx context.Context, updates map[string]*string) error
 	// UpdateFAQEntryTagBatch updates tag for FAQ entries in batch.
-	UpdateFAQEntryTagBatch(ctx context.Context, kbID string, updates map[string]*string) error
+	// Key: entry seq_id, Value: tag seq_id (nil to remove tag)
+	UpdateFAQEntryTagBatch(ctx context.Context, kbID string, updates map[int64]*int64) error
 	// GetRepository gets the knowledge repository
 	GetRepository() KnowledgeRepository
 	// ProcessDocument handles Asynq document processing tasks

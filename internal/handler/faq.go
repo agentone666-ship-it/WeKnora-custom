@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 
@@ -31,7 +32,7 @@ func NewFAQHandler(knowledgeService interfaces.KnowledgeService) *FAQHandler {
 // @Param        id           path      string  true   "知识库ID"
 // @Param        page         query     int     false  "页码"
 // @Param        page_size    query     int     false  "每页数量"
-// @Param        tag_id       query     string  false  "标签ID筛选"
+// @Param        tag_id       query     int     false  "标签ID筛选(seq_id)"
 // @Param        keyword      query     string  false  "关键词搜索"
 // @Param        search_field query     string  false  "搜索字段: standard_question(标准问题), similar_questions(相似问法), answers(答案), 默认搜索全部"
 // @Param        sort_order   query     string  false  "排序方式: asc(按更新时间正序), 默认按更新时间倒序"
@@ -49,12 +50,21 @@ func (h *FAQHandler) ListEntries(c *gin.Context) {
 		return
 	}
 
-	tagID := secutils.SanitizeForLog(c.Query("tag_id"))
+	var tagSeqID int64
+	tagIDStr := c.Query("tag_id")
+	if tagIDStr != "" {
+		var err error
+		tagSeqID, err = strconv.ParseInt(tagIDStr, 10, 64)
+		if err != nil {
+			c.Error(errors.NewBadRequestError("tag_id 必须是整数"))
+			return
+		}
+	}
 	keyword := secutils.SanitizeForLog(c.Query("keyword"))
 	searchField := secutils.SanitizeForLog(c.Query("search_field"))
 	sortOrder := secutils.SanitizeForLog(c.Query("sort_order"))
 
-	result, err := h.knowledgeService.ListFAQEntries(ctx, secutils.SanitizeForLog(c.Param("id")), &page, tagID, keyword, searchField, sortOrder)
+	result, err := h.knowledgeService.ListFAQEntries(ctx, secutils.SanitizeForLog(c.Param("id")), &page, tagSeqID, keyword, searchField, sortOrder)
 	if err != nil {
 		logger.ErrorWithFields(ctx, err, nil)
 		c.Error(err)
@@ -151,7 +161,7 @@ func (h *FAQHandler) CreateEntry(c *gin.Context) {
 // @Accept       json
 // @Produce      json
 // @Param        id        path      string                true  "知识库ID"
-// @Param        entry_id  path      string                true  "FAQ条目ID"
+// @Param        entry_id  path      int                   true  "FAQ条目ID(seq_id)"
 // @Param        request   body      types.FAQEntryPayload true  "FAQ条目"
 // @Success      200       {object}  map[string]interface{}  "更新成功"
 // @Failure      400       {object}  errors.AppError         "请求参数错误"
@@ -167,8 +177,14 @@ func (h *FAQHandler) UpdateEntry(c *gin.Context) {
 		return
 	}
 
+	entrySeqID, err := strconv.ParseInt(c.Param("entry_id"), 10, 64)
+	if err != nil {
+		c.Error(errors.NewBadRequestError("entry_id 必须是整数"))
+		return
+	}
+
 	entry, err := h.knowledgeService.UpdateFAQEntry(ctx,
-		secutils.SanitizeForLog(c.Param("id")), secutils.SanitizeForLog(c.Param("entry_id")), &req)
+		secutils.SanitizeForLog(c.Param("id")), entrySeqID, &req)
 	if err != nil {
 		logger.ErrorWithFields(ctx, err, nil)
 		c.Error(err)
@@ -247,12 +263,13 @@ func (h *FAQHandler) UpdateEntryFieldsBatch(c *gin.Context) {
 
 // faqDeleteRequest is a request for deleting FAQ entries in batch
 type faqDeleteRequest struct {
-	IDs []string `json:"ids" binding:"required,min=1,dive,required"`
+	IDs []int64 `json:"ids" binding:"required,min=1"`
 }
 
 // faqEntryTagBatchRequest is a request for updating tags for FAQ entries in batch
+// key: entry seq_id, value: tag seq_id (nil to remove tag)
 type faqEntryTagBatchRequest struct {
-	Updates map[string]*string `json:"updates" binding:"required,min=1"`
+	Updates map[int64]*int64 `json:"updates" binding:"required,min=1"`
 }
 
 // DeleteEntries godoc
@@ -262,7 +279,7 @@ type faqEntryTagBatchRequest struct {
 // @Accept       json
 // @Produce      json
 // @Param        id       path      string  true  "知识库ID"
-// @Param        request  body      object{ids=[]string}  true  "要删除的FAQ ID列表"
+// @Param        request  body      object{ids=[]int}  true  "要删除的FAQ ID列表(seq_id)"
 // @Success      200      {object}  map[string]interface{}  "删除成功"
 // @Failure      400      {object}  errors.AppError         "请求参数错误"
 // @Security     Bearer
@@ -279,7 +296,7 @@ func (h *FAQHandler) DeleteEntries(c *gin.Context) {
 
 	if err := h.knowledgeService.DeleteFAQEntries(ctx,
 		secutils.SanitizeForLog(c.Param("id")),
-		secutils.SanitizeForLogArray(req.IDs)); err != nil {
+		req.IDs); err != nil {
 		logger.ErrorWithFields(ctx, err, nil)
 		c.Error(err)
 		return
@@ -369,7 +386,7 @@ func (h *FAQHandler) ExportEntries(c *gin.Context) {
 // @Accept       json
 // @Produce      json
 // @Param        id        path      string  true  "知识库ID"
-// @Param        entry_id  path      string  true  "FAQ条目ID"
+// @Param        entry_id  path      int     true  "FAQ条目ID(seq_id)"
 // @Success      200       {object}  map[string]interface{}  "FAQ条目详情"
 // @Failure      400       {object}  errors.AppError         "请求参数错误"
 // @Failure      404       {object}  errors.AppError         "条目不存在"
@@ -379,9 +396,13 @@ func (h *FAQHandler) ExportEntries(c *gin.Context) {
 func (h *FAQHandler) GetEntry(c *gin.Context) {
 	ctx := c.Request.Context()
 	kbID := secutils.SanitizeForLog(c.Param("id"))
-	entryID := secutils.SanitizeForLog(c.Param("entry_id"))
+	entrySeqID, err := strconv.ParseInt(c.Param("entry_id"), 10, 64)
+	if err != nil {
+		c.Error(errors.NewBadRequestError("entry_id 必须是整数"))
+		return
+	}
 
-	entry, err := h.knowledgeService.GetFAQEntry(ctx, kbID, entryID)
+	entry, err := h.knowledgeService.GetFAQEntry(ctx, kbID, entrySeqID)
 	if err != nil {
 		logger.ErrorWithFields(ctx, err, nil)
 		c.Error(err)

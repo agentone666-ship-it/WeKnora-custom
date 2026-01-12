@@ -175,11 +175,11 @@ const (
 
 // FAQEntry 表示返回给前端的 FAQ 条目
 type FAQEntry struct {
-	ID                string         `json:"id"`
+	ID                int64          `json:"id"`
 	ChunkID           string         `json:"chunk_id"`
 	KnowledgeID       string         `json:"knowledge_id"`
 	KnowledgeBaseID   string         `json:"knowledge_base_id"`
-	TagID             string         `json:"tag_id"`
+	TagID             int64          `json:"tag_id"`
 	TagName           string         `json:"tag_name"`
 	IsEnabled         bool           `json:"is_enabled"`
 	IsRecommended     bool           `json:"is_recommended"`
@@ -198,12 +198,14 @@ type FAQEntry struct {
 
 // FAQEntryPayload 用于创建/更新 FAQ 条目的 payload
 type FAQEntryPayload struct {
+	// ID 可选，用于数据迁移时指定 seq_id（必须小于自增起始值 100000000）
+	ID                *int64          `json:"id,omitempty"`
 	StandardQuestion  string          `json:"standard_question"    binding:"required"`
 	SimilarQuestions  []string        `json:"similar_questions"`
 	NegativeQuestions []string        `json:"negative_questions"`
 	Answers           []string        `json:"answers"              binding:"required"`
 	AnswerStrategy    *AnswerStrategy `json:"answer_strategy,omitempty"`
-	TagID             string          `json:"tag_id"`
+	TagID             int64           `json:"tag_id"`
 	TagName           string          `json:"tag_name"`
 	IsEnabled         *bool           `json:"is_enabled,omitempty"`
 	IsRecommended     *bool           `json:"is_recommended,omitempty"`
@@ -247,11 +249,12 @@ type FAQDryRunResult struct {
 
 // FAQSearchRequest FAQ检索请求参数
 type FAQSearchRequest struct {
-	QueryText            string   `json:"query_text"             binding:"required"`
-	VectorThreshold      float64  `json:"vector_threshold"`
-	MatchCount           int      `json:"match_count"`
-	FirstPriorityTagIDs  []string `json:"first_priority_tag_ids"`  // 第一优先级标签ID列表，限定命中范围，优先级最高
-	SecondPriorityTagIDs []string `json:"second_priority_tag_ids"` // 第二优先级标签ID列表，限定命中范围，优先级低于第一优先级
+	QueryText            string  `json:"query_text"             binding:"required"`
+	VectorThreshold      float64 `json:"vector_threshold"`
+	MatchCount           int     `json:"match_count"`
+	FirstPriorityTagIDs  []int64 `json:"first_priority_tag_ids"`  // 第一优先级标签ID列表，限定命中范围，优先级最高
+	SecondPriorityTagIDs []int64 `json:"second_priority_tag_ids"` // 第二优先级标签ID列表，限定命中范围，优先级低于第一优先级
+	OnlyRecommended      bool    `json:"only_recommended"`        // 是否仅返回推荐的条目
 }
 
 // UntaggedTagName is the default tag name for entries without a tag
@@ -259,9 +262,9 @@ const UntaggedTagName = "未分类"
 
 // FAQEntryFieldsUpdate 单个FAQ条目的字段更新
 type FAQEntryFieldsUpdate struct {
-	IsEnabled     *bool   `json:"is_enabled,omitempty"`
-	IsRecommended *bool   `json:"is_recommended,omitempty"`
-	TagID         *string `json:"tag_id,omitempty"`
+	IsEnabled     *bool  `json:"is_enabled,omitempty"`
+	IsRecommended *bool  `json:"is_recommended,omitempty"`
+	TagID         *int64 `json:"tag_id,omitempty"`
 	// 后续可扩展更多字段
 }
 
@@ -270,12 +273,12 @@ type FAQEntryFieldsUpdate struct {
 // 1. 按条目ID更新：使用 ByID 字段
 // 2. 按Tag更新：使用 ByTag 字段，将该Tag下所有条目应用相同的更新
 type FAQEntryFieldsBatchUpdate struct {
-	// ByID 按条目ID更新，key为条目ID
-	ByID map[string]FAQEntryFieldsUpdate `json:"by_id,omitempty"`
-	// ByTag 按Tag批量更新，key为TagID
-	ByTag map[string]FAQEntryFieldsUpdate `json:"by_tag,omitempty"`
-	// ExcludeIDs 在ByTag操作中需要排除的ID列表
-	ExcludeIDs []string `json:"exclude_ids,omitempty"`
+	// ByID 按条目ID更新，key为条目ID (seq_id)
+	ByID map[int64]FAQEntryFieldsUpdate `json:"by_id,omitempty"`
+	// ByTag 按Tag批量更新，key为TagID (seq_id)
+	ByTag map[int64]FAQEntryFieldsUpdate `json:"by_tag,omitempty"`
+	// ExcludeIDs 在ByTag操作中需要排除的ID列表 (seq_id)
+	ExcludeIDs []int64 `json:"exclude_ids,omitempty"`
 }
 
 // FAQImportTaskStatus 导入任务状态
@@ -332,22 +335,22 @@ type FAQImportMetadata struct {
 // 这个信息是持久化的，不跟随进度状态，直到下次导入时被替换
 type FAQImportResult struct {
 	// 导入统计信息
-	TotalEntries   int `json:"total_entries"`   // 总条目数
-	SuccessCount   int `json:"success_count"`   // 成功导入的条目数
-	FailedCount    int `json:"failed_count"`    // 失败的条目数
-	SkippedCount   int `json:"skipped_count"`   // 跳过的条目数（如重复等）
-	
+	TotalEntries int `json:"total_entries"` // 总条目数
+	SuccessCount int `json:"success_count"` // 成功导入的条目数
+	FailedCount  int `json:"failed_count"`  // 失败的条目数
+	SkippedCount int `json:"skipped_count"` // 跳过的条目数（如重复等）
+
 	// 导入模式和时间信息
-	ImportMode     string    `json:"import_mode"`     // 导入模式：append 或 replace
-	ImportedAt     time.Time `json:"imported_at"`     // 导入完成时间
-	TaskID         string    `json:"task_id"`         // 导入任务ID
-	
+	ImportMode string    `json:"import_mode"` // 导入模式：append 或 replace
+	ImportedAt time.Time `json:"imported_at"` // 导入完成时间
+	TaskID     string    `json:"task_id"`     // 导入任务ID
+
 	// 失败详情URL（失败条目较多时提供下载链接）
 	FailedEntriesURL string `json:"failed_entries_url,omitempty"` // 失败条目CSV下载URL
-	
+
 	// 显示控制
 	DisplayStatus string `json:"display_status"` // 显示状态：open 或 close
-	
+
 	// 额外统计信息
 	ProcessingTime int64 `json:"processing_time"` // 处理耗时（毫秒）
 }

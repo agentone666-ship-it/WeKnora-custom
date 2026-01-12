@@ -138,7 +138,7 @@ export function updateKnowledgeTagBatch(data: { updates: Record<string, string |
   return put(`/api/v1/knowledge/tags`, data);
 }
 
-export function updateFAQEntryTagBatch(kbId: string, data: { updates: Record<string, string | null> }) {
+export function updateFAQEntryTagBatch(kbId: string, data: { updates: Record<number, number | null> }) {
   return put(`/api/v1/knowledge-bases/${kbId}/faq/entries/tags`, data);
 }
 
@@ -169,7 +169,7 @@ export function createFAQEntry(kbId: string, data: any) {
   return post(`/api/v1/knowledge-bases/${kbId}/faq/entry`, data);
 }
 
-export function updateFAQEntry(kbId: string, entryId: string, data: any) {
+export function updateFAQEntry(kbId: string, entryId: number, data: any) {
   return put(`/api/v1/knowledge-bases/${kbId}/faq/entries/${entryId}`, data);
 }
 
@@ -180,19 +180,20 @@ export function updateFAQEntry(kbId: string, entryId: string, data: any) {
 export interface FAQEntryFieldsUpdate {
   is_enabled?: boolean
   is_recommended?: boolean
-  tag_id?: string | null
+  tag_id?: number | null
 }
 
 export interface FAQEntryFieldsBatchRequest {
-  by_id?: Record<string, FAQEntryFieldsUpdate>
-  by_tag?: Record<string, FAQEntryFieldsUpdate>
+  by_id?: Record<number, FAQEntryFieldsUpdate>
+  by_tag?: Record<number, FAQEntryFieldsUpdate>
+  exclude_ids?: number[]
 }
 
 export function updateFAQEntryFieldsBatch(kbId: string, data: FAQEntryFieldsBatchRequest) {
   return put(`/api/v1/knowledge-bases/${kbId}/faq/entries/fields`, data);
 }
 
-export function deleteFAQEntries(kbId: string, ids: string[]) {
+export function deleteFAQEntries(kbId: string, ids: number[]) {
   return del(`/api/v1/knowledge-bases/${kbId}/faq/entries`, { ids });
 }
 

@@ -44,6 +44,18 @@ func (r *chunkRepository) GetChunkByID(ctx context.Context, tenantID uint64, id 
 	return &chunk, nil
 }
 
+// GetChunkBySeqID retrieves a chunk by its seq_id and tenant ID
+func (r *chunkRepository) GetChunkBySeqID(ctx context.Context, tenantID uint64, seqID int64) (*types.Chunk, error) {
+	var chunk types.Chunk
+	if err := r.db.WithContext(ctx).Where("tenant_id = ? AND seq_id = ?", tenantID, seqID).First(&chunk).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New("chunk not found")
+		}
+		return nil, err
+	}
+	return &chunk, nil
+}
+
 // ListChunksByID retrieves multiple chunks by their IDs
 func (r *chunkRepository) ListChunksByID(
 	ctx context.Context, tenantID uint64, ids []string,
@@ -51,6 +63,22 @@ func (r *chunkRepository) ListChunksByID(
 	var chunks []*types.Chunk
 	if err := r.db.WithContext(ctx).
 		Where("tenant_id = ? AND id IN ?", tenantID, ids).
+		Find(&chunks).Error; err != nil {
+		return nil, err
+	}
+	return chunks, nil
+}
+
+// ListChunksBySeqID retrieves multiple chunks by their seq_ids
+func (r *chunkRepository) ListChunksBySeqID(
+	ctx context.Context, tenantID uint64, seqIDs []int64,
+) ([]*types.Chunk, error) {
+	if len(seqIDs) == 0 {
+		return []*types.Chunk{}, nil
+	}
+	var chunks []*types.Chunk
+	if err := r.db.WithContext(ctx).
+		Where("tenant_id = ? AND seq_id IN ?", tenantID, seqIDs).
 		Find(&chunks).Error; err != nil {
 		return nil, err
 	}

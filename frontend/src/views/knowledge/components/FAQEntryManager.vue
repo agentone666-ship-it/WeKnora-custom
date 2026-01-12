@@ -1324,11 +1324,11 @@ import FAQTagTooltip from '@/components/FAQTagTooltip.vue'
 import { useUIStore } from '@/stores/ui'
 
 interface FAQEntry {
-  id: string
+  id: number
   chunk_id: string
   knowledge_id: string
   knowledge_base_id: string
-  tag_id?: string
+  tag_id?: number
   is_enabled: boolean
   is_recommended: boolean
   standard_question: string
@@ -1350,7 +1350,7 @@ interface FAQEntryPayload {
   similar_questions: string[]
   negative_questions: string[]
   answers: string[]
-  tag_id?: string
+  tag_id?: number
   tag_name?: string
   is_enabled?: boolean
   is_recommended?: boolean
@@ -1367,9 +1367,9 @@ const uiStore = useUIStore()
 const loading = ref(false)
 const loadingMore = ref(false)
 const entries = ref<FAQEntry[]>([])
-const entryStatusLoading = reactive<Record<string, boolean>>({})
-const entryRecommendedLoading = reactive<Record<string, boolean>>({})
-const selectedRowKeys = ref<string[]>([])
+const entryStatusLoading = reactive<Record<number, boolean>>({})
+const entryRecommendedLoading = reactive<Record<number, boolean>>({})
+const selectedRowKeys = ref<number[]>([])
 const scrollContainer = ref<HTMLElement | null>(null)
 const cardListRef = ref<HTMLElement | null>(null)
 const hasMore = ref(true)
@@ -1410,7 +1410,16 @@ const newTagName = ref('')
 const editingTagId = ref<string | null>(null)
 const editingTagName = ref('')
 const editingTagSubmitting = ref(false)
-const tagMap = computed<Record<string, any>>(() => {
+// tagMap uses seq_id as key for looking up by entry.tag_id
+const tagMap = computed<Record<number, any>>(() => {
+  const map: Record<number, any> = {}
+  tagList.value.forEach((tag) => {
+    map[tag.seq_id] = tag
+  })
+  return map
+})
+// tagMapById uses UUID as key for editing operations
+const tagMapById = computed<Record<string, any>>(() => {
   const map: Record<string, any> = {}
   tagList.value.forEach((tag) => {
     map[tag.id] = tag
@@ -1420,10 +1429,10 @@ const tagMap = computed<Record<string, any>>(() => {
 // All tags are now regular tags (no pseudo-tag)
 const regularTags = computed(() => tagList.value)
 const tagDropdownOptions = computed(() =>
-  regularTags.value.map((tag: any) => ({ content: tag.name, value: tag.id })),
+  regularTags.value.map((tag: any) => ({ content: tag.name, value: String(tag.seq_id) })),
 )
 const tagSelectOptions = computed(() =>
-  regularTags.value.map((tag: any) => ({ label: tag.name, value: tag.id })),
+  regularTags.value.map((tag: any) => ({ label: tag.name, value: tag.seq_id })),
 )
 const sidebarCategoryCount = computed(() => tagList.value.length)
 const filteredTags = computed(() => {
@@ -1476,13 +1485,13 @@ const loadKnowledgeList = async () => {
 
 const editorVisible = ref(false)
 const editorMode = ref<'create' | 'edit'>('create')
-const currentEntryId = ref<string | null>(null)
+const currentEntryId = ref<number | null>(null)
 const editorForm = reactive<FAQEntryPayload>({
   standard_question: '',
   similar_questions: [],
   negative_questions: [],
   answers: [],
-  tag_id: '',
+  tag_id: undefined,
 })
 const editorFormRef = ref<FormInstanceFunctions>()
 const savingEntry = ref(false)
@@ -1603,7 +1612,7 @@ const loadTags = async (reset = false) => {
   }
 }
 
-const getTagName = (tagId?: string) => {
+const getTagName = (tagId?: number) => {
   if (!tagId) return t('knowledgeBase.untagged') || '未分类'
   return tagMap.value[tagId]?.name || (t('knowledgeBase.untagged') || '未分类')
 }
@@ -1695,7 +1704,7 @@ const submitEditTag = async () => {
     MessagePlugin.warning(t('knowledgeBase.tagNameRequired'))
     return
   }
-  if (name === tagMap.value[editingTagId.value]?.name) {
+  if (name === tagMapById.value[editingTagId.value]?.name) {
     cancelEditTag()
     return
   }
@@ -1747,16 +1756,16 @@ const confirmDeleteTag = (tag: any) => {
   })
 }
 
-const handleEntryTagChange = async (entryId: string, value?: string) => {
+const handleEntryTagChange = async (entryId: number, value?: string) => {
   if (!props.kbId) return
   const targetEntry = entries.value.find((item) => item.id === entryId)
-  const previousTagId = targetEntry ? targetEntry.tag_id : ''
-  const normalizedValue = value ?? ''
+  const previousTagId = targetEntry ? targetEntry.tag_id : undefined
+  const normalizedValue = value ? Number(value) : null
   if (normalizedValue === previousTagId) {
     return
   }
   try {
-    await updateFAQEntryTagBatch(props.kbId, { updates: { [entryId]: normalizedValue || null } })
+    await updateFAQEntryTagBatch(props.kbId, { updates: { [entryId]: normalizedValue } })
     MessagePlugin.success(t('knowledgeEditor.messages.updateSuccess'))
     await loadEntries()
     await loadTags()
@@ -1902,7 +1911,7 @@ const loadEntries = async (append = false) => {
     entries.value = []
     selectedRowKeys.value = []
     Object.keys(entryStatusLoading).forEach((key) => {
-      delete entryStatusLoading[key]
+      delete entryStatusLoading[Number(key)]
     })
   }
 
@@ -1933,7 +1942,6 @@ const loadEntries = async (append = false) => {
       similarCollapsed: true,  // 相似问默认折叠
       negativeCollapsed: true,  // 反例默认折叠
       answersCollapsed: true,   // 答案默认折叠
-      tag_id: entry.tag_id ? String(entry.tag_id) : '',
       is_enabled: entry.is_enabled !== false,
     }))
     
@@ -1993,7 +2001,7 @@ const checkAndLoadMore = () => {
   }
 }
 
-const handleCardSelect = (entryId: string, checked: boolean) => {
+const handleCardSelect = (entryId: number, checked: boolean) => {
   if (checked) {
     if (!selectedRowKeys.value.includes(entryId)) {
       selectedRowKeys.value.push(entryId)
@@ -2011,7 +2019,7 @@ const resetEditorForm = () => {
   editorForm.similar_questions = []
   editorForm.negative_questions = []
   editorForm.answers = []
-  editorForm.tag_id = ''
+  editorForm.tag_id = undefined
   answerInput.value = ''
   similarInput.value = ''
   negativeInput.value = ''
@@ -2025,7 +2033,7 @@ const openEditor = (entry?: FAQEntry) => {
     editorForm.similar_questions = [...(entry.similar_questions || [])]
     editorForm.negative_questions = [...(entry.negative_questions || [])]
     editorForm.answers = [...(entry.answers || [])]
-    editorForm.tag_id = entry.tag_id || ''
+    editorForm.tag_id = entry.tag_id || undefined
   } else {
     editorMode.value = 'create'
     currentEntryId.value = null
@@ -2100,7 +2108,7 @@ const handleSubmitEntry = async () => {
       similar_questions: [...editorForm.similar_questions],
       negative_questions: [...editorForm.negative_questions],
       answers: [...editorForm.answers],
-      tag_id: editorForm.tag_id || '',
+      tag_id: editorForm.tag_id || undefined,
     }
     if (editorMode.value === 'create') {
       await createFAQEntry(props.kbId, payload)
@@ -2143,9 +2151,9 @@ const openBatchTagDialog = () => {
 const handleBatchTag = async () => {
   if (!selectedRowKeys.value.length || !props.kbId) return
   try {
-    const updates: Record<string, string | null> = {}
+    const updates: Record<number, number | null> = {}
     selectedRowKeys.value.forEach(id => {
-      updates[id] = batchTagValue.value || null
+      updates[id] = batchTagValue.value ? Number(batchTagValue.value) : null
     })
     await updateFAQEntryTagBatch(props.kbId, { updates })
     MessagePlugin.success(t('knowledgeEditor.messages.updateSuccess'))
@@ -2161,7 +2169,7 @@ const handleBatchTag = async () => {
 const handleBatchStatusChange = async (isEnabled: boolean) => {
   if (!selectedRowKeys.value.length || !props.kbId) return
   try {
-    const by_id: Record<string, { is_enabled: boolean }> = {}
+    const by_id: Record<number, { is_enabled: boolean }> = {}
     selectedRowKeys.value.forEach(id => {
       by_id[id] = { is_enabled: isEnabled }
     })
@@ -2177,7 +2185,7 @@ const handleBatchStatusChange = async (isEnabled: boolean) => {
 const handleBatchRecommendedChange = async (isRecommended: boolean) => {
   if (!selectedRowKeys.value.length || !props.kbId) return
   try {
-    const by_id: Record<string, { is_recommended: boolean }> = {}
+    const by_id: Record<number, { is_recommended: boolean }> = {}
     selectedRowKeys.value.forEach(id => {
       by_id[id] = { is_recommended: isRecommended }
     })
@@ -2302,7 +2310,7 @@ const parseCSVFile = async (file: File): Promise<FAQEntryPayload[]> => {
                 answers: splitByDelimiter(record['机器人回答'] || record['answers']),
                 similar_questions: splitByDelimiter(record['相似问题'] || record['similar_questions']),
                 negative_questions: splitByDelimiter(record['反例问题'] || record['negative_questions']),
-                tag_id: record['tag_id'] || '',
+                tag_id: record['tag_id'] ? Number(record['tag_id']) : undefined,
                 tag_name: record['分类'] || record['tag_name'] || '',
                 is_enabled: isDisabled !== undefined ? !isDisabled : undefined, // 是否停用：FALSE表示启用，TRUE表示停用，所以取反
               }),
@@ -2349,7 +2357,7 @@ const parseExcelFile = async (file: File): Promise<FAQEntryPayload[]> => {
       answers: splitByDelimiter(normalizedRow['机器人回答'] || normalizedRow['answers']),
       similar_questions: splitByDelimiter(normalizedRow['相似问题'] || normalizedRow['similar_questions']),
       negative_questions: splitByDelimiter(normalizedRow['反例问题'] || normalizedRow['negative_questions']),
-      tag_id: normalizedRow['tag_id'] || '',
+      tag_id: normalizedRow['tag_id'] ? Number(normalizedRow['tag_id']) : undefined,
       tag_name: normalizedRow['分类'] || normalizedRow['tag_name'] || '',
       is_enabled: isDisabled !== undefined ? !isDisabled : undefined, // 是否停用：FALSE表示启用，TRUE表示停用，所以取反
     })
@@ -2392,7 +2400,7 @@ const normalizePayload = (payload: Partial<FAQEntryPayload>): FAQEntryPayload =>
   answers: payload.answers?.filter(Boolean) || [],
   similar_questions: payload.similar_questions?.filter(Boolean) || [],
   negative_questions: payload.negative_questions?.filter(Boolean) || [],
-  tag_id: payload.tag_id || '',
+  tag_id: payload.tag_id || undefined,
   tag_name: payload.tag_name || '',
   is_enabled: payload.is_enabled !== undefined ? payload.is_enabled : undefined,
 })

@@ -2650,7 +2650,7 @@ func (s *knowledgeService) CloneChunk(ctx context.Context, src, dst *types.Knowl
 
 // ListFAQEntries lists FAQ entries under a FAQ knowledge base.
 func (s *knowledgeService) ListFAQEntries(ctx context.Context,
-	kbID string, page *types.Pagination, tagID string, keyword string, searchField string, sortOrder string,
+	kbID string, page *types.Pagination, tagSeqID int64, keyword string, searchField string, sortOrder string,
 ) (*types.PageResult, error) {
 	if page == nil {
 		page = &types.Pagination{}
@@ -2668,6 +2668,17 @@ func (s *knowledgeService) ListFAQEntries(ctx context.Context,
 	if faqKnowledge == nil {
 		return types.NewPageResult(0, page, []*types.FAQEntry{}), nil
 	}
+
+	// Convert tagSeqID to tagID (UUID)
+	var tagID string
+	if tagSeqID > 0 {
+		tag, err := s.tagRepo.GetBySeqID(ctx, tenantID, tagSeqID)
+		if err != nil {
+			return nil, werrors.NewNotFoundError("标签不存在")
+		}
+		tagID = tag.ID
+	}
+
 	chunkType := []types.ChunkType{types.ChunkTypeFAQ}
 	chunks, total, err := s.chunkRepo.ListPagedChunksByKnowledgeID(
 		ctx, tenantID, faqKnowledge.ID, page, chunkType, tagID, keyword, searchField, sortOrder, types.KnowledgeTypeFAQ,
@@ -2676,8 +2687,9 @@ func (s *knowledgeService) ListFAQEntries(ctx context.Context,
 		return nil, err
 	}
 
-	// Build tag ID to name mapping for all unique tag IDs (batch query)
+	// Build tag ID to name and seq_id mapping for all unique tag IDs (batch query)
 	tagNameMap := make(map[string]string)
+	tagSeqIDMap := make(map[string]int64)
 	tagIDs := make([]string, 0)
 	tagIDSet := make(map[string]struct{})
 	for _, chunk := range chunks {
@@ -2693,6 +2705,7 @@ func (s *knowledgeService) ListFAQEntries(ctx context.Context,
 		if err == nil {
 			for _, tag := range tags {
 				tagNameMap[tag.ID] = tag.Name
+				tagSeqIDMap[tag.ID] = tag.SeqID
 			}
 		}
 	}
@@ -2700,13 +2713,13 @@ func (s *knowledgeService) ListFAQEntries(ctx context.Context,
 	kb.EnsureDefaults()
 	entries := make([]*types.FAQEntry, 0, len(chunks))
 	for _, chunk := range chunks {
-		entry, err := s.chunkToFAQEntry(chunk, kb)
+		entry, err := s.chunkToFAQEntry(chunk, kb, tagSeqIDMap)
 		if err != nil {
 			return nil, err
 		}
 		// Set tag name from mapping
-		if entry.TagID != "" {
-			entry.TagName = tagNameMap[entry.TagID]
+		if chunk.TagID != "" {
+			entry.TagName = tagNameMap[chunk.TagID]
 		}
 		entries = append(entries, entry)
 	}
@@ -3555,6 +3568,10 @@ func (s *knowledgeService) executeFAQImport(ctx context.Context, taskID string, 
 				TagID:     tagID,                        // 使用解析后的 TagID
 				Status:    int(types.ChunkStatusStored), // store but not indexed
 			}
+			// 如果指定了 ID（用于数据迁移），设置 SeqID
+			if entry.ID != nil && *entry.ID > 0 {
+				chunk.SeqID = *entry.ID
+			}
 			if err := chunk.SetFAQMetadata(meta); err != nil {
 				return fmt.Errorf("failed to set FAQ metadata: %w", err)
 			}
@@ -3719,6 +3736,10 @@ func (s *knowledgeService) CreateFAQEntry(ctx context.Context,
 		TagID:           tagID, // 使用解析后的 TagID
 		Status:          int(types.ChunkStatusStored),
 	}
+	// 如果指定了 ID（用于数据迁移），设置 SeqID
+	if payload.ID != nil && *payload.ID > 0 {
+		chunk.SeqID = *payload.ID
+	}
 
 	if err := chunk.SetFAQMetadata(meta); err != nil {
 		return nil, fmt.Errorf("failed to set FAQ metadata: %w", err)
@@ -3742,15 +3763,24 @@ func (s *knowledgeService) CreateFAQEntry(ctx context.Context,
 		return nil, fmt.Errorf("failed to update chunk status: %w", err)
 	}
 
+	// Build tag seq_id map for conversion
+	tagSeqIDMap := make(map[string]int64)
+	if chunk.TagID != "" {
+		tag, tagErr := s.tagRepo.GetByID(ctx, tenantID, chunk.TagID)
+		if tagErr == nil && tag != nil {
+			tagSeqIDMap[tag.ID] = tag.SeqID
+		}
+	}
+
 	// 转换为FAQEntry返回
-	entry, err := s.chunkToFAQEntry(chunk, kb)
+	entry, err := s.chunkToFAQEntry(chunk, kb, tagSeqIDMap)
 	if err != nil {
 		return nil, err
 	}
 
 	// 查询TagName
-	if entry.TagID != "" {
-		tag, tagErr := s.tagRepo.GetByID(ctx, tenantID, entry.TagID)
+	if chunk.TagID != "" {
+		tag, tagErr := s.tagRepo.GetByID(ctx, tenantID, chunk.TagID)
 		if tagErr == nil && tag != nil {
 			entry.TagName = tag.Name
 		}
@@ -3759,11 +3789,11 @@ func (s *knowledgeService) CreateFAQEntry(ctx context.Context,
 	return entry, nil
 }
 
-// GetFAQEntry retrieves a single FAQ entry by ID.
+// GetFAQEntry retrieves a single FAQ entry by seq_id.
 func (s *knowledgeService) GetFAQEntry(ctx context.Context,
-	kbID string, entryID string,
+	kbID string, entrySeqID int64,
 ) (*types.FAQEntry, error) {
-	if entryID == "" {
+	if entrySeqID <= 0 {
 		return nil, werrors.NewBadRequestError("条目ID不能为空")
 	}
 
@@ -3775,10 +3805,10 @@ func (s *knowledgeService) GetFAQEntry(ctx context.Context,
 
 	tenantID := ctx.Value(types.TenantIDContextKey).(uint64)
 
-	// 获取chunk
-	chunk, err := s.chunkService.GetChunkByID(ctx, entryID)
+	// 获取chunk by seq_id
+	chunk, err := s.chunkRepo.GetChunkBySeqID(ctx, tenantID, entrySeqID)
 	if err != nil {
-		return nil, err
+		return nil, werrors.NewNotFoundError("FAQ条目不存在")
 	}
 
 	// 验证chunk属于当前知识库
@@ -3791,15 +3821,24 @@ func (s *knowledgeService) GetFAQEntry(ctx context.Context,
 		return nil, werrors.NewNotFoundError("FAQ条目不存在")
 	}
 
+	// Build tag seq_id map for conversion
+	tagSeqIDMap := make(map[string]int64)
+	if chunk.TagID != "" {
+		tag, tagErr := s.tagRepo.GetByID(ctx, tenantID, chunk.TagID)
+		if tagErr == nil && tag != nil {
+			tagSeqIDMap[tag.ID] = tag.SeqID
+		}
+	}
+
 	// 转换为FAQEntry返回
-	entry, err := s.chunkToFAQEntry(chunk, kb)
+	entry, err := s.chunkToFAQEntry(chunk, kb, tagSeqIDMap)
 	if err != nil {
 		return nil, err
 	}
 
 	// 查询TagName
-	if entry.TagID != "" {
-		tag, tagErr := s.tagRepo.GetByID(ctx, tenantID, entry.TagID)
+	if chunk.TagID != "" {
+		tag, tagErr := s.tagRepo.GetByID(ctx, tenantID, chunk.TagID)
 		if tagErr == nil && tag != nil {
 			entry.TagName = tag.Name
 		}
@@ -3810,7 +3849,7 @@ func (s *knowledgeService) GetFAQEntry(ctx context.Context,
 
 // UpdateFAQEntry updates a single FAQ entry.
 func (s *knowledgeService) UpdateFAQEntry(ctx context.Context,
-	kbID string, entryID string, payload *types.FAQEntryPayload,
+	kbID string, entrySeqID int64, payload *types.FAQEntryPayload,
 ) (*types.FAQEntry, error) {
 	if payload == nil {
 		return nil, werrors.NewBadRequestError("请求体不能为空")
@@ -3821,9 +3860,10 @@ func (s *knowledgeService) UpdateFAQEntry(ctx context.Context,
 	}
 	kb.EnsureDefaults()
 	tenantID := ctx.Value(types.TenantIDContextKey).(uint64)
-	chunk, err := s.chunkRepo.GetChunkByID(ctx, tenantID, entryID)
+
+	chunk, err := s.chunkRepo.GetChunkBySeqID(ctx, tenantID, entrySeqID)
 	if err != nil {
-		return nil, err
+		return nil, werrors.NewNotFoundError("FAQ条目不存在")
 	}
 	if chunk.KnowledgeBaseID != kb.ID {
 		return nil, werrors.NewForbiddenError("无权操作该 FAQ 条目")
@@ -3837,7 +3877,7 @@ func (s *knowledgeService) UpdateFAQEntry(ctx context.Context,
 	}
 
 	// 检查标准问和相似问是否与其他条目重复
-	if err := s.checkFAQQuestionDuplicate(ctx, tenantID, kb.ID, entryID, meta); err != nil {
+	if err := s.checkFAQQuestionDuplicate(ctx, tenantID, kb.ID, chunk.ID, meta); err != nil {
 		return nil, err
 	}
 
@@ -3853,8 +3893,19 @@ func (s *knowledgeService) UpdateFAQEntry(ctx context.Context,
 		indexMode = kb.FAQConfig.IndexMode
 	}
 	chunk.Content = buildFAQChunkContent(meta, indexMode)
-	chunk.TagID = payload.TagID
 	isEnabledUpdated := false
+
+	// Convert tag seq_id to UUID
+	if payload.TagID > 0 {
+		tag, tagErr := s.tagRepo.GetBySeqID(ctx, tenantID, payload.TagID)
+		if tagErr != nil {
+			return nil, werrors.NewNotFoundError("标签不存在")
+		}
+		chunk.TagID = tag.ID
+	} else {
+		chunk.TagID = ""
+	}
+
 	if payload.IsEnabled != nil {
 		oldEnabled := chunk.IsEnabled
 		chunk.IsEnabled = *payload.IsEnabled
@@ -3901,15 +3952,24 @@ func (s *knowledgeService) UpdateFAQEntry(ctx context.Context,
 		return nil, err
 	}
 
+	// Build tag seq_id map for conversion
+	tagSeqIDMap := make(map[string]int64)
+	if chunk.TagID != "" {
+		tag, tagErr := s.tagRepo.GetByID(ctx, tenantID, chunk.TagID)
+		if tagErr == nil && tag != nil {
+			tagSeqIDMap[tag.ID] = tag.SeqID
+		}
+	}
+
 	// 转换为FAQEntry返回
-	entry, err := s.chunkToFAQEntry(chunk, kb)
+	entry, err := s.chunkToFAQEntry(chunk, kb, tagSeqIDMap)
 	if err != nil {
 		return nil, err
 	}
 
 	// 查询TagName
-	if entry.TagID != "" {
-		tag, tagErr := s.tagRepo.GetByID(ctx, tenantID, entry.TagID)
+	if chunk.TagID != "" {
+		tag, tagErr := s.tagRepo.GetByID(ctx, tenantID, chunk.TagID)
 		if tagErr == nil && tag != nil {
 			entry.TagName = tag.Name
 		}
@@ -3960,8 +4020,8 @@ func (s *knowledgeService) UpdateFAQEntryStatus(ctx context.Context,
 // UpdateFAQEntryFieldsBatch updates multiple fields for FAQ entries in batch.
 // This is the unified API for batch updating FAQ entry fields.
 // Supports two modes:
-// 1. By entry ID: use ByID field
-// 2. By Tag: use ByTag field to apply the same update to all entries under a tag
+// 1. By entry seq_id: use ByID field
+// 2. By Tag seq_id: use ByTag field to apply the same update to all entries under a tag
 func (s *knowledgeService) UpdateFAQEntryFieldsBatch(ctx context.Context,
 	kbID string, req *types.FAQEntryFieldsBatchUpdate,
 ) error {
@@ -3977,9 +4037,26 @@ func (s *knowledgeService) UpdateFAQEntryFieldsBatch(ctx context.Context,
 	enabledUpdates := make(map[string]bool)
 	tagUpdates := make(map[string]string)
 
-	// Handle ByTag updates first
+	// Convert exclude seq_ids to UUIDs
+	excludeUUIDs := make([]string, 0, len(req.ExcludeIDs))
+	if len(req.ExcludeIDs) > 0 {
+		excludeChunks, err := s.chunkRepo.ListChunksBySeqID(ctx, tenantID, req.ExcludeIDs)
+		if err == nil {
+			for _, c := range excludeChunks {
+				excludeUUIDs = append(excludeUUIDs, c.ID)
+			}
+		}
+	}
+
+	// Handle ByTag updates first (by tag seq_id)
 	if len(req.ByTag) > 0 {
-		for tagID, update := range req.ByTag {
+		for tagSeqID, update := range req.ByTag {
+			// Convert tag seq_id to UUID
+			tag, err := s.tagRepo.GetBySeqID(ctx, tenantID, tagSeqID)
+			if err != nil {
+				return werrors.NewNotFoundError(fmt.Sprintf("标签 %d 不存在", tagSeqID))
+			}
+
 			var setFlags, clearFlags types.ChunkFlags
 
 			// Handle IsRecommended
@@ -3991,10 +4068,25 @@ func (s *knowledgeService) UpdateFAQEntryFieldsBatch(ctx context.Context,
 				}
 			}
 
+			// Convert new tag seq_id to UUID if provided
+			var newTagUUID *string
+			if update.TagID != nil {
+				if *update.TagID > 0 {
+					newTag, err := s.tagRepo.GetBySeqID(ctx, tenantID, *update.TagID)
+					if err != nil {
+						return werrors.NewNotFoundError(fmt.Sprintf("标签 %d 不存在", *update.TagID))
+					}
+					newTagUUID = &newTag.ID
+				} else {
+					emptyStr := ""
+					newTagUUID = &emptyStr
+				}
+			}
+
 			// Update all chunks with this tag
 			affectedIDs, err := s.chunkRepo.UpdateChunkFieldsByTagID(
-				ctx, tenantID, kb.ID, tagID,
-				update.IsEnabled, setFlags, clearFlags, update.TagID, req.ExcludeIDs,
+				ctx, tenantID, kb.ID, tag.ID,
+				update.IsEnabled, setFlags, clearFlags, newTagUUID, excludeUUIDs,
 			)
 			if err != nil {
 				return err
@@ -4007,36 +4099,42 @@ func (s *knowledgeService) UpdateFAQEntryFieldsBatch(ctx context.Context,
 						enabledUpdates[id] = *update.IsEnabled
 					}
 				}
-				if update.TagID != nil {
+				if newTagUUID != nil {
 					for _, id := range affectedIDs {
-						tagUpdates[id] = *update.TagID
+						tagUpdates[id] = *newTagUUID
 					}
 				}
 			}
 		}
 	}
 
-	// Handle ByID updates
+	// Handle ByID updates (by entry seq_id)
 	if len(req.ByID) > 0 {
-		entryIDs := make([]string, 0, len(req.ByID))
-		for entryID := range req.ByID {
-			entryIDs = append(entryIDs, entryID)
+		entrySeqIDs := make([]int64, 0, len(req.ByID))
+		for entrySeqID := range req.ByID {
+			entrySeqIDs = append(entrySeqIDs, entrySeqID)
 		}
-		chunks, err := s.chunkRepo.ListChunksByID(ctx, tenantID, entryIDs)
+		chunks, err := s.chunkRepo.ListChunksBySeqID(ctx, tenantID, entrySeqIDs)
 		if err != nil {
 			return err
+		}
+
+		// Build chunk seq_id to chunk map
+		chunkBySeqID := make(map[int64]*types.Chunk)
+		for _, chunk := range chunks {
+			chunkBySeqID[chunk.SeqID] = chunk
 		}
 
 		setFlags := make(map[string]types.ChunkFlags)
 		clearFlags := make(map[string]types.ChunkFlags)
 		chunksToUpdate := make([]*types.Chunk, 0)
 
-		for _, chunk := range chunks {
-			if chunk.KnowledgeBaseID != kb.ID || chunk.ChunkType != types.ChunkTypeFAQ {
+		for entrySeqID, update := range req.ByID {
+			chunk, exists := chunkBySeqID[entrySeqID]
+			if !exists {
 				continue
 			}
-			update, exists := req.ByID[chunk.ID]
-			if !exists {
+			if chunk.KnowledgeBaseID != kb.ID || chunk.ChunkType != types.ChunkTypeFAQ {
 				continue
 			}
 
@@ -4061,11 +4159,15 @@ func (s *knowledgeService) UpdateFAQEntryFieldsBatch(ctx context.Context,
 				}
 			}
 
-			// Handle TagID
+			// Handle TagID (convert seq_id to UUID)
 			if update.TagID != nil {
-				newTagID := ""
-				if *update.TagID != "" {
-					newTagID = *update.TagID
+				var newTagID string
+				if *update.TagID > 0 {
+					newTag, err := s.tagRepo.GetBySeqID(ctx, tenantID, *update.TagID)
+					if err != nil {
+						return werrors.NewNotFoundError(fmt.Sprintf("标签 %d 不存在", *update.TagID))
+					}
+					newTagID = newTag.ID
 				}
 				if chunk.TagID != newTagID {
 					chunk.TagID = newTagID
@@ -4267,7 +4369,8 @@ func (s *knowledgeService) UpdateFAQEntryTag(ctx context.Context, kbID string, e
 }
 
 // UpdateFAQEntryTagBatch updates tags for FAQ entries in batch.
-func (s *knowledgeService) UpdateFAQEntryTagBatch(ctx context.Context, kbID string, updates map[string]*string) error {
+// Key: entry seq_id, Value: tag seq_id (nil to remove tag)
+func (s *knowledgeService) UpdateFAQEntryTagBatch(ctx context.Context, kbID string, updates map[int64]*int64) error {
 	if len(updates) == 0 {
 		return nil
 	}
@@ -4277,59 +4380,65 @@ func (s *knowledgeService) UpdateFAQEntryTagBatch(ctx context.Context, kbID stri
 	}
 	tenantID := ctx.Value(types.TenantIDContextKey).(uint64)
 
-	// Get all chunks in batch
-	entryIDs := make([]string, 0, len(updates))
-	for entryID := range updates {
-		entryIDs = append(entryIDs, entryID)
+	// Get all chunks in batch by seq_id
+	entrySeqIDs := make([]int64, 0, len(updates))
+	for entrySeqID := range updates {
+		entrySeqIDs = append(entrySeqIDs, entrySeqID)
 	}
-	chunks, err := s.chunkRepo.ListChunksByID(ctx, tenantID, entryIDs)
+	chunks, err := s.chunkRepo.ListChunksBySeqID(ctx, tenantID, entrySeqIDs)
 	if err != nil {
 		return err
 	}
 
-	// Build tag ID map for validation
-	tagIDSet := make(map[string]bool)
-	for _, tagID := range updates {
-		if tagID != nil && *tagID != "" {
-			tagIDSet[*tagID] = true
+	// Build chunk seq_id to chunk map
+	chunkBySeqID := make(map[int64]*types.Chunk)
+	for _, chunk := range chunks {
+		chunkBySeqID[chunk.SeqID] = chunk
+	}
+
+	// Build tag seq_id set for validation
+	tagSeqIDSet := make(map[int64]bool)
+	for _, tagSeqID := range updates {
+		if tagSeqID != nil && *tagSeqID > 0 {
+			tagSeqIDSet[*tagSeqID] = true
 		}
 	}
 
-	// Validate all tags in batch
-	tagMap := make(map[string]*types.KnowledgeTag)
-	if len(tagIDSet) > 0 {
-		tagIDs := make([]string, 0, len(tagIDSet))
-		for tagID := range tagIDSet {
-			tagIDs = append(tagIDs, tagID)
+	// Validate all tags in batch by seq_id
+	tagMap := make(map[int64]*types.KnowledgeTag)
+	if len(tagSeqIDSet) > 0 {
+		tagSeqIDs := make([]int64, 0, len(tagSeqIDSet))
+		for tagSeqID := range tagSeqIDSet {
+			tagSeqIDs = append(tagSeqIDs, tagSeqID)
 		}
-		for _, tagID := range tagIDs {
-			tag, err := s.tagRepo.GetByID(ctx, tenantID, tagID)
-			if err != nil {
-				return err
-			}
+		tags, err := s.tagRepo.GetBySeqIDs(ctx, tenantID, tagSeqIDs)
+		if err != nil {
+			return err
+		}
+		for _, tag := range tags {
 			if tag.KnowledgeBaseID != kb.ID {
-				return werrors.NewBadRequestError(fmt.Sprintf("标签 %s 不属于当前知识库", tagID))
+				return werrors.NewBadRequestError(fmt.Sprintf("标签 %d 不属于当前知识库", tag.SeqID))
 			}
-			tagMap[tagID] = tag
+			tagMap[tag.SeqID] = tag
 		}
 	}
 
 	// Update chunks
 	chunksToUpdate := make([]*types.Chunk, 0)
-	for _, chunk := range chunks {
-		if chunk.KnowledgeBaseID != kb.ID || chunk.ChunkType != types.ChunkTypeFAQ {
+	for entrySeqID, tagSeqID := range updates {
+		chunk, exists := chunkBySeqID[entrySeqID]
+		if !exists {
 			continue
 		}
-		tagID, exists := updates[chunk.ID]
-		if !exists {
+		if chunk.KnowledgeBaseID != kb.ID || chunk.ChunkType != types.ChunkTypeFAQ {
 			continue
 		}
 
 		var resolvedTagID string
-		if tagID != nil && *tagID != "" {
-			tag, ok := tagMap[*tagID]
+		if tagSeqID != nil && *tagSeqID > 0 {
+			tag, ok := tagMap[*tagSeqID]
 			if !ok {
-				return werrors.NewBadRequestError(fmt.Sprintf("标签 %s 不存在", *tagID))
+				return werrors.NewBadRequestError(fmt.Sprintf("标签 %d 不存在", *tagSeqID))
 			}
 			resolvedTagID = tag.ID
 		}
@@ -4386,17 +4495,45 @@ func (s *knowledgeService) SearchFAQEntries(ctx context.Context,
 		req.MatchCount = 50
 	}
 
-	// Build priority tag sets for sorting
-	hasFirstPriority := len(req.FirstPriorityTagIDs) > 0
-	hasSecondPriority := len(req.SecondPriorityTagIDs) > 0
+	tenantID := ctx.Value(types.TenantIDContextKey).(uint64)
+
+	// Convert tag seq_ids to UUIDs
+	var firstPriorityTagUUIDs, secondPriorityTagUUIDs []string
+	firstPrioritySeqIDSet := make(map[int64]struct{})
+	secondPrioritySeqIDSet := make(map[int64]struct{})
+
+	if len(req.FirstPriorityTagIDs) > 0 {
+		tags, err := s.tagRepo.GetBySeqIDs(ctx, tenantID, req.FirstPriorityTagIDs)
+		if err == nil {
+			firstPriorityTagUUIDs = make([]string, 0, len(tags))
+			for _, tag := range tags {
+				firstPriorityTagUUIDs = append(firstPriorityTagUUIDs, tag.ID)
+				firstPrioritySeqIDSet[tag.SeqID] = struct{}{}
+			}
+		}
+	}
+	if len(req.SecondPriorityTagIDs) > 0 {
+		tags, err := s.tagRepo.GetBySeqIDs(ctx, tenantID, req.SecondPriorityTagIDs)
+		if err == nil {
+			secondPriorityTagUUIDs = make([]string, 0, len(tags))
+			for _, tag := range tags {
+				secondPriorityTagUUIDs = append(secondPriorityTagUUIDs, tag.ID)
+				secondPrioritySeqIDSet[tag.SeqID] = struct{}{}
+			}
+		}
+	}
+
+	// Build priority tag sets for sorting (using UUID)
+	hasFirstPriority := len(firstPriorityTagUUIDs) > 0
+	hasSecondPriority := len(secondPriorityTagUUIDs) > 0
 	hasPriorityFilter := hasFirstPriority || hasSecondPriority
 
-	firstPrioritySet := make(map[string]struct{}, len(req.FirstPriorityTagIDs))
-	for _, tagID := range req.FirstPriorityTagIDs {
+	firstPrioritySet := make(map[string]struct{}, len(firstPriorityTagUUIDs))
+	for _, tagID := range firstPriorityTagUUIDs {
 		firstPrioritySet[tagID] = struct{}{}
 	}
-	secondPrioritySet := make(map[string]struct{}, len(req.SecondPriorityTagIDs))
-	for _, tagID := range req.SecondPriorityTagIDs {
+	secondPrioritySet := make(map[string]struct{}, len(secondPriorityTagUUIDs))
+	for _, tagID := range secondPriorityTagUUIDs {
 		secondPrioritySet[tagID] = struct{}{}
 	}
 
@@ -4423,7 +4560,8 @@ func (s *knowledgeService) SearchFAQEntries(ctx context.Context,
 					VectorThreshold:      req.VectorThreshold,
 					MatchCount:           req.MatchCount,
 					DisableKeywordsMatch: true,
-					TagIDs:               req.FirstPriorityTagIDs,
+					TagIDs:               firstPriorityTagUUIDs,
+					OnlyRecommended:      req.OnlyRecommended,
 				}
 				firstResults, firstErr = s.kbService.HybridSearch(ctx, kbID, firstParams)
 			}()
@@ -4438,7 +4576,8 @@ func (s *knowledgeService) SearchFAQEntries(ctx context.Context,
 					VectorThreshold:      req.VectorThreshold,
 					MatchCount:           req.MatchCount,
 					DisableKeywordsMatch: true,
-					TagIDs:               req.SecondPriorityTagIDs,
+					TagIDs:               secondPriorityTagUUIDs,
+					OnlyRecommended:      req.OnlyRecommended,
 				}
 				secondResults, secondErr = s.kbService.HybridSearch(ctx, kbID, secondParams)
 			}()
@@ -4500,10 +4639,30 @@ func (s *knowledgeService) SearchFAQEntries(ctx context.Context,
 	}
 
 	// Batch fetch chunks
-	tenantID := ctx.Value(types.TenantIDContextKey).(uint64)
 	chunks, err := s.chunkRepo.ListChunksByID(ctx, tenantID, chunkIDs)
 	if err != nil {
 		return nil, err
+	}
+
+	// Build tag UUID to seq_id map for conversion
+	tagSeqIDMap := make(map[string]int64)
+	tagIDs := make([]string, 0)
+	tagIDSet := make(map[string]struct{})
+	for _, chunk := range chunks {
+		if chunk.TagID != "" {
+			if _, exists := tagIDSet[chunk.TagID]; !exists {
+				tagIDSet[chunk.TagID] = struct{}{}
+				tagIDs = append(tagIDs, chunk.TagID)
+			}
+		}
+	}
+	if len(tagIDs) > 0 {
+		tags, err := s.tagRepo.GetByIDs(ctx, tenantID, tagIDs)
+		if err == nil {
+			for _, tag := range tags {
+				tagSeqIDMap[tag.ID] = tag.SeqID
+			}
+		}
 	}
 
 	// Filter FAQ chunks and convert to FAQEntry
@@ -4518,7 +4677,7 @@ func (s *knowledgeService) SearchFAQEntries(ctx context.Context,
 			continue
 		}
 
-		entry, err := s.chunkToFAQEntry(chunk, kb)
+		entry, err := s.chunkToFAQEntry(chunk, kb, tagSeqIDMap)
 		if err != nil {
 			logger.Warnf(ctx, "Failed to convert chunk to FAQ entry: %v", err)
 			continue
@@ -4539,19 +4698,37 @@ func (s *knowledgeService) SearchFAQEntries(ctx context.Context,
 	// Sort entries with two-level priority tag support
 	if hasPriorityFilter {
 		// getPriorityLevel returns: 0 = first priority, 1 = second priority, 2 = no priority
-		getPriorityLevel := func(tagID string) int {
-			if _, ok := firstPrioritySet[tagID]; ok {
+		// Use chunk.TagID (UUID) for comparison
+		getPriorityLevel := func(chunk *types.Chunk) int {
+			if _, ok := firstPrioritySet[chunk.TagID]; ok {
 				return 0
 			}
-			if _, ok := secondPrioritySet[tagID]; ok {
+			if _, ok := secondPrioritySet[chunk.TagID]; ok {
 				return 1
 			}
 			return 2
 		}
 
+		// Build chunk map for priority lookup
+		chunkMap := make(map[int64]*types.Chunk)
+		for _, chunk := range chunks {
+			chunkMap[chunk.SeqID] = chunk
+		}
+
 		slices.SortFunc(entries, func(a, b *types.FAQEntry) int {
-			aPriority := getPriorityLevel(a.TagID)
-			bPriority := getPriorityLevel(b.TagID)
+			aChunk := chunkMap[a.ID]
+			bChunk := chunkMap[b.ID]
+			var aPriority, bPriority int
+			if aChunk != nil {
+				aPriority = getPriorityLevel(aChunk)
+			} else {
+				aPriority = 2
+			}
+			if bChunk != nil {
+				bPriority = getPriorityLevel(bChunk)
+			} else {
+				bPriority = 2
+			}
 
 			// Compare by priority level first
 			if aPriority != bPriority {
@@ -4585,33 +4762,33 @@ func (s *knowledgeService) SearchFAQEntries(ctx context.Context,
 
 	// 批量查询TagName并补充到结果中
 	if len(entries) > 0 {
-		// 收集所有需要查询的TagID
-		tagIDs := make([]string, 0)
-		tagIDSet := make(map[string]struct{})
+		// 收集所有需要查询的TagID (seq_id)
+		tagSeqIDs := make([]int64, 0)
+		tagSeqIDSet := make(map[int64]struct{})
 		for _, entry := range entries {
-			if entry.TagID != "" {
-				if _, exists := tagIDSet[entry.TagID]; !exists {
-					tagIDs = append(tagIDs, entry.TagID)
-					tagIDSet[entry.TagID] = struct{}{}
+			if entry.TagID != 0 {
+				if _, exists := tagSeqIDSet[entry.TagID]; !exists {
+					tagSeqIDs = append(tagSeqIDs, entry.TagID)
+					tagSeqIDSet[entry.TagID] = struct{}{}
 				}
 			}
 		}
 
 		// 批量查询标签
-		if len(tagIDs) > 0 {
-			tags, err := s.tagRepo.GetByIDs(ctx, tenantID, tagIDs)
+		if len(tagSeqIDs) > 0 {
+			tags, err := s.tagRepo.GetBySeqIDs(ctx, tenantID, tagSeqIDs)
 			if err != nil {
 				logger.Warnf(ctx, "Failed to batch query tags: %v", err)
 			} else {
-				// 构建TagID到TagName的映射
-				tagNameMap := make(map[string]string)
+				// 构建TagSeqID到TagName的映射
+				tagNameMap := make(map[int64]string)
 				for _, tag := range tags {
-					tagNameMap[tag.ID] = tag.Name
+					tagNameMap[tag.SeqID] = tag.Name
 				}
 
 				// 补充TagName
 				for _, entry := range entries {
-					if entry.TagID != "" {
+					if entry.TagID != 0 {
 						if tagName, exists := tagNameMap[entry.TagID]; exists {
 							entry.TagName = tagName
 						}
@@ -4624,11 +4801,11 @@ func (s *knowledgeService) SearchFAQEntries(ctx context.Context,
 	return entries, nil
 }
 
-// DeleteFAQEntries deletes FAQ entries in batch.
+// DeleteFAQEntries deletes FAQ entries in batch by seq_id.
 func (s *knowledgeService) DeleteFAQEntries(ctx context.Context,
-	kbID string, entryIDs []string,
+	kbID string, entrySeqIDs []int64,
 ) error {
-	if len(entryIDs) == 0 {
+	if len(entrySeqIDs) == 0 {
 		return werrors.NewBadRequestError("请选择需要删除的 FAQ 条目")
 	}
 	kb, err := s.validateFAQKnowledgeBase(ctx, kbID)
@@ -4638,19 +4815,19 @@ func (s *knowledgeService) DeleteFAQEntries(ctx context.Context,
 
 	tenantID := ctx.Value(types.TenantIDContextKey).(uint64)
 	var faqKnowledge *types.Knowledge
-	chunksToRemove := make([]*types.Chunk, 0, len(entryIDs))
-	for _, id := range entryIDs {
-		if id == "" {
+	chunksToRemove := make([]*types.Chunk, 0, len(entrySeqIDs))
+	for _, seqID := range entrySeqIDs {
+		if seqID <= 0 {
 			continue
 		}
-		chunk, err := s.chunkRepo.GetChunkByID(ctx, tenantID, id)
+		chunk, err := s.chunkRepo.GetChunkBySeqID(ctx, tenantID, seqID)
 		if err != nil {
-			return err
+			return werrors.NewNotFoundError("FAQ条目不存在")
 		}
 		if chunk.KnowledgeBaseID != kb.ID || chunk.ChunkType != types.ChunkTypeFAQ {
 			return werrors.NewBadRequestError("包含无效的 FAQ 条目")
 		}
-		if err := s.chunkService.DeleteChunk(ctx, id); err != nil {
+		if err := s.chunkService.DeleteChunk(ctx, chunk.ID); err != nil {
 			return err
 		}
 		if faqKnowledge == nil {
@@ -4923,7 +5100,7 @@ func (s *knowledgeService) clearRunningFAQImportTaskID(ctx context.Context, kbID
 	return s.redisClient.Del(ctx, key).Err()
 }
 
-func (s *knowledgeService) chunkToFAQEntry(chunk *types.Chunk, kb *types.KnowledgeBase) (*types.FAQEntry, error) {
+func (s *knowledgeService) chunkToFAQEntry(chunk *types.Chunk, kb *types.KnowledgeBase, tagSeqIDMap map[string]int64) (*types.FAQEntry, error) {
 	meta, err := chunk.FAQMetadata()
 	if err != nil {
 		return nil, err
@@ -4936,12 +5113,19 @@ func (s *knowledgeService) chunkToFAQEntry(chunk *types.Chunk, kb *types.Knowled
 	if answerStrategy == "" {
 		answerStrategy = types.AnswerStrategyAll
 	}
+
+	// Get tag seq_id from map
+	var tagSeqID int64
+	if chunk.TagID != "" && tagSeqIDMap != nil {
+		tagSeqID = tagSeqIDMap[chunk.TagID]
+	}
+
 	entry := &types.FAQEntry{
-		ID:                chunk.ID,
+		ID:                chunk.SeqID,
 		ChunkID:           chunk.ID,
 		KnowledgeID:       chunk.KnowledgeID,
 		KnowledgeBaseID:   chunk.KnowledgeBaseID,
-		TagID:             chunk.TagID,
+		TagID:             tagSeqID,
 		IsEnabled:         chunk.IsEnabled,
 		IsRecommended:     chunk.Flags.HasFlag(types.ChunkFlagRecommended),
 		StandardQuestion:  meta.StandardQuestion,
@@ -5036,12 +5220,19 @@ func (s *knowledgeService) checkFAQQuestionDuplicate(
 	return nil
 }
 
-// resolveTagID resolves tag ID from payload, prioritizing tag_id over tag_name
+// resolveTagID resolves tag ID (UUID) from payload, prioritizing tag_id (seq_id) over tag_name
 // If no tag is specified, creates or finds the "未分类" tag
+// Returns the internal UUID of the tag
 func (s *knowledgeService) resolveTagID(ctx context.Context, kbID string, payload *types.FAQEntryPayload) (string, error) {
-	// 如果提供了 tag_id，优先使用 tag_id
-	if payload.TagID != "" {
-		return payload.TagID, nil
+	tenantID := ctx.Value(types.TenantIDContextKey).(uint64)
+
+	// 如果提供了 tag_id (seq_id)，优先使用 tag_id
+	if payload.TagID != 0 {
+		tag, err := s.tagRepo.GetBySeqID(ctx, tenantID, payload.TagID)
+		if err != nil {
+			return "", fmt.Errorf("failed to find tag by seq_id %d: %w", payload.TagID, err)
+		}
+		return tag.ID, nil
 	}
 
 	// 如果提供了 tag_name，查找或创建标签
