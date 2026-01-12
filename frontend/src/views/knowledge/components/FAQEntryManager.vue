@@ -58,49 +58,58 @@
       <div v-if="importResult && importResult.display_status === 'open' && !importState.taskId" class="faq-import-result-card">
         <div class="import-result-content">
           <div class="import-result-header">
-            <t-icon name="check-circle" size="18px" class="result-icon" />
-            <span class="result-title">最近导入结果</span>
-            <span class="result-time">{{ formatImportTime(importResult.imported_at) }}</span>
-          </div>
-          <div class="import-result-stats">
-            <div class="stat-item">
-              <span class="stat-label">导入数据</span>
-              <span class="stat-value">{{ importResult.total_entries }}条</span>
+            <div class="header-left">
+              <t-icon name="check-circle-filled" size="20px" class="result-icon" />
+              <span class="result-title">最近导入结果</span>
             </div>
-            <div class="stat-item success">
-              <span class="stat-label">成功</span>
-              <span class="stat-value">{{ importResult.success_count }}条</span>
-            </div>
-            <div v-if="importResult.failed_count > 0" class="stat-item failed">
-              <span class="stat-label">失败</span>
-              <span class="stat-value">{{ importResult.failed_count }}条</span>
+            <div class="header-right">
+              <span class="result-time">{{ formatImportTime(importResult.imported_at) }}</span>
               <t-button
-                v-if="importResult.failed_entries_url"
                 variant="text"
-                theme="primary"
+                theme="default"
                 size="small"
-                class="download-failed-btn"
-                @click="downloadFailedEntries"
+                class="result-close-btn"
+                @click="closeImportResult"
               >
-                下载原因
+                <t-icon name="close" size="16px" />
               </t-button>
             </div>
-            <div v-if="importResult.skipped_count > 0" class="stat-item skipped">
-              <span class="stat-label">跳过</span>
-              <span class="stat-value">{{ importResult.skipped_count }}条</span>
-            </div>
           </div>
-          <div class="import-result-footer">
-            <span class="import-mode">{{ importResult.import_mode === 'append' ? '追加模式' : '替换模式' }}</span>
-            <t-button
-              variant="text"
-              theme="default"
-              size="small"
-              class="result-close-btn"
-              @click="closeImportResult"
-            >
-              <t-icon name="close" size="14px" />
-            </t-button>
+          <div class="import-result-body">
+            <div class="import-result-stats">
+              <div class="stat-item">
+                <span class="stat-label">导入数据</span>
+                <span class="stat-value">{{ importResult.total_entries }}条</span>
+              </div>
+              <div class="stat-item success">
+                <span class="stat-label">成功</span>
+                <span class="stat-value">{{ importResult.success_count }}条</span>
+              </div>
+              <div v-if="importResult.failed_count > 0" class="stat-item failed">
+                <span class="stat-label">失败</span>
+                <span class="stat-value">{{ importResult.failed_count }}条</span>
+                <t-button
+                  v-if="importResult.failed_entries_url"
+                  variant="outline"
+                  theme="danger"
+                  size="small"
+                  class="download-failed-btn"
+                  @click="downloadFailedEntries"
+                >
+                  <t-icon name="download" size="14px" />
+                  下载原因
+                </t-button>
+              </div>
+              <div v-if="importResult.skipped_count > 0" class="stat-item skipped">
+                <span class="stat-label">跳过</span>
+                <span class="stat-value">{{ importResult.skipped_count }}条</span>
+              </div>
+            </div>
+            <div class="import-mode-tag">
+              <t-tag size="small" variant="light" theme="success">
+                {{ importResult.import_mode === 'append' ? '追加模式' : '替换模式' }}
+              </t-tag>
+            </div>
           </div>
         </div>
       </div>
@@ -2522,6 +2531,16 @@ const closeImportResult = async () => {
   }
 }
 
+// 下载失败条目原因
+const downloadFailedEntries = () => {
+  if (!importResult.value?.failed_entries_url) {
+    MessagePlugin.warning('暂无失败记录可下载')
+    return
+  }
+  // 直接打开下载链接
+  window.open(importResult.value.failed_entries_url, '_blank')
+}
+
 // 格式化导入时间
 const formatImportTime = (timeStr?: string) => {
   if (!timeStr) return ''
@@ -3692,11 +3711,11 @@ watch(() => entries.value.map(e => ({
 // 导入结果统计卡片样式
 .faq-import-result-card {
   margin-bottom: 16px;
-  background: linear-gradient(135deg, #f8fffe 0%, #f5fff9 100%);
-  border: 1px solid #d4f0e0;
-  border-radius: 10px;
-  padding: 14px 18px;
-  box-shadow: 0 2px 12px rgba(0, 168, 112, 0.08);
+  background: #ffffff;
+  border: 1px solid #e7ebf0;
+  border-radius: 8px;
+  padding: 16px 20px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
 
   .import-result-content {
     display: flex;
@@ -3707,36 +3726,70 @@ watch(() => entries.value.map(e => ({
   .import-result-header {
     display: flex;
     align-items: center;
-    gap: 8px;
-    font-size: 14px;
+    justify-content: space-between;
 
-    .result-icon {
-      color: #00a870;
-      flex-shrink: 0;
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+
+      .result-icon {
+        color: #07C05F;
+        flex-shrink: 0;
+      }
+
+      .result-title {
+        font-family: "PingFang SC";
+        font-weight: 600;
+        font-size: 14px;
+        color: #1d2129;
+      }
     }
 
-    .result-title {
-      font-weight: 600;
-      color: #1d2129;
-    }
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 12px;
 
-    .result-time {
-      color: #86909c;
-      font-size: 13px;
-      margin-left: auto;
+      .result-time {
+        font-family: "PingFang SC";
+        font-size: 13px;
+        color: #86909c;
+      }
+
+      .result-close-btn {
+        padding: 4px;
+        border-radius: 4px;
+        color: #86909c;
+        transition: all 0.2s ease;
+
+        &:hover {
+          background: #f2f3f5;
+          color: #4e5969;
+        }
+      }
     }
+  }
+
+  .import-result-body {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
   }
 
   .import-result-stats {
     display: flex;
+    align-items: center;
     flex-wrap: wrap;
-    gap: 16px;
-    padding: 8px 0;
+    gap: 24px;
 
     .stat-item {
       display: flex;
       align-items: center;
       gap: 6px;
+      font-family: "PingFang SC";
       font-size: 13px;
 
       .stat-label {
@@ -3744,60 +3797,41 @@ watch(() => entries.value.map(e => ({
       }
 
       .stat-value {
-        font-weight: 500;
+        font-weight: 600;
         color: #1d2129;
       }
 
       &.success .stat-value {
-        color: #00a870;
+        color: #07C05F;
       }
 
       &.failed .stat-value {
-        color: #fa5151;
+        color: #E34D59;
       }
 
       &.skipped .stat-value {
-        color: #ff7d00;
+        color: #ED7B2F;
       }
 
       .download-failed-btn {
-        padding: 0 4px;
-        height: auto;
+        margin-left: 4px;
+        padding: 0 8px;
+        height: 24px;
         font-size: 12px;
-        color: #165dff;
+        border-radius: 4px;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
 
-        &:hover {
-          color: #4080ff;
+        .t-icon {
+          font-size: 12px;
         }
       }
     }
   }
 
-  .import-result-footer {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding-top: 8px;
-    border-top: 1px solid #e5e8eb;
-
-    .import-mode {
-      font-size: 12px;
-      color: #86909c;
-      background: rgba(0, 168, 112, 0.1);
-      padding: 2px 8px;
-      border-radius: 4px;
-    }
-
-    .result-close-btn {
-      padding: 4px;
-      border-radius: 4px;
-      color: #86909c;
-
-      &:hover {
-        background: rgba(0, 0, 0, 0.06);
-        color: #4e5969;
-      }
-    }
+  .import-mode-tag {
+    flex-shrink: 0;
   }
 }
 
