@@ -285,8 +285,8 @@
                   v-for="tag in filteredTags"
                   :key="tag.id"
                   class="faq-tag-item"
-                  :class="{ active: selectedTagId === tag.id, editing: editingTagId === tag.id }"
-                  @click="handleTagRowClick(tag.id)"
+                  :class="{ active: selectedTagId === tag.seq_id, editing: editingTagId === tag.id }"
+                  @click="handleTagRowClick(tag.seq_id)"
                 >
                   <div class="faq-tag-left">
                     <t-icon name="folder" size="18px" />
@@ -1382,8 +1382,8 @@ type TagInputInstance = ComponentPublicInstance<{ focus: () => void; select: () 
 const tagList = ref<any[]>([])
 const tagLoading = ref(false)
 const tagListRef = ref<HTMLElement | null>(null)
-// Selected tag ID for filtering (empty string means show all)
-const selectedTagId = ref<string>('')
+// Selected tag seq_id for filtering (0 means show all)
+const selectedTagId = ref<number>(0)
 const overallFAQTotal = ref(0)
 const tagSearchQuery = ref('')
 const TAG_PAGE_SIZE = 20
@@ -1617,22 +1617,21 @@ const getTagName = (tagId?: number) => {
   return tagMap.value[tagId]?.name || (t('knowledgeBase.untagged') || '未分类')
 }
 
-const handleTagFilterChange = (value: string) => {
+const handleTagFilterChange = (value: number) => {
   selectedTagId.value = value
 }
 
-const handleTagRowClick = (tagId: string) => {
-  const normalizedId = String(tagId)
-  if (editingTagId.value && editingTagId.value !== normalizedId) {
+const handleTagRowClick = (tagSeqId: number) => {
+  if (editingTagId.value) {
     cancelEditTag()
   }
   if (creatingTag.value) {
     cancelCreateTag()
   }
-  if (selectedTagId.value === normalizedId) {
+  if (selectedTagId.value === tagSeqId) {
     return
   }
-  handleTagFilterChange(normalizedId)
+  handleTagFilterChange(tagSeqId)
 }
 
 const startCreateTag = () => {
@@ -1741,10 +1740,10 @@ const confirmDeleteTag = (tag: any) => {
       try {
         await deleteKnowledgeBaseTag(props.kbId, tag.id, { force: true })
         MessagePlugin.success(t('knowledgeBase.tagDeleteSuccess'))
-        if (selectedTagId.value === tag.id) {
+        if (selectedTagId.value === tag.seq_id) {
           // Reset to show all entries when current tag is deleted
-          selectedTagId.value = ''
-          handleTagFilterChange('')
+          selectedTagId.value = 0
+          handleTagFilterChange(0)
         }
         await loadTags()
         await loadEntries()
@@ -2464,7 +2463,7 @@ const startPolling = (taskId: string) => {
             }
             MessagePlugin.success(t('knowledgeEditor.faqImport.importSuccess'))
             // 清除筛选条件，确保用户能看到所有新导入的数据
-            selectedTagId.value = ''
+            selectedTagId.value = 0
             entrySearchKeyword.value = ''
             overallFAQTotal.value = 0  // Reset to trigger re-fetch
             await loadEntries()
@@ -2910,7 +2909,7 @@ watch(
   async (newKbId) => {
     currentPage = 1
     hasMore.value = true
-    selectedTagId.value = ''
+    selectedTagId.value = 0
     overallFAQTotal.value = 0  // Reset to trigger re-fetch
     cancelCreateTag()
     cancelEditTag()

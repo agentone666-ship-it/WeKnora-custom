@@ -155,7 +155,7 @@ const buildQuery = (params?: Record<string, any>) => {
 
 export function listFAQEntries(
   kbId: string,
-  params?: { page?: number; page_size?: number; tag_id?: string; keyword?: string },
+  params?: { page?: number; page_size?: number; tag_id?: number; keyword?: string },
 ) {
   const query = buildQuery(params);
   return get(`/api/v1/knowledge-bases/${kbId}/faq/entries${query}`);
