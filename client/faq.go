@@ -263,6 +263,29 @@ func (c *Client) UpdateFAQEntry(ctx context.Context,
 	return response.Data, nil
 }
 
+// AddSimilarQuestionsPayload is used to add similar questions to a FAQ entry.
+type AddSimilarQuestionsPayload struct {
+	SimilarQuestions []string `json:"similar_questions"`
+}
+
+// AddSimilarQuestions adds similar questions to a FAQ entry.
+// This will append the new questions to the existing similar questions list.
+func (c *Client) AddSimilarQuestions(ctx context.Context,
+	knowledgeBaseID string, entrySeqID int64, payload *AddSimilarQuestionsPayload,
+) (*FAQEntry, error) {
+	path := fmt.Sprintf("/api/v1/knowledge-bases/%s/faq/entries/%d/similar-questions", knowledgeBaseID, entrySeqID)
+	resp, err := c.doRequest(ctx, http.MethodPost, path, payload, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var response FAQEntryResponse
+	if err := parseResponse(resp, &response); err != nil {
+		return nil, err
+	}
+	return response.Data, nil
+}
+
 // UpdateFAQEntryFieldsBatch updates multiple fields for FAQ entries in bulk.
 // Supports updating is_enabled, is_recommended, tag_id in a single call.
 // Supports two modes:

@@ -95,6 +95,8 @@ type KnowledgeService interface {
 	GetFAQEntry(ctx context.Context, kbID string, entrySeqID int64) (*types.FAQEntry, error)
 	// UpdateFAQEntry updates a single FAQ entry.
 	UpdateFAQEntry(ctx context.Context, kbID string, entrySeqID int64, payload *types.FAQEntryPayload) (*types.FAQEntry, error)
+	// AddSimilarQuestions adds similar questions to a FAQ entry.
+	AddSimilarQuestions(ctx context.Context, kbID string, entrySeqID int64, questions []string) (*types.FAQEntry, error)
 	// UpdateFAQEntryFieldsBatch updates multiple fields for FAQ entries in batch.
 	// Supports updating is_enabled, is_recommended, tag_id, and other fields in a single call.
 	UpdateFAQEntryFieldsBatch(ctx context.Context, kbID string, req *types.FAQEntryFieldsBatchUpdate) error

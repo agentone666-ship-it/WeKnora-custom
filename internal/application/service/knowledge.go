@@ -3978,6 +3978,170 @@ func (s *knowledgeService) UpdateFAQEntry(ctx context.Context,
 	return entry, nil
 }
 
+// AddSimilarQuestions adds similar questions to a FAQ entry.
+// This will append the new questions to the existing similar questions list.
+func (s *knowledgeService) AddSimilarQuestions(ctx context.Context,
+	kbID string, entrySeqID int64, questions []string,
+) (*types.FAQEntry, error) {
+	if len(questions) == 0 {
+		return nil, werrors.NewBadRequestError("相似问列表不能为空")
+	}
+
+	kb, err := s.validateFAQKnowledgeBase(ctx, kbID)
+	if err != nil {
+		return nil, err
+	}
+	kb.EnsureDefaults()
+	tenantID := ctx.Value(types.TenantIDContextKey).(uint64)
+
+	// Get existing FAQ entry
+	chunk, err := s.chunkRepo.GetChunkBySeqID(ctx, tenantID, entrySeqID)
+	if err != nil {
+		return nil, werrors.NewNotFoundError("FAQ条目不存在")
+	}
+	if chunk.KnowledgeBaseID != kb.ID {
+		return nil, werrors.NewForbiddenError("无权操作该 FAQ 条目")
+	}
+	if chunk.ChunkType != types.ChunkTypeFAQ {
+		return nil, werrors.NewBadRequestError("仅支持更新 FAQ 条目")
+	}
+
+	// Get existing metadata
+	meta, err := chunk.FAQMetadata()
+	if err != nil || meta == nil {
+		return nil, werrors.NewBadRequestError("获取 FAQ 元数据失败")
+	}
+
+	// Deduplicate and sanitize new questions
+	existingSet := make(map[string]struct{})
+	for _, q := range meta.SimilarQuestions {
+		existingSet[q] = struct{}{}
+	}
+	// Also add standard question to prevent duplicates
+	existingSet[meta.StandardQuestion] = struct{}{}
+
+	newQuestions := make([]string, 0, len(questions))
+	for _, q := range questions {
+		q = strings.TrimSpace(q)
+		if q == "" {
+			continue
+		}
+		if _, exists := existingSet[q]; exists {
+			continue
+		}
+		existingSet[q] = struct{}{}
+		newQuestions = append(newQuestions, q)
+	}
+
+	if len(newQuestions) == 0 {
+		// No new questions to add, return current entry
+		tagSeqIDMap := make(map[string]int64)
+		if chunk.TagID != "" {
+			tag, tagErr := s.tagRepo.GetByID(ctx, tenantID, chunk.TagID)
+			if tagErr == nil && tag != nil {
+				tagSeqIDMap[tag.ID] = tag.SeqID
+			}
+		}
+		return s.chunkToFAQEntry(chunk, kb, tagSeqIDMap)
+	}
+
+	// Security check for new questions using CheckFAQContent
+	tempPayload := &types.FAQEntryPayload{
+		StandardQuestion: meta.StandardQuestion,
+		SimilarQuestions: newQuestions,
+		Answers:          meta.Answers,
+	}
+	blockStatus, checkErr := s.CheckFAQContent(ctx, tenantID, tempPayload)
+	if checkErr != nil {
+		logger.Warnf(ctx, "AddSimilarQuestions: security check error: %v", checkErr)
+	}
+	if blockStatus != 0 {
+		return nil, werrors.NewBadRequestError("相似问内容违规，请调整后重试")
+	}
+
+	// Check for duplicates with other entries
+	tempMeta := &types.FAQChunkMetadata{
+		StandardQuestion: meta.StandardQuestion,
+		SimilarQuestions: append(meta.SimilarQuestions, newQuestions...),
+	}
+	if err := s.checkFAQQuestionDuplicate(ctx, tenantID, kb.ID, chunk.ID, tempMeta); err != nil {
+		return nil, err
+	}
+
+	// Update metadata
+	oldSimilarQuestions := meta.SimilarQuestions
+	meta.SimilarQuestions = append(meta.SimilarQuestions, newQuestions...)
+	meta.Version++
+
+	if err := chunk.SetFAQMetadata(meta); err != nil {
+		return nil, err
+	}
+
+	// Update chunk content
+	indexMode := types.FAQIndexModeQuestionOnly
+	if kb.FAQConfig != nil && kb.FAQConfig.IndexMode != "" {
+		indexMode = kb.FAQConfig.IndexMode
+	}
+	chunk.Content = buildFAQChunkContent(meta, indexMode)
+	chunk.UpdatedAt = time.Now()
+
+	if err := s.chunkService.UpdateChunk(ctx, chunk); err != nil {
+		return nil, err
+	}
+
+	// Index new similar questions
+	faqKnowledge, err := s.repo.GetKnowledgeByID(ctx, tenantID, chunk.KnowledgeID)
+	if err != nil {
+		return nil, err
+	}
+
+	embeddingModel, err := s.modelService.GetEmbeddingModel(ctx, kb.EmbeddingModelID)
+	if err != nil {
+		return nil, err
+	}
+
+	questionIndexMode := types.FAQQuestionIndexModeCombined
+	if kb.FAQConfig != nil && kb.FAQConfig.QuestionIndexMode != "" {
+		questionIndexMode = kb.FAQConfig.QuestionIndexMode
+	}
+
+	if questionIndexMode == types.FAQQuestionIndexModeSeparate {
+		// Only index the new similar questions
+		if err := s.incrementalIndexFAQEntry(ctx, kb, faqKnowledge, chunk, embeddingModel,
+			meta.StandardQuestion, oldSimilarQuestions, meta.Answers, meta); err != nil {
+			return nil, err
+		}
+	} else {
+		// Combined mode, re-index the whole entry
+		if err := s.indexFAQChunks(ctx, kb, faqKnowledge, []*types.Chunk{chunk}, embeddingModel, false, false); err != nil {
+			return nil, err
+		}
+	}
+
+	// Build response
+	tagSeqIDMap := make(map[string]int64)
+	if chunk.TagID != "" {
+		tag, tagErr := s.tagRepo.GetByID(ctx, tenantID, chunk.TagID)
+		if tagErr == nil && tag != nil {
+			tagSeqIDMap[tag.ID] = tag.SeqID
+		}
+	}
+
+	entry, err := s.chunkToFAQEntry(chunk, kb, tagSeqIDMap)
+	if err != nil {
+		return nil, err
+	}
+
+	if chunk.TagID != "" {
+		tag, tagErr := s.tagRepo.GetByID(ctx, tenantID, chunk.TagID)
+		if tagErr == nil && tag != nil {
+			entry.TagName = tag.Name
+		}
+	}
+
+	return entry, nil
+}
+
 // UpdateFAQEntryStatus updates enable status for a FAQ entry.
 func (s *knowledgeService) UpdateFAQEntryStatus(ctx context.Context,
 	kbID string, entryID string, isEnabled bool,

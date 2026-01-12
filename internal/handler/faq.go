@@ -272,6 +272,11 @@ type faqEntryTagBatchRequest struct {
 	Updates map[int64]*int64 `json:"updates" binding:"required,min=1"`
 }
 
+// addSimilarQuestionsRequest is a request for adding similar questions to a FAQ entry
+type addSimilarQuestionsRequest struct {
+	SimilarQuestions []string `json:"similar_questions" binding:"required,min=1"`
+}
+
 // DeleteEntries godoc
 // @Summary      批量删除FAQ条目
 // @Description  批量删除指定的FAQ条目
@@ -482,5 +487,50 @@ func (h *FAQHandler) UpdateLastImportResultDisplayStatus(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
+	})
+}
+
+// AddSimilarQuestions godoc
+// @Summary      添加相似问
+// @Description  向指定的FAQ条目添加相似问题
+// @Tags         FAQ管理
+// @Accept       json
+// @Produce      json
+// @Param        id        path      string                      true  "知识库ID"
+// @Param        entry_id  path      int                         true  "FAQ条目ID(seq_id)"
+// @Param        request   body      addSimilarQuestionsRequest  true  "相似问列表"
+// @Success      200       {object}  map[string]interface{}      "更新后的FAQ条目"
+// @Failure      400       {object}  errors.AppError             "请求参数错误"
+// @Failure      404       {object}  errors.AppError             "条目不存在"
+// @Security     Bearer
+// @Security     ApiKeyAuth
+// @Router       /knowledge-bases/{id}/faq/entries/{entry_id}/similar-questions [post]
+func (h *FAQHandler) AddSimilarQuestions(c *gin.Context) {
+	ctx := c.Request.Context()
+	kbID := secutils.SanitizeForLog(c.Param("id"))
+
+	entrySeqID, err := strconv.ParseInt(c.Param("entry_id"), 10, 64)
+	if err != nil {
+		c.Error(errors.NewBadRequestError("entry_id 必须是整数"))
+		return
+	}
+
+	var req addSimilarQuestionsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		logger.Error(ctx, "Failed to bind add similar questions payload", err)
+		c.Error(errors.NewBadRequestError("请求参数不合法").WithDetails(err.Error()))
+		return
+	}
+
+	entry, err := h.knowledgeService.AddSimilarQuestions(ctx, kbID, entrySeqID, req.SimilarQuestions)
+	if err != nil {
+		logger.ErrorWithFields(ctx, err, nil)
+		c.Error(err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data":    entry,
 	})
 }
