@@ -1585,7 +1585,7 @@ const confirmDeleteTag = (tag: any) => {
     cancelBtn: t('common.cancel'),
     onConfirm: async () => {
       try {
-        await deleteKnowledgeBaseTag(props.kbId, tag.id, { force: true })
+        await deleteKnowledgeBaseTag(props.kbId, tag.seq_id, { force: true })
         MessagePlugin.success(t('knowledgeBase.tagDeleteSuccess'))
         if (selectedTagId.value === tag.seq_id) {
           // Reset to show all entries when current tag is deleted

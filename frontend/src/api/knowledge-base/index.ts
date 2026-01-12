@@ -129,9 +129,9 @@ export function updateKnowledgeBaseTag(
   return put(`/api/v1/knowledge-bases/${kbId}/tags/${tagId}`, data);
 }
 
-export function deleteKnowledgeBaseTag(kbId: string, tagId: string, params?: { force?: boolean }) {
+export function deleteKnowledgeBaseTag(kbId: string, tagSeqId: number, params?: { force?: boolean }) {
   const forceQuery = params?.force ? '?force=true' : '';
-  return del(`/api/v1/knowledge-bases/${kbId}/tags/${tagId}${forceQuery}`);
+  return del(`/api/v1/knowledge-bases/${kbId}/tags/${tagSeqId}${forceQuery}`);
 }
 
 export function updateKnowledgeTagBatch(data: { updates: Record<string, string | null> }) {
