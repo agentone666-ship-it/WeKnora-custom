@@ -157,57 +157,6 @@
         </div>
       </div>
 
-      <!-- 导入结果统计（持久化显示） -->
-      <div v-if="importResult && importResult.display_status === 'open' && !importState.taskId" class="faq-import-result-card">
-        <div class="import-result-content">
-          <div class="import-result-header">
-            <t-icon name="check-circle" size="18px" class="result-icon" />
-            <span class="result-title">最近导入结果</span>
-            <span class="result-time">{{ formatImportTime(importResult.imported_at) }}</span>
-          </div>
-          <div class="import-result-stats">
-            <div class="stat-item">
-              <span class="stat-label">导入数据</span>
-              <span class="stat-value">{{ importResult.total_entries }}条</span>
-            </div>
-            <div class="stat-item success">
-              <span class="stat-label">成功</span>
-              <span class="stat-value">{{ importResult.success_count }}条</span>
-            </div>
-            <div v-if="importResult.failed_count > 0" class="stat-item failed">
-              <span class="stat-label">失败</span>
-              <span class="stat-value">{{ importResult.failed_count }}条</span>
-              <t-button
-                v-if="importResult.failed_entries_url"
-                variant="text"
-                theme="primary"
-                size="small"
-                class="download-failed-btn"
-                @click="downloadFailedEntries"
-              >
-                下载原因
-              </t-button>
-            </div>
-            <div v-if="importResult.skipped_count > 0" class="stat-item skipped">
-              <span class="stat-label">跳过</span>
-              <span class="stat-value">{{ importResult.skipped_count }}条</span>
-            </div>
-          </div>
-          <div class="import-result-footer">
-            <span class="import-mode">{{ importResult.import_mode === 'append' ? '追加模式' : '替换模式' }}</span>
-            <t-button
-              variant="text"
-              theme="default"
-              size="small"
-              class="result-close-btn"
-              @click="closeImportResult"
-            >
-              <t-icon name="close" size="14px" />
-            </t-button>
-          </div>
-        </div>
-      </div>
-
       <div class="faq-main">
         <aside class="faq-tag-panel">
           <div class="sidebar-header">
@@ -618,57 +567,6 @@
           <div v-if="hasMore === false && entries.length > 0" class="faq-no-more">
             {{ $t('common.noMoreData') }}
           </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- 导入结果统计（持久化显示） -->
-      <div v-if="importResult && importResult.display_status === 'open' && !importState.taskId" class="faq-import-result-card">
-        <div class="import-result-content">
-          <div class="import-result-header">
-            <t-icon name="check-circle" size="18px" class="result-icon" />
-            <span class="result-title">最近导入结果</span>
-            <span class="result-time">{{ formatImportTime(importResult.imported_at) }}</span>
-          </div>
-          <div class="import-result-stats">
-            <div class="stat-item">
-              <span class="stat-label">导入数据</span>
-              <span class="stat-value">{{ importResult.total_entries }}条</span>
-            </div>
-            <div class="stat-item success">
-              <span class="stat-label">成功</span>
-              <span class="stat-value">{{ importResult.success_count }}条</span>
-            </div>
-            <div v-if="importResult.failed_count > 0" class="stat-item failed">
-              <span class="stat-label">失败</span>
-              <span class="stat-value">{{ importResult.failed_count }}条</span>
-              <t-button
-                v-if="importResult.failed_entries_url"
-                variant="text"
-                theme="primary"
-                size="small"
-                class="download-failed-btn"
-                @click="downloadFailedEntries"
-              >
-                下载原因
-              </t-button>
-            </div>
-            <div v-if="importResult.skipped_count > 0" class="stat-item skipped">
-              <span class="stat-label">跳过</span>
-              <span class="stat-value">{{ importResult.skipped_count }}条</span>
-            </div>
-          </div>
-          <div class="import-result-footer">
-            <span class="import-mode">{{ importResult.import_mode === 'append' ? '追加模式' : '替换模式' }}</span>
-            <t-button
-              variant="text"
-              theme="default"
-              size="small"
-              class="result-close-btn"
-              @click="closeImportResult"
-            >
-              <t-icon name="close" size="14px" />
-            </t-button>
           </div>
         </div>
       </div>
@@ -1234,57 +1132,6 @@
                 </div>
               </Transition>
             </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- 导入结果统计（持久化显示） -->
-      <div v-if="importResult && importResult.display_status === 'open' && !importState.taskId" class="faq-import-result-card">
-        <div class="import-result-content">
-          <div class="import-result-header">
-            <t-icon name="check-circle" size="18px" class="result-icon" />
-            <span class="result-title">最近导入结果</span>
-            <span class="result-time">{{ formatImportTime(importResult.imported_at) }}</span>
-          </div>
-          <div class="import-result-stats">
-            <div class="stat-item">
-              <span class="stat-label">导入数据</span>
-              <span class="stat-value">{{ importResult.total_entries }}条</span>
-            </div>
-            <div class="stat-item success">
-              <span class="stat-label">成功</span>
-              <span class="stat-value">{{ importResult.success_count }}条</span>
-            </div>
-            <div v-if="importResult.failed_count > 0" class="stat-item failed">
-              <span class="stat-label">失败</span>
-              <span class="stat-value">{{ importResult.failed_count }}条</span>
-              <t-button
-                v-if="importResult.failed_entries_url"
-                variant="text"
-                theme="primary"
-                size="small"
-                class="download-failed-btn"
-                @click="downloadFailedEntries"
-              >
-                下载原因
-              </t-button>
-            </div>
-            <div v-if="importResult.skipped_count > 0" class="stat-item skipped">
-              <span class="stat-label">跳过</span>
-              <span class="stat-value">{{ importResult.skipped_count }}条</span>
-            </div>
-          </div>
-          <div class="import-result-footer">
-            <span class="import-mode">{{ importResult.import_mode === 'append' ? '追加模式' : '替换模式' }}</span>
-            <t-button
-              variant="text"
-              theme="default"
-              size="small"
-              class="result-close-btn"
-              @click="closeImportResult"
-            >
-              <t-icon name="close" size="14px" />
-            </t-button>
           </div>
         </div>
       </div>
@@ -3839,6 +3686,118 @@ watch(() => entries.value.map(e => ({
   }
   to {
     transform: rotate(360deg);
+  }
+}
+
+// 导入结果统计卡片样式
+.faq-import-result-card {
+  margin-bottom: 16px;
+  background: linear-gradient(135deg, #f8fffe 0%, #f5fff9 100%);
+  border: 1px solid #d4f0e0;
+  border-radius: 10px;
+  padding: 14px 18px;
+  box-shadow: 0 2px 12px rgba(0, 168, 112, 0.08);
+
+  .import-result-content {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .import-result-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+
+    .result-icon {
+      color: #00a870;
+      flex-shrink: 0;
+    }
+
+    .result-title {
+      font-weight: 600;
+      color: #1d2129;
+    }
+
+    .result-time {
+      color: #86909c;
+      font-size: 13px;
+      margin-left: auto;
+    }
+  }
+
+  .import-result-stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    padding: 8px 0;
+
+    .stat-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+
+      .stat-label {
+        color: #86909c;
+      }
+
+      .stat-value {
+        font-weight: 500;
+        color: #1d2129;
+      }
+
+      &.success .stat-value {
+        color: #00a870;
+      }
+
+      &.failed .stat-value {
+        color: #fa5151;
+      }
+
+      &.skipped .stat-value {
+        color: #ff7d00;
+      }
+
+      .download-failed-btn {
+        padding: 0 4px;
+        height: auto;
+        font-size: 12px;
+        color: #165dff;
+
+        &:hover {
+          color: #4080ff;
+        }
+      }
+    }
+  }
+
+  .import-result-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-top: 8px;
+    border-top: 1px solid #e5e8eb;
+
+    .import-mode {
+      font-size: 12px;
+      color: #86909c;
+      background: rgba(0, 168, 112, 0.1);
+      padding: 2px 8px;
+      border-radius: 4px;
+    }
+
+    .result-close-btn {
+      padding: 4px;
+      border-radius: 4px;
+      color: #86909c;
+
+      &:hover {
+        background: rgba(0, 0, 0, 0.06);
+        color: #4e5969;
+      }
+    }
   }
 }
 
