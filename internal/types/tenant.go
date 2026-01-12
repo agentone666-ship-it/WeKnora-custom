@@ -29,6 +29,12 @@ var retrieverEngineMapping = map[string][]RetrieverEngineParams{
 	},
 }
 
+// GetRetrieverEngineMapping returns the retriever engine mapping
+// This allows other packages to access the driver capabilities
+func GetRetrieverEngineMapping() map[string][]RetrieverEngineParams {
+	return retrieverEngineMapping
+}
+
 // GetDefaultRetrieverEngines returns the default retriever engines based on RETRIEVE_DRIVER env
 func GetDefaultRetrieverEngines() []RetrieverEngineParams {
 	result := []RetrieverEngineParams{}
