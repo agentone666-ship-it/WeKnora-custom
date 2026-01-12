@@ -8,6 +8,7 @@ import (
 
 	"github.com/Tencent/WeKnora/internal/config"
 	"github.com/Tencent/WeKnora/internal/logger"
+	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/gin-gonic/gin"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
@@ -102,7 +103,7 @@ func (h *SystemHandler) getKeywordIndexEngine() string {
 	keywordEngines := []string{}
 	for _, driver := range drivers {
 		driver = strings.TrimSpace(driver)
-		if driver == "postgres" || driver == "elasticsearch_v7" || driver == "elasticsearch_v8" {
+		if h.supportsRetrieverType(driver, types.KeywordsRetrieverType) {
 			keywordEngines = append(keywordEngines, driver)
 		}
 	}
@@ -131,7 +132,7 @@ func (h *SystemHandler) getVectorStoreEngine() string {
 	vectorEngines := []string{}
 	for _, driver := range drivers {
 		driver = strings.TrimSpace(driver)
-		if driver == "postgres" || driver == "elasticsearch_v8" {
+		if h.supportsRetrieverType(driver, types.VectorRetrieverType) {
 			vectorEngines = append(vectorEngines, driver)
 		}
 	}
@@ -148,6 +149,27 @@ func (h *SystemHandler) getGraphDatabaseEngine() string {
 		return "未启用"
 	}
 	return "Neo4j"
+}
+
+// supportsRetrieverType checks if a driver supports a specific retriever type
+// by looking up the retrieverEngineMapping from types package
+func (h *SystemHandler) supportsRetrieverType(driver string, retrieverType types.RetrieverType) bool {
+	// Get the mapping of all supported drivers and their capabilities
+	mapping := types.GetRetrieverEngineMapping()
+
+	// Check if the driver exists in the mapping
+	engines, exists := mapping[driver]
+	if !exists {
+		return false
+	}
+
+	// Check if any of the engine configurations support the requested retriever type
+	for _, engine := range engines {
+		if engine.RetrieverType == retrieverType {
+			return true
+		}
+	}
+	return false
 }
 
 // isMinioEnabled checks if MinIO is enabled
