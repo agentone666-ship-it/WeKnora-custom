@@ -57,46 +57,88 @@ INIT_RERANK_MODEL_API_KEY=your_rerank_model_api_key
 
 2. 查看主服务日志，是否有`ERROR`日志输出
 
-## 4. 如何开启多模态功能？
-1. 确保 `.env` 如下配置被正确设置:
+## 4. 多模态功能显示无效的图片链接？
+
+当使用多模态功能时，如果遇到图片无法显示或显示无效链接的问题，请按照以下步骤排查：
+
+### 1. 确认多模态功能已正确配置
+
+在知识库设置中开启**高级设置 - 多模态功能**，并在界面中配置相应的多模态模型。
+
+### 2. 确认 MinIO 服务已启动
+
+如果多模态功能配置使用的是 MinIO 存储，需要确保 MinIO 镜像已正确启动：
+
 ```bash
-# VLM_MODEL_NAME 使用的多模态模型名称
-VLM_MODEL_NAME=your_vlm_model_name
+# 启动 MinIO 服务
+docker-compose --profile minio up -d
 
-# VLM_MODEL_BASE_URL 使用的多模态模型访问地址
-VLM_MODEL_BASE_URL=your_vlm_model_base_url
-
-# VLM_MODEL_API_KEY 使用的多模态模型API密钥
-VLM_MODEL_API_KEY=your_vlm_model_api_key
+# 或者启动完整服务（包括 MinIO、Jaeger、Neo4j、Qdrant）
+docker-compose --profile full up -d
 ```
-注：多模态大模型当前仅支持remote api访问，固需要提供`VLM_MODEL_BASE_URL`和`VLM_MODEL_API_KEY`
 
-2. 解析后的文件需要上传到COS中，确保 `.env` 中 `COS` 信息正确设置：
+### 3. 检查 MinIO Bucket 权限
+
+确保 MinIO 对应的 bucket 具有正确的读写权限：
+
+1. 访问 MinIO 控制台：`http://localhost:9001`（默认端口）
+2. 使用 `.env` 中配置的 `MINIO_ACCESS_KEY_ID` 和 `MINIO_SECRET_ACCESS_KEY` 登录
+3. 进入对应的 bucket，检查并设置访问策略为**公开读取**或**公开读写**
+
+**重要提示**：
+- Bucket 名称不要包含特殊字符（包括中文），建议使用小写字母、数字和连字符
+- 如果无法修改现有 bucket 的权限，可以在配置中填入一个不存在的 bucket 名称，本项目会自动创建对应的 bucket 并设置好正确的权限
+
+### 4. 配置 MINIO_PUBLIC_ENDPOINT
+
+在 `docker-compose.yml` 文件中，`MINIO_PUBLIC_ENDPOINT` 变量默认配置为 `http://localhost:9000`。
+
+**重要提示**：如果你需要从其他设备或容器访问图片，`localhost` 可能无法正常工作，需要将其替换为本机的实际 IP 地址：
+
+### 5. 验证配置
+
+完成以上配置后，重启相关服务：
+
 ```bash
-# 腾讯云COS的访问密钥ID
-COS_SECRET_ID=your_cos_secret_id
-
-# 腾讯云COS的密钥
-COS_SECRET_KEY=your_cos_secret_key
-
-# 腾讯云COS的区域，例如 ap-guangzhou
-COS_REGION=your_cos_region
-
-# 腾讯云COS的桶名称
-COS_BUCKET_NAME=your_cos_bucket_name
-
-# 腾讯云COS的应用ID
-COS_APP_ID=your_cos_app_id
-
-# 腾讯云COS的路径前缀，用于存储文件
-COS_PATH_PREFIX=your_cos_path_prefix
+docker-compose restart docreader app
 ```
-重要：务必将COS中文件的权限设置为**公有读**，否则文档解析模块无法正常解析文件
 
-3. 查看文档解析模块日志，查看OCR和Caption是否正确解析和打印
+然后查看文档解析模块日志，确认 OCR 和 Caption 是否正确解析：
+
+```bash
+docker-compose logs -f docreader
+```
 
 
-## 5. 如何使用数据分析功能？
+## 5. docreader 服务无法启动？
+
+如果 docreader 服务启动失败，日志中出现类似以下信息：
+
+```
+2026-01-12 xx:xx:xx.xxx [no-req-id] INFO __main__ | Initializing OCR engine with backend: paddle
+Initializing server logging
+```
+
+这通常是因为 PaddleOCR 启动失败导致的。
+
+### 解决方案
+
+在 `docker-compose.yml` 文件的 `docreader` 服务中，已经配置了 `OCR_BACKEND` 环境变量：
+
+```yaml
+environment:
+  - OCR_BACKEND=${OCR_BACKEND:-no_ocr}
+```
+
+然后重启 docreader 服务：
+
+```bash
+docker-compose restart docreader
+```
+
+**注意**：设置为 `no_ocr` 后，文档解析将不会使用 OCR 功能，这可能会影响图片和扫描文档的文字识别效果。
+
+## 6. 如何使用数据分析功能？
 
 在使用数据分析功能前，请确保智能体已配置相关工具：
 
