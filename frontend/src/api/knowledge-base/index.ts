@@ -215,6 +215,20 @@ export async function exportFAQEntries(kbId: string): Promise<Blob> {
 }
 
 // FAQ Import Progress API
+export interface FAQBlockedEntry {
+  index: number
+  standard_question: string
+  reason: string
+}
+
+export interface FAQSuccessEntry {
+  index: number
+  seq_id: number
+  tag_id?: number
+  tag_name?: string
+  standard_question: string
+}
+
 export interface FAQImportProgress {
   task_id: string
   kb_id: string
@@ -223,6 +237,9 @@ export interface FAQImportProgress {
   progress: number
   total: number
   processed: number
+  blocked: number
+  blocked_entries?: FAQBlockedEntry[]
+  success_entries?: FAQSuccessEntry[]
   message: string
   error: string
   created_at: number

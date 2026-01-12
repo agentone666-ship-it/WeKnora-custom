@@ -1386,6 +1386,13 @@ const importResult = ref<{
   task_id: string
   processing_time: number
   failed_entries_url?: string
+  success_entries?: Array<{
+    index: number
+    seq_id: number
+    tag_id?: number
+    tag_name?: string
+    standard_question: string
+  }>
   display_status: string
 } | null>(null)
 
@@ -2506,6 +2513,7 @@ const loadImportResult = async () => {
         imported_at: data.imported_at,
         task_id: data.task_id,
         failed_entries_url: data.failed_entries_url,
+        success_entries: data.success_entries,
         display_status: data.display_status || 'open',
         processing_time: data.processing_time || 0,
       }

@@ -238,6 +238,15 @@ type FAQFailedEntry struct {
 	IsDisabled        bool     `json:"is_disabled,omitempty"`        // 是否停用
 }
 
+// FAQSuccessEntry 表示导入成功的条目简单信息
+type FAQSuccessEntry struct {
+	Index            int    `json:"index"`              // 条目在批次中的索引（从0开始）
+	SeqID            int64  `json:"seq_id"`             // 导入后的条目序列ID
+	TagID            int64  `json:"tag_id,omitempty"`   // 分类ID（seq_id）
+	TagName          string `json:"tag_name,omitempty"` // 分类名称
+	StandardQuestion string `json:"standard_question"`  // 标准问题
+}
+
 // FAQDryRunResult 表示 dry_run 模式的验证结果
 type FAQDryRunResult struct {
 	TaskID        string           `json:"task_id,omitempty"` // 异步任务ID（异步模式时返回）
@@ -298,23 +307,25 @@ const (
 // FAQImportProgress represents the progress of an FAQ import task stored in Redis
 // When Status is "completed", the result fields (SkippedCount, ImportMode, ImportedAt, DisplayStatus, ProcessingTime) are populated.
 type FAQImportProgress struct {
-	TaskID           string              `json:"task_id"`                      // UUID for the import task
-	KBID             string              `json:"kb_id"`                        // Knowledge Base ID
-	KnowledgeID      string              `json:"knowledge_id"`                 // FAQ Knowledge ID
-	Status           FAQImportTaskStatus `json:"status"`                       // Task status
-	Progress         int                 `json:"progress"`                     // 0-100 percentage
-	Total            int                 `json:"total"`                        // Total entries to import
-	Processed        int                 `json:"processed"`                    // Entries processed so far
-	SuccessCount     int                 `json:"success_count"`                // 成功导入/验证通过的条目数
-	FailedCount      int                 `json:"failed_count"`                 // 失败的条目数
-	SkippedCount     int                 `json:"skipped_count,omitempty"`      // 跳过的条目数（如重复等）
-	FailedEntries    []FAQFailedEntry    `json:"failed_entries,omitempty"`     // 失败条目详情（少量时直接返回）
-	FailedEntriesURL string              `json:"failed_entries_url,omitempty"` // 失败条目CSV下载URL（大量时返回URL）
-	Message          string              `json:"message"`                      // Status message
-	Error            string              `json:"error"`                        // Error message if failed
-	CreatedAt        int64               `json:"created_at"`                   // Task creation timestamp
-	UpdatedAt        int64               `json:"updated_at"`                   // Last update timestamp
-	DryRun           bool                `json:"dry_run,omitempty"`            // 是否为 dry run 模式
+	TaskID            string              `json:"task_id"`                       // UUID for the import task
+	KBID              string              `json:"kb_id"`                         // Knowledge Base ID
+	KnowledgeID       string              `json:"knowledge_id"`                  // FAQ Knowledge ID
+	Status            FAQImportTaskStatus `json:"status"`                        // Task status
+	Progress          int                 `json:"progress"`                      // 0-100 percentage
+	Total             int                 `json:"total"`                         // Total entries to import
+	Processed         int                 `json:"processed"`                     // Entries processed so far
+	SuccessCount      int                 `json:"success_count"`                 // 成功导入/验证通过的条目数
+	FailedCount       int                 `json:"failed_count"`                  // 失败的条目数
+	SkippedCount      int                 `json:"skipped_count,omitempty"`       // 跳过的条目数（如重复等）
+	FailedEntries     []FAQFailedEntry    `json:"failed_entries,omitempty"`      // 失败条目详情（少量时直接返回）
+	FailedEntriesURL  string              `json:"failed_entries_url,omitempty"`  // 失败条目CSV下载URL（大量时返回URL）
+	SuccessEntries    []FAQSuccessEntry   `json:"success_entries,omitempty"`     // 成功条目简单信息（少量时直接返回）
+	ValidEntryIndices []int               `json:"valid_entry_indices,omitempty"` // 验证通过的条目索引（用于重试时跳过验证）
+	Message           string              `json:"message"`                       // Status message
+	Error             string              `json:"error"`                         // Error message if failed
+	CreatedAt         int64               `json:"created_at"`                    // Task creation timestamp
+	UpdatedAt         int64               `json:"updated_at"`                    // Last update timestamp
+	DryRun            bool                `json:"dry_run,omitempty"`             // 是否为 dry run 模式
 
 	// Result fields (populated when Status == "completed")
 	ImportMode     string    `json:"import_mode,omitempty"`     // 导入模式：append 或 replace
@@ -347,6 +358,9 @@ type FAQImportResult struct {
 
 	// 失败详情URL（失败条目较多时提供下载链接）
 	FailedEntriesURL string `json:"failed_entries_url,omitempty"` // 失败条目CSV下载URL
+
+	// 成功条目简单信息
+	SuccessEntries []FAQSuccessEntry `json:"success_entries,omitempty"` // 成功导入的条目简单信息
 
 	// 显示控制
 	DisplayStatus string `json:"display_status"` // 显示状态：open 或 close

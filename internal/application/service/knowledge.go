@@ -2945,6 +2945,11 @@ func (s *knowledgeService) saveFAQImportResultToDatabase(ctx context.Context,
 		importResult.FailedEntriesURL = progress.FailedEntriesURL
 	}
 
+	// 设置成功条目信息
+	if len(progress.SuccessEntries) > 0 {
+		importResult.SuccessEntries = progress.SuccessEntries
+	}
+
 	// 设置导入结果到Knowledge的metadata中
 	if err := knowledge.SetLastFAQImportResult(importResult); err != nil {
 		return fmt.Errorf("failed to set FAQ import result: %w", err)
@@ -3399,6 +3404,7 @@ func (s *knowledgeService) calculateReplaceOperations(ctx context.Context,
 // executeFAQImport 执行实际的FAQ导入逻辑
 func (s *knowledgeService) executeFAQImport(ctx context.Context, taskID string, kbID string,
 	payload *types.FAQBatchUpsertPayload, tenantID uint64, processedCount int,
+	progress *types.FAQImportProgress,
 ) (err error) {
 	// 保存知识库和embedding模型信息，用于清理索引
 	var kb *types.KnowledgeBase
@@ -3622,6 +3628,32 @@ func (s *knowledgeService) executeFAQImport(ctx context.Context, taskID string, 
 		}
 		if err := s.chunkService.UpdateChunks(ctx, chunksToUpdate); err != nil {
 			return fmt.Errorf("failed to update chunks status: %w", err)
+		}
+
+		// 收集成功条目信息
+		for idx, chunk := range chunks {
+			entryIdx := i + idx + processedCount // 原始条目索引
+			meta, _ := chunk.FAQMetadata()
+			standardQ := ""
+			if meta != nil {
+				standardQ = meta.StandardQuestion
+			}
+			// 获取 tag info
+			var tagID int64
+			tagName := ""
+			if chunk.TagID != "" {
+				if tag, err := s.tagRepo.GetByID(ctx, tenantID, chunk.TagID); err == nil && tag != nil {
+					tagID = tag.SeqID
+					tagName = tag.Name
+				}
+			}
+			progress.SuccessEntries = append(progress.SuccessEntries, types.FAQSuccessEntry{
+				Index:            entryIdx,
+				SeqID:            chunk.SeqID,
+				TagID:            tagID,
+				TagName:          tagName,
+				StandardQuestion: standardQ,
+			})
 		}
 
 		actualProcessed += len(batch)
@@ -4043,20 +4075,6 @@ func (s *knowledgeService) AddSimilarQuestions(ctx context.Context,
 			}
 		}
 		return s.chunkToFAQEntry(chunk, kb, tagSeqIDMap)
-	}
-
-	// Security check for new questions using CheckFAQContent
-	tempPayload := &types.FAQEntryPayload{
-		StandardQuestion: meta.StandardQuestion,
-		SimilarQuestions: newQuestions,
-		Answers:          meta.Answers,
-	}
-	blockStatus, checkErr := s.CheckFAQContent(ctx, tenantID, tempPayload)
-	if checkErr != nil {
-		logger.Warnf(ctx, "AddSimilarQuestions: security check error: %v", checkErr)
-	}
-	if blockStatus != 0 {
-		return nil, werrors.NewBadRequestError("相似问内容违规，请调整后重试")
 	}
 
 	// Check for duplicates with other entries
@@ -6191,28 +6209,47 @@ func (s *knowledgeService) ProcessFAQImport(ctx context.Context, t *asynq.Task) 
 
 	// 初始化进度
 	progress := &types.FAQImportProgress{
-		TaskID:        payload.TaskID,
-		KBID:          payload.KBID,
-		Status:        types.FAQImportStatusProcessing,
-		Progress:      0,
-		Total:         originalTotalEntries,
-		Processed:     0,
-		SuccessCount:  0,
-		FailedCount:   0,
-		FailedEntries: make([]types.FAQFailedEntry, 0),
-		Message:       "正在验证条目...",
-		CreatedAt:     time.Now().Unix(),
-		UpdatedAt:     time.Now().Unix(),
-		DryRun:        payload.DryRun,
+		TaskID:         payload.TaskID,
+		KBID:           payload.KBID,
+		KnowledgeID:    payload.KnowledgeID,
+		Status:         types.FAQImportStatusProcessing,
+		Progress:       0,
+		Total:          originalTotalEntries,
+		Processed:      0,
+		SuccessCount:   0,
+		FailedCount:    0,
+		FailedEntries:  make([]types.FAQFailedEntry, 0),
+		SuccessEntries: make([]types.FAQSuccessEntry, 0),
+		Message:        "正在验证条目...",
+		CreatedAt:      time.Now().Unix(),
+		UpdatedAt:      time.Now().Unix(),
+		DryRun:         payload.DryRun,
 	}
 	if err := s.saveFAQImportProgress(ctx, progress); err != nil {
 		logger.Warnf(ctx, "Failed to save initial FAQ import progress: %v", err)
 	}
 
-	// 第一步：执行验证（无论是 dry run 还是 import 模式都需要验证）
-	validEntryIndices := s.executeFAQDryRunValidation(ctx, &payload, progress)
-	logger.Infof(ctx, "FAQ validation completed: total=%d, valid=%d, failed=%d",
-		originalTotalEntries, len(validEntryIndices), progress.FailedCount)
+	// 检查是否已有验证结果（用于重试时跳过验证）
+	existingProgress, _ := s.GetFAQImportProgress(ctx, payload.TaskID)
+	var validEntryIndices []int
+	if existingProgress != nil && len(existingProgress.ValidEntryIndices) > 0 {
+		// 重试时直接使用之前的验证结果
+		validEntryIndices = existingProgress.ValidEntryIndices
+		progress.FailedCount = existingProgress.FailedCount
+		progress.FailedEntries = existingProgress.FailedEntries
+		logger.Infof(ctx, "Reusing previous validation result: valid=%d, failed=%d",
+			len(validEntryIndices), progress.FailedCount)
+	} else {
+		// 第一步：执行验证（无论是 dry run 还是 import 模式都需要验证）
+		validEntryIndices = s.executeFAQDryRunValidation(ctx, &payload, progress)
+		// 保存验证通过的索引，用于重试时跳过验证
+		progress.ValidEntryIndices = validEntryIndices
+		if err := s.saveFAQImportProgress(ctx, progress); err != nil {
+			logger.Warnf(ctx, "Failed to save validation result: %v", err)
+		}
+		logger.Infof(ctx, "FAQ validation completed: total=%d, valid=%d, failed=%d",
+			originalTotalEntries, len(validEntryIndices), progress.FailedCount)
+	}
 
 	// Dry run 模式：验证完成后直接返回结果
 	if payload.DryRun {
@@ -6261,8 +6298,7 @@ func (s *knowledgeService) ProcessFAQImport(ctx context.Context, t *asynq.Task) 
 		return fmt.Errorf("failed to get knowledge base: %w", err)
 	}
 
-	// 检查任务状态 - 幂等性处理（先检查Redis中的进度）
-	existingProgress, _ := s.GetFAQImportProgress(ctx, payload.TaskID)
+	// 检查任务状态 - 幂等性处理（复用之前获取的 existingProgress）
 	var processedCount int
 	if existingProgress != nil {
 		if existingProgress.Status == types.FAQImportStatusCompleted {
@@ -6327,7 +6363,7 @@ func (s *knowledgeService) ProcessFAQImport(ctx context.Context, t *asynq.Task) 
 	}
 
 	// 执行FAQ导入（传入已处理的偏移量，用于进度计算）
-	if err := s.executeFAQImport(ctx, payload.TaskID, payload.KBID, faqPayload, payload.TenantID, progress.FailedCount+processedCount); err != nil {
+	if err := s.executeFAQImport(ctx, payload.TaskID, payload.KBID, faqPayload, payload.TenantID, progress.FailedCount+processedCount, progress); err != nil {
 		logger.Errorf(ctx, "FAQ import task failed: %s, error: %v", payload.TaskID, err)
 		// 如果是最后一次重试，更新状态为失败
 		if isLastRetry {

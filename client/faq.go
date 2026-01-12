@@ -386,6 +386,15 @@ type FAQFailedEntry struct {
 	IsDisabled        bool     `json:"is_disabled,omitempty"`
 }
 
+// FAQSuccessEntry represents a successfully imported FAQ entry.
+type FAQSuccessEntry struct {
+	Index            int    `json:"index"`              // Entry index in the batch (0-based)
+	SeqID            int64  `json:"seq_id"`             // Entry sequence ID after import
+	TagID            int64  `json:"tag_id,omitempty"`   // Tag ID (seq_id)
+	TagName          string `json:"tag_name,omitempty"` // Tag name
+	StandardQuestion string `json:"standard_question"`  // Standard question
+}
+
 // FAQImportProgress represents the progress of an async FAQ import task.
 // When Status is "completed", the result fields (SkippedCount, ImportMode, ImportedAt, DisplayStatus, ProcessingTime) are populated.
 type FAQImportProgress struct {
@@ -399,8 +408,9 @@ type FAQImportProgress struct {
 	SuccessCount     int              `json:"success_count"`
 	FailedCount      int              `json:"failed_count"`
 	SkippedCount     int              `json:"skipped_count,omitempty"`
-	FailedEntries    []FAQFailedEntry `json:"failed_entries,omitempty"`
-	FailedEntriesURL string           `json:"failed_entries_url,omitempty"` // CSV download URL when too many failures
+	FailedEntries    []FAQFailedEntry  `json:"failed_entries,omitempty"`
+	SuccessEntries   []FAQSuccessEntry `json:"success_entries,omitempty"`   // Successfully imported entries (when count is small)
+	FailedEntriesURL string            `json:"failed_entries_url,omitempty"` // CSV download URL when too many failures
 	Message          string           `json:"message"`
 	Error            string           `json:"error,omitempty"`
 	CreatedAt        int64            `json:"created_at"`
