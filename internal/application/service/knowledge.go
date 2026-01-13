@@ -3513,14 +3513,6 @@ func (s *knowledgeService) executeFAQImport(ctx context.Context, taskID string, 
 				return fmt.Errorf("failed to delete chunk vectors: %w", err)
 			}
 			logger.Infof(ctx, "FAQ import task %s: deleted %d chunks (including updates)", taskID, len(chunksToDelete))
-
-			// 清理不再被引用的Tag
-			deletedTags, err := s.tagRepo.DeleteUnusedTags(ctx, tenantID, kb.ID)
-			if err != nil {
-				logger.Warnf(ctx, "FAQ import task %s: failed to cleanup unused tags: %v", taskID, err)
-			} else if deletedTags > 0 {
-				logger.Infof(ctx, "FAQ import task %s: cleaned up %d unused tags", taskID, deletedTags)
-			}
 		}
 	} else {
 		// Append模式：查询已存在的条目，跳过未变化的
@@ -6445,10 +6437,18 @@ func (s *knowledgeService) finalizeFAQValidation(ctx context.Context, payload *t
 		}
 	}
 
-	// 如果不是 dry run 模式，保存导入结果统计到数据库
+	// 如果不是 dry run 模式，保存导入结果统计到数据库，并清理未使用的 tag
 	if !payload.DryRun {
 		if err := s.saveFAQImportResultToDatabase(ctx, payload, progress, originalTotalEntries); err != nil {
 			logger.Warnf(ctx, "Failed to save FAQ import result to database: %v", err)
+		}
+
+		// 清理不再被引用的 Tag（无论是 append 还是 replace 模式都需要）
+		deletedTags, err := s.tagRepo.DeleteUnusedTags(ctx, payload.TenantID, payload.KBID)
+		if err != nil {
+			logger.Warnf(ctx, "FAQ import task %s: failed to cleanup unused tags: %v", payload.TaskID, err)
+		} else if deletedTags > 0 {
+			logger.Infof(ctx, "FAQ import task %s: cleaned up %d unused tags after import", payload.TaskID, deletedTags)
 		}
 	}
 
