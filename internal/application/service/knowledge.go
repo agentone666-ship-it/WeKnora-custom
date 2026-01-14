@@ -1462,7 +1462,14 @@ func (s *knowledgeService) getSummary(ctx context.Context,
 		if chunk.EndAt > 4096 {
 			break
 		}
-		chunkContents = string([]rune(chunkContents)[:chunk.StartAt]) + chunk.Content
+		// Ensure we don't slice beyond the current content length
+		runes := []rune(chunkContents)
+		if chunk.StartAt <= len(runes) {
+			chunkContents = string(runes[:chunk.StartAt]) + chunk.Content
+		} else {
+			// If StartAt is beyond current content, just append
+			chunkContents = chunkContents + chunk.Content
+		}
 		if chunk.ImageInfo != "" {
 			var images []*types.ImageInfo
 			if err := json.Unmarshal([]byte(chunk.ImageInfo), &images); err == nil {
