@@ -3310,6 +3310,19 @@ func (s *knowledgeService) calculateAppendOperations(ctx context.Context,
 func (s *knowledgeService) calculateReplaceOperations(ctx context.Context,
 	tenantID uint64, knowledgeID string, newEntries []types.FAQEntryPayload,
 ) ([]types.FAQEntryPayload, []*types.Chunk, int, error) {
+	// 获取 kbID 用于解析 tag
+	var kbID string
+	if len(newEntries) > 0 {
+		// 从 knowledgeID 获取 kbID
+		knowledge, err := s.repo.GetKnowledgeByID(ctx, tenantID, knowledgeID)
+		if err != nil {
+			return nil, nil, 0, fmt.Errorf("failed to get knowledge: %w", err)
+		}
+		if knowledge != nil {
+			kbID = knowledge.KnowledgeBaseID
+		}
+	}
+
 	// 计算所有新条目的 content hash，并同时构建 hash 到 entry 的映射
 	type entryWithHash struct {
 		entry types.FAQEntryPayload
@@ -3395,9 +3408,25 @@ func (s *knowledgeService) calculateReplaceOperations(ctx context.Context,
 	skippedCount := batchSkippedCount
 
 	for _, ewh := range entriesWithHash {
-		if existingHashMap[ewh.hash] != nil {
-			// hash匹配，说明内容完全相同，跳过（不需要删除和创建）
-			skippedCount++
+		existingChunk := existingHashMap[ewh.hash]
+		if existingChunk != nil {
+			// hash 匹配，检查 tag 是否变化
+			newTagID, err := s.resolveTagID(ctx, kbID, &ewh.entry)
+			if err != nil {
+				logger.Warnf(ctx, "Failed to resolve tag for entry, treating as new: %v", err)
+				entriesToProcess = append(entriesToProcess, ewh.entry)
+				continue
+			}
+
+			if existingChunk.TagID != newTagID {
+				// tag 变化了，需要删除旧的并创建新的
+				logger.Infof(ctx, "FAQ entry tag changed from %s to %s, will update", existingChunk.TagID, newTagID)
+				chunksToDelete = append(chunksToDelete, existingChunk)
+				entriesToProcess = append(entriesToProcess, ewh.entry)
+			} else {
+				// hash 和 tag 都相同，跳过
+				skippedCount++
+			}
 			continue
 		}
 
