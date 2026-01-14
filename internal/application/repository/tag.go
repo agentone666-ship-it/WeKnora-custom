@@ -122,7 +122,7 @@ func (r *knowledgeTagRepository) ListByKB(
 
 	var tags []*types.KnowledgeTag
 	if err := dataQuery.
-		Order("sort_order ASC, created_at ASC").
+		Order("sort_order ASC, created_at DESC").
 		Offset(page.Offset()).
 		Limit(page.Limit()).
 		Find(&tags).Error; err != nil {

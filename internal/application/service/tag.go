@@ -123,6 +123,10 @@ func (s *knowledgeTagService) CreateTag(
 	}
 
 	now := time.Now()
+	// "未分类" tag should have the lowest sort order to appear first
+	if name == types.UntaggedTagName {
+		sortOrder = -1
+	}
 	tag := &types.KnowledgeTag{
 		ID:              uuid.New().String(),
 		TenantID:        kb.TenantID,

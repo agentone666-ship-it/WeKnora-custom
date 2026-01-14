@@ -7034,13 +7034,18 @@ func (s *knowledgeService) getOrCreateTagInTarget(
 	}
 
 	// Create new tag in target KB
+	// "未分类" tag should have the lowest sort order to appear first
+	sortOrder := srcTag.SortOrder
+	if srcTag.Name == types.UntaggedTagName {
+		sortOrder = -1
+	}
 	newTag := &types.KnowledgeTag{
 		ID:              uuid.New().String(),
 		TenantID:        dstTenantID,
 		KnowledgeBaseID: dstKnowledgeBaseID,
 		Name:            srcTag.Name,
 		Color:           srcTag.Color,
-		SortOrder:       srcTag.SortOrder,
+		SortOrder:       sortOrder,
 		CreatedAt:       time.Now(),
 		UpdatedAt:       time.Now(),
 	}
