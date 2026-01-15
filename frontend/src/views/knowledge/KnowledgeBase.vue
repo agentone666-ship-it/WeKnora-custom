@@ -330,8 +330,9 @@ const confirmDeleteTag = (tag: any) => {
   if (editingTagId.value) {
     cancelEditTag();
   }
+  const deleteDescKey = isFAQ.value ? 'knowledgeBase.tagDeleteDesc' : 'knowledgeBase.tagDeleteDescDoc';
   const confirm = window.confirm(
-    t('knowledgeBase.tagDeleteDesc', { name: tag.name }) as string,
+    t(deleteDescKey, { name: tag.name }) as string,
   );
   if (!confirm) return;
   deleteKnowledgeBaseTag(kbId.value, tag.seq_id, { force: true })
@@ -343,7 +344,10 @@ const confirmDeleteTag = (tag: any) => {
         handleTagFilterChange('');
       }
       loadTags(kbId.value);
-      loadKnowledgeFiles(kbId.value);
+      // 由于后端是异步删除文档，延迟刷新以确保看到最新数据
+      setTimeout(() => {
+        loadKnowledgeFiles(kbId.value);
+      }, 500);
     })
     .catch((error: any) => {
       MessagePlugin.error(error?.message || t('common.operationFailed'));

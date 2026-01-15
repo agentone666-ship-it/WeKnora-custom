@@ -39,6 +39,7 @@ export default {
     tagEditSuccess: "标签更新成功",
     tagDeleteTitle: "删除标签",
     tagDeleteDesc: '确定删除标签"{name}"？该标签下的所有 FAQ 条目将被一并删除',
+    tagDeleteDescDoc: '确定删除标签"{name}"？该标签下的所有文档将被一并删除',
     tagDeleteSuccess: "标签已删除",
     tagEditAction: "重命名",
     tagDeleteAction: "删除",

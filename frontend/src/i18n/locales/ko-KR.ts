@@ -38,6 +38,7 @@ export default {
     tagEditSuccess: "태그 업데이트 성공",
     tagDeleteTitle: "태그 삭제",
     tagDeleteDesc: '"{name}" 태그를 삭제하시겠습니까? 해당 태그의 모든 FAQ 항목이 함께 삭제됩니다',
+    tagDeleteDescDoc: '"{name}" 태그를 삭제하시겠습니까? 해당 태그의 모든 문서가 함께 삭제됩니다',
     tagDeleteSuccess: "태그가 삭제되었습니다",
     tagEditAction: "이름 변경",
     tagDeleteAction: "삭제",

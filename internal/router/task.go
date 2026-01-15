@@ -88,6 +88,9 @@ func RunAsynqServer(params AsynqTaskParams) *asynq.ServeMux {
 	// Register KB clone handler
 	mux.HandleFunc(types.TypeKBClone, params.KnowledgeService.ProcessKBClone)
 
+	// Register knowledge list delete handler
+	mux.HandleFunc(types.TypeKnowledgeListDelete, params.KnowledgeService.ProcessKnowledgeListDelete)
+
 	// Register index delete handler
 	mux.HandleFunc(types.TypeIndexDelete, params.TagService.ProcessIndexDelete)
 

@@ -62,6 +62,8 @@ type KnowledgeService interface {
 	) (*types.PageResult, error)
 	// DeleteKnowledge deletes knowledge by ID.
 	DeleteKnowledge(ctx context.Context, id string) error
+	// DeleteKnowledgeList deletes multiple knowledge entries by IDs.
+	DeleteKnowledgeList(ctx context.Context, ids []string) error
 	// GetKnowledgeFile retrieves the file associated with the knowledge.
 	GetKnowledgeFile(ctx context.Context, id string) (io.ReadCloser, string, error)
 	// UpdateKnowledge updates knowledge information.
@@ -127,6 +129,8 @@ type KnowledgeService interface {
 	ProcessSummaryGeneration(ctx context.Context, t *asynq.Task) error
 	// ProcessKBClone handles Asynq knowledge base clone tasks
 	ProcessKBClone(ctx context.Context, t *asynq.Task) error
+	// ProcessKnowledgeListDelete handles Asynq knowledge list delete tasks
+	ProcessKnowledgeListDelete(ctx context.Context, t *asynq.Task) error
 	// GetKBCloneProgress retrieves the progress of a knowledge base clone task
 	GetKBCloneProgress(ctx context.Context, taskID string) (*types.KBCloneProgress, error)
 	// SaveKBCloneProgress saves the progress of a knowledge base clone task
@@ -178,4 +182,6 @@ type KnowledgeRepository interface {
 	// SearchKnowledge searches knowledge items by keyword across the tenant.
 	// fileTypes: optional list of file extensions to filter by (e.g., ["csv", "xlsx"])
 	SearchKnowledge(ctx context.Context, tenantID uint64, keyword string, offset, limit int, fileTypes []string) ([]*types.Knowledge, bool, error)
+	// ListIDsByTagID returns all knowledge IDs that have the specified tag ID.
+	ListIDsByTagID(ctx context.Context, tenantID uint64, kbID, tagID string) ([]string, error)
 }

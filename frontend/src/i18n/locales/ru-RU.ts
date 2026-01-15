@@ -38,6 +38,7 @@ export default {
     tagEditSuccess: 'Тег обновлён',
     tagDeleteTitle: 'Удаление тега',
     tagDeleteDesc: 'Удалить тег «{name}»? Все записи FAQ под этим тегом также будут удалены.',
+    tagDeleteDescDoc: 'Удалить тег «{name}»? Все документы под этим тегом также будут удалены.',
     tagDeleteSuccess: 'Тег удалён',
     tagEditAction: 'Переименовать',
     tagDeleteAction: 'Удалить',

@@ -7300,3 +7300,34 @@ func (s *knowledgeService) SearchKnowledge(ctx context.Context, keyword string, 
 	}
 	return s.repo.SearchKnowledge(ctx, tenantID, keyword, offset, limit, fileTypes)
 }
+
+// ProcessKnowledgeListDelete handles Asynq knowledge list delete tasks
+func (s *knowledgeService) ProcessKnowledgeListDelete(ctx context.Context, t *asynq.Task) error {
+	var payload types.KnowledgeListDeletePayload
+	if err := json.Unmarshal(t.Payload(), &payload); err != nil {
+		logger.Errorf(ctx, "Failed to unmarshal knowledge list delete payload: %v", err)
+		return err
+	}
+
+	logger.Infof(ctx, "Processing knowledge list delete task for %d knowledge items", len(payload.KnowledgeIDs))
+
+	// Get tenant info
+	tenant, err := s.tenantRepo.GetTenantByID(ctx, payload.TenantID)
+	if err != nil {
+		logger.Errorf(ctx, "Failed to get tenant %d: %v", payload.TenantID, err)
+		return err
+	}
+
+	// Set context values
+	ctx = context.WithValue(ctx, types.TenantIDContextKey, payload.TenantID)
+	ctx = context.WithValue(ctx, types.TenantInfoContextKey, tenant)
+
+	// Delete knowledge list
+	if err := s.DeleteKnowledgeList(ctx, payload.KnowledgeIDs); err != nil {
+		logger.Errorf(ctx, "Failed to delete knowledge list: %v", err)
+		return err
+	}
+
+	logger.Infof(ctx, "Successfully deleted %d knowledge items", len(payload.KnowledgeIDs))
+	return nil
+}

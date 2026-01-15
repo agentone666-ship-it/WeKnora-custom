@@ -401,3 +401,16 @@ func (r *knowledgeRepository) SearchKnowledge(
 	}
 	return knowledges, hasMore, nil
 }
+
+// ListIDsByTagID returns all knowledge IDs that have the specified tag ID
+func (r *knowledgeRepository) ListIDsByTagID(
+	ctx context.Context,
+	tenantID uint64,
+	kbID, tagID string,
+) ([]string, error) {
+	var ids []string
+	err := r.db.WithContext(ctx).Model(&types.Knowledge{}).
+		Where("tenant_id = ? AND knowledge_base_id = ? AND tag_id = ?", tenantID, kbID, tagID).
+		Pluck("id", &ids).Error
+	return ids, err
+}

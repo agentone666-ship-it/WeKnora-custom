@@ -39,6 +39,7 @@ export default {
     tagEditSuccess: 'Tag updated',
     tagDeleteTitle: 'Delete tag',
     tagDeleteDesc: 'Delete tag "{name}"? All FAQ entries under this tag will also be deleted.',
+    tagDeleteDescDoc: 'Delete tag "{name}"? All documents under this tag will also be deleted.',
     tagDeleteSuccess: 'Tag deleted',
     tagEditAction: 'Rename',
     tagDeleteAction: 'Delete',
