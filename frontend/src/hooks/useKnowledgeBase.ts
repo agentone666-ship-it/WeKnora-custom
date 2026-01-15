@@ -10,6 +10,7 @@ import {
   getKnowledgeDetailsCon,
 } from "@/api/knowledge-base/index";
 import { knowledgeStore } from "@/stores/knowledge";
+import { useUIStore } from "@/stores/ui";
 import { useRoute } from 'vue-router';
 
 const usemenuStore = knowledgeStore();
@@ -62,20 +63,27 @@ export default function (knowledgeBaseId?: string) {
       })
       .catch(() => {});
   };
-  const delKnowledge = (index: number, item: any) => {
+  const delKnowledge = (index: number, item: any, onSuccess?: () => void) => {
     cardList.value[index].isMore = false;
     moreIndex.value = -1;
-    delKnowledgeDetails(item.id)
+    return delKnowledgeDetails(item.id)
       .then((result: any) => {
         if (result.success) {
           MessagePlugin.info("知识删除成功！");
-          getKnowled();
+          if (onSuccess) {
+            onSuccess();
+          } else {
+            getKnowled();
+          }
+          return true;
         } else {
           MessagePlugin.error("知识删除失败！");
+          return false;
         }
       })
       .catch(() => {
         MessagePlugin.error("知识删除失败！");
+        return false;
       });
   };
   const openMore = (index: number) => {
@@ -110,7 +118,11 @@ export default function (knowledgeBaseId?: string) {
       return;
     }
     
-    uploadKnowledgeFile(currentKbId, { file })
+    // 获取当前选中的分类ID
+    const uiStore = useUIStore();
+    const tagIdToUpload = uiStore.selectedTagId !== '__untagged__' ? uiStore.selectedTagId : undefined;
+    
+    uploadKnowledgeFile(currentKbId, { file, tag_id: tagIdToUpload })
       .then((result: any) => {
         if (result.success) {
           MessagePlugin.info("上传成功！");

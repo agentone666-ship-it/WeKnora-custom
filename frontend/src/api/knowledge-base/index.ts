@@ -40,15 +40,24 @@ export function copyKnowledgeBase(data: { source_id: string; target_id?: string 
 }
 
 // 知识文件 API（基于具体知识库）
-export function uploadKnowledgeFile(kbId: string, data = {}, onProgress?: (progressEvent: any) => void) {
-  return postUpload(`/api/v1/knowledge-bases/${kbId}/knowledge/file`, data, onProgress);
+// data.tag_id: 可选，指定知识所属的分类ID
+export function uploadKnowledgeFile(kbId: string, data: { file: File; tag_id?: string; [key: string]: any } = { file: new File([], '') }, onProgress?: (progressEvent: any) => void) {
+  const formData = new FormData();
+  Object.keys(data).forEach(key => {
+    if (data[key] !== undefined) formData.append(key, data[key]);
+  });
+  return postUpload(`/api/v1/knowledge-bases/${kbId}/knowledge/file`, formData, onProgress);
 }
 
-export function createKnowledgeFromURL(kbId: string, data: { url: string; enable_multimodel?: boolean }) {
+// 从URL创建知识
+// data.tag_id: 可选，指定知识所属的分类ID
+export function createKnowledgeFromURL(kbId: string, data: { url: string; enable_multimodel?: boolean; tag_id?: string }) {
   return post(`/api/v1/knowledge-bases/${kbId}/knowledge/url`, data);
 }
 
-export function createManualKnowledge(kbId: string, data: { title: string; content: string; status: string }) {
+// 手工创建知识
+// data.tag_id: 可选，指定知识所属的分类ID
+export function createManualKnowledge(kbId: string, data: { title: string; content: string; status: string; tag_id?: string }) {
   return post(`/api/v1/knowledge-bases/${kbId}/knowledge/manual`, data);
 }
 
