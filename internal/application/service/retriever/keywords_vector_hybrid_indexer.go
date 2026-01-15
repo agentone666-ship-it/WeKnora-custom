@@ -10,6 +10,7 @@ import (
 	"github.com/Tencent/WeKnora/internal/models/utils"
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
+	"golang.org/x/sync/errgroup"
 )
 
 // KeywordsVectorHybridRetrieveEngineService implements a hybrid retrieval engine
@@ -58,7 +59,7 @@ func (v *KeywordsVectorHybridRetrieveEngineService) Index(ctx context.Context,
 }
 
 // BatchIndex creates embeddings for multiple content items and saves them to the repository
-// in batches for efficiency
+// in batches for efficiency. Uses concurrent batch saving to improve performance.
 func (v *KeywordsVectorHybridRetrieveEngineService) BatchIndex(ctx context.Context,
 	embedder embedding.Embedder, indexInfoList []*types.IndexInfo, retrieverTypes []types.RetrieverType,
 ) error {
@@ -85,30 +86,123 @@ func (v *KeywordsVectorHybridRetrieveEngineService) BatchIndex(ctx context.Conte
 		if err != nil {
 			return err
 		}
+
 		batchSize := 40
-		for i, indexChunk := range utils.ChunkSlice(indexInfoList, batchSize) {
+		chunks := utils.ChunkSlice(indexInfoList, batchSize)
+
+		// Use concurrent batch saving for better performance
+		// Limit concurrency to avoid overwhelming the backend
+		const maxConcurrency = 5
+		if len(chunks) <= maxConcurrency {
+			// For small number of batches, use simple concurrency
+			return v.concurrentBatchSave(ctx, chunks, embeddings, batchSize)
+		}
+
+		// For large number of batches, use bounded concurrency
+		return v.boundedConcurrentBatchSave(ctx, chunks, embeddings, batchSize, maxConcurrency)
+	}
+
+	// For non-vector retrieval, use concurrent batch saving as well
+	chunks := utils.ChunkSlice(indexInfoList, 10)
+	const maxConcurrency = 5
+	if len(chunks) <= maxConcurrency {
+		return v.concurrentBatchSaveNoEmbedding(ctx, chunks)
+	}
+	return v.boundedConcurrentBatchSaveNoEmbedding(ctx, chunks, maxConcurrency)
+}
+
+// concurrentBatchSave saves all batches concurrently without concurrency limit
+func (v *KeywordsVectorHybridRetrieveEngineService) concurrentBatchSave(
+	ctx context.Context,
+	chunks [][]*types.IndexInfo,
+	embeddings [][]float32,
+	batchSize int,
+) error {
+	g, ctx := errgroup.WithContext(ctx)
+	for i, indexChunk := range chunks {
+		g.Go(func() error {
 			params := make(map[string]any)
 			embeddingMap := make(map[string][]float32)
 			for j, indexInfo := range indexChunk {
 				embeddingMap[indexInfo.SourceID] = embeddings[i*batchSize+j]
 			}
 			params["embedding"] = embeddingMap
-			err = v.indexRepository.BatchSave(ctx, indexChunk, params)
-			if err != nil {
-				return err
+			return v.indexRepository.BatchSave(ctx, indexChunk, params)
+		})
+	}
+	return g.Wait()
+}
+
+// boundedConcurrentBatchSave saves batches with bounded concurrency using semaphore pattern
+func (v *KeywordsVectorHybridRetrieveEngineService) boundedConcurrentBatchSave(
+	ctx context.Context,
+	chunks [][]*types.IndexInfo,
+	embeddings [][]float32,
+	batchSize int,
+	maxConcurrency int,
+) error {
+	g, ctx := errgroup.WithContext(ctx)
+	sem := make(chan struct{}, maxConcurrency)
+
+	for i, indexChunk := range chunks {
+		g.Go(func() error {
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				return ctx.Err()
 			}
-		}
-		return nil
+
+			params := make(map[string]any)
+			embeddingMap := make(map[string][]float32)
+			for j, indexInfo := range indexChunk {
+				embeddingMap[indexInfo.SourceID] = embeddings[i*batchSize+j]
+			}
+			params["embedding"] = embeddingMap
+			return v.indexRepository.BatchSave(ctx, indexChunk, params)
+		})
 	}
-	var err error
-	for _, indexChunk := range utils.ChunkSlice(indexInfoList, 10) {
-		params := make(map[string]any)
-		err = v.indexRepository.BatchSave(ctx, indexChunk, params)
-		if err != nil {
-			return err
-		}
+	return g.Wait()
+}
+
+// concurrentBatchSaveNoEmbedding saves all batches concurrently without embeddings
+func (v *KeywordsVectorHybridRetrieveEngineService) concurrentBatchSaveNoEmbedding(
+	ctx context.Context,
+	chunks [][]*types.IndexInfo,
+) error {
+	g, ctx := errgroup.WithContext(ctx)
+	for _, indexChunk := range chunks {
+		g.Go(func() error {
+			params := make(map[string]any)
+			return v.indexRepository.BatchSave(ctx, indexChunk, params)
+		})
 	}
-	return nil
+	return g.Wait()
+}
+
+// boundedConcurrentBatchSaveNoEmbedding saves batches with bounded concurrency without embeddings
+func (v *KeywordsVectorHybridRetrieveEngineService) boundedConcurrentBatchSaveNoEmbedding(
+	ctx context.Context,
+	chunks [][]*types.IndexInfo,
+	maxConcurrency int,
+) error {
+	g, ctx := errgroup.WithContext(ctx)
+	sem := make(chan struct{}, maxConcurrency)
+
+	for _, indexChunk := range chunks {
+		g.Go(func() error {
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+
+			params := make(map[string]any)
+			return v.indexRepository.BatchSave(ctx, indexChunk, params)
+		})
+	}
+	return g.Wait()
 }
 
 // DeleteByChunkIDList deletes vectors by their chunk IDs

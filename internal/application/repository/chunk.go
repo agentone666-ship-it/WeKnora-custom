@@ -44,6 +44,18 @@ func (r *chunkRepository) GetChunkByID(ctx context.Context, tenantID uint64, id 
 	return &chunk, nil
 }
 
+// GetChunkBySeqID retrieves a chunk by its seq_id and tenant ID
+func (r *chunkRepository) GetChunkBySeqID(ctx context.Context, tenantID uint64, seqID int64) (*types.Chunk, error) {
+	var chunk types.Chunk
+	if err := r.db.WithContext(ctx).Where("tenant_id = ? AND seq_id = ?", tenantID, seqID).First(&chunk).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New("chunk not found")
+		}
+		return nil, err
+	}
+	return &chunk, nil
+}
+
 // ListChunksByID retrieves multiple chunks by their IDs
 func (r *chunkRepository) ListChunksByID(
 	ctx context.Context, tenantID uint64, ids []string,
@@ -51,6 +63,22 @@ func (r *chunkRepository) ListChunksByID(
 	var chunks []*types.Chunk
 	if err := r.db.WithContext(ctx).
 		Where("tenant_id = ? AND id IN ?", tenantID, ids).
+		Find(&chunks).Error; err != nil {
+		return nil, err
+	}
+	return chunks, nil
+}
+
+// ListChunksBySeqID retrieves multiple chunks by their seq_ids
+func (r *chunkRepository) ListChunksBySeqID(
+	ctx context.Context, tenantID uint64, seqIDs []int64,
+) ([]*types.Chunk, error) {
+	if len(seqIDs) == 0 {
+		return []*types.Chunk{}, nil
+	}
+	var chunks []*types.Chunk
+	if err := r.db.WithContext(ctx).
+		Where("tenant_id = ? AND seq_id IN ?", tenantID, seqIDs).
 		Find(&chunks).Error; err != nil {
 		return nil, err
 	}
@@ -91,10 +119,7 @@ func (r *chunkRepository) ListPagedChunksByKnowledgeID(
 	baseFilter := func(db *gorm.DB) *gorm.DB {
 		db = db.Where("tenant_id = ? AND knowledge_id = ? AND chunk_type IN (?) AND status in (?)",
 			tenantID, knowledgeID, chunkType, []int{int(types.ChunkStatusIndexed), int(types.ChunkStatusDefault)})
-		if tagID == types.UntaggedTagID {
-			// Special value to filter entries without a tag
-			db = db.Where("tag_id = ''")
-		} else if tagID != "" {
+		if tagID != "" {
 			db = db.Where("tag_id = ?", tagID)
 		}
 		if keyword != "" {
@@ -640,9 +665,7 @@ func (r *chunkRepository) UpdateChunkFieldsByTagID(
 			Select("id").
 			Where("tenant_id = ? AND knowledge_base_id = ? AND chunk_type = ?",
 				tenantID, kbID, types.ChunkTypeFAQ)
-		if tagID == "" || tagID == types.UntaggedTagID {
-			query = query.Where("(tag_id = '' OR tag_id IS NULL)")
-		} else {
+		if tagID != "" {
 			query = query.Where("tag_id = ?", tagID)
 		}
 
@@ -669,22 +692,16 @@ func (r *chunkRepository) UpdateChunkFieldsByTagID(
 		updates["is_enabled"] = *isEnabled
 	}
 
-	// Handle newTagID update (__untagged__ is stored as empty string)
+	// Handle newTagID update
 	if newTagID != nil {
-		if *newTagID == types.UntaggedTagID || *newTagID == "" {
-			updates["tag_id"] = ""
-		} else {
-			updates["tag_id"] = *newTagID
-		}
+		updates["tag_id"] = *newTagID
 	}
 
 	query := r.db.WithContext(ctx).Model(&types.Chunk{}).
 		Where("tenant_id = ? AND knowledge_base_id = ? AND chunk_type = ?",
 			tenantID, kbID, types.ChunkTypeFAQ)
 
-	if tagID == "" || tagID == types.UntaggedTagID {
-		query = query.Where("(tag_id = '' OR tag_id IS NULL)")
-	} else {
+	if tagID != "" {
 		query = query.Where("tag_id = ?", tagID)
 	}
 

@@ -8,6 +8,8 @@ import "time"
 type KnowledgeTag struct {
 	// Unique identifier of the tag (UUID)
 	ID string `json:"id"                gorm:"type:varchar(36);primaryKey"`
+	// SeqID is an auto-increment integer ID for external API usage
+	SeqID int64 `json:"seq_id"            gorm:"type:bigint;uniqueIndex;autoIncrement"`
 	// Tenant ID
 	TenantID uint64 `json:"tenant_id"`
 	// Knowledge base ID that this tag belongs to

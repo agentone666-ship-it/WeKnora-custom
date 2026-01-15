@@ -54,6 +54,66 @@
         </div>
       </div>
 
+      <!-- 导入结果统计（持久化显示） -->
+      <div v-if="importResult && importResult.display_status === 'open' && !importState.taskId" class="faq-import-result-card">
+        <div class="import-result-content">
+          <div class="import-result-header">
+            <div class="header-left">
+              <t-icon name="check-circle-filled" size="20px" class="result-icon" />
+              <span class="result-title">最近导入结果</span>
+            </div>
+            <div class="header-right">
+              <span class="result-time">{{ formatImportTime(importResult.imported_at) }}</span>
+              <t-button
+                variant="text"
+                theme="default"
+                size="small"
+                class="result-close-btn"
+                @click="closeImportResult"
+              >
+                <t-icon name="close" size="16px" />
+              </t-button>
+            </div>
+          </div>
+          <div class="import-result-body">
+            <div class="import-result-stats">
+              <div class="stat-item">
+                <span class="stat-label">导入数据</span>
+                <span class="stat-value">{{ importResult.total_entries }}条</span>
+              </div>
+              <div class="stat-item success">
+                <span class="stat-label">成功</span>
+                <span class="stat-value">{{ importResult.success_count }}条</span>
+              </div>
+              <div v-if="importResult.failed_count > 0" class="stat-item failed">
+                <span class="stat-label">失败</span>
+                <span class="stat-value">{{ importResult.failed_count }}条</span>
+                <t-button
+                  v-if="importResult.failed_entries_url"
+                  variant="outline"
+                  theme="danger"
+                  size="small"
+                  class="download-failed-btn"
+                  @click="downloadFailedEntries"
+                >
+                  <t-icon name="download" size="14px" />
+                  下载原因
+                </t-button>
+              </div>
+              <div v-if="importResult.skipped_count > 0" class="stat-item skipped">
+                <span class="stat-label">跳过</span>
+                <span class="stat-value">{{ importResult.skipped_count }}条</span>
+              </div>
+            </div>
+            <div class="import-mode-tag">
+              <t-tag size="small" variant="light" theme="success">
+                {{ importResult.import_mode === 'append' ? '追加模式' : '替换模式' }}
+              </t-tag>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- 导入进度条（显示在列表页面顶部） -->
       <div v-if="importState.taskId && importState.taskStatus" class="faq-import-progress-bar">
         <div class="progress-bar-content">
@@ -183,16 +243,12 @@
                   v-for="tag in filteredTags"
                   :key="tag.id"
                   class="faq-tag-item"
-                  :class="{ active: selectedTagId === tag.id, editing: editingTagId === tag.id && tag.id !== UNTAGGED_FILTER }"
-                  @click="tag.id === UNTAGGED_FILTER ? handleUntaggedClick() : handleTagRowClick(tag.id)"
+                  :class="{ active: selectedTagId === tag.seq_id, editing: editingTagId === tag.id }"
+                  @click="handleTagRowClick(tag.seq_id)"
                 >
                   <div class="faq-tag-left">
                     <t-icon name="folder" size="18px" />
-                    <!-- Untagged pseudo-tag: show translated name, no editing -->
-                    <template v-if="tag.id === UNTAGGED_FILTER">
-                      <span class="tag-name">{{ $t('knowledgeBase.untagged') }}</span>
-                    </template>
-                    <template v-else-if="editingTagId === tag.id">
+                    <template v-if="editingTagId === tag.id">
                       <div class="tag-edit-input" @click.stop>
                         <t-input
                           :ref="setEditingTagInputRefByTag(tag.id)"
@@ -210,11 +266,7 @@
                   </div>
                   <div class="faq-tag-right">
                     <span class="faq-tag-count">{{ tag.chunk_count || 0 }}</span>
-                    <!-- Untagged pseudo-tag: no edit/delete actions, just a placeholder -->
-                    <template v-if="tag.id === UNTAGGED_FILTER">
-                      <div class="tag-more-placeholder"></div>
-                    </template>
-                    <template v-else-if="editingTagId === tag.id">
+                    <template v-if="editingTagId === tag.id">
                       <div class="tag-inline-actions" @click.stop>
                         <t-button
                           variant="text"
@@ -1120,6 +1172,7 @@ import {
   getKnowledgeBaseById,
   listKnowledgeBases,
   getFAQImportProgress,
+  updateFAQImportResultDisplayStatus,
 } from '@/api/knowledge-base'
 import * as XLSX from 'xlsx'
 import Papa from 'papaparse'
@@ -1127,11 +1180,11 @@ import FAQTagTooltip from '@/components/FAQTagTooltip.vue'
 import { useUIStore } from '@/stores/ui'
 
 interface FAQEntry {
-  id: string
+  id: number
   chunk_id: string
   knowledge_id: string
   knowledge_base_id: string
-  tag_id?: string
+  tag_id?: number
   is_enabled: boolean
   is_recommended: boolean
   standard_question: string
@@ -1153,7 +1206,7 @@ interface FAQEntryPayload {
   similar_questions: string[]
   negative_questions: string[]
   answers: string[]
-  tag_id?: string
+  tag_id?: number
   tag_name?: string
   is_enabled?: boolean
   is_recommended?: boolean
@@ -1170,9 +1223,9 @@ const uiStore = useUIStore()
 const loading = ref(false)
 const loadingMore = ref(false)
 const entries = ref<FAQEntry[]>([])
-const entryStatusLoading = reactive<Record<string, boolean>>({})
-const entryRecommendedLoading = reactive<Record<string, boolean>>({})
-const selectedRowKeys = ref<string[]>([])
+const entryStatusLoading = reactive<Record<number, boolean>>({})
+const entryRecommendedLoading = reactive<Record<number, boolean>>({})
+const selectedRowKeys = ref<number[]>([])
 const scrollContainer = ref<HTMLElement | null>(null)
 const cardListRef = ref<HTMLElement | null>(null)
 const hasMore = ref(true)
@@ -1185,9 +1238,8 @@ type TagInputInstance = ComponentPublicInstance<{ focus: () => void; select: () 
 const tagList = ref<any[]>([])
 const tagLoading = ref(false)
 const tagListRef = ref<HTMLElement | null>(null)
-// Special value to represent "untagged" filter - must match backend constant
-const UNTAGGED_FILTER = '__untagged__'
-const selectedTagId = ref<string>(UNTAGGED_FILTER)
+// Selected tag seq_id for filtering (0 means show all)
+const selectedTagId = ref<number>(0)
 const overallFAQTotal = ref(0)
 const tagSearchQuery = ref('')
 const TAG_PAGE_SIZE = 20
@@ -1214,23 +1266,30 @@ const newTagName = ref('')
 const editingTagId = ref<string | null>(null)
 const editingTagName = ref('')
 const editingTagSubmitting = ref(false)
-const tagMap = computed<Record<string, any>>(() => {
+// tagMap uses seq_id as key for looking up by entry.tag_id
+const tagMap = computed<Record<number, any>>(() => {
+  const map: Record<number, any> = {}
+  tagList.value.forEach((tag) => {
+    map[tag.seq_id] = tag
+  })
+  return map
+})
+// tagMapById uses UUID as key for editing operations
+const tagMapById = computed<Record<string, any>>(() => {
   const map: Record<string, any> = {}
   tagList.value.forEach((tag) => {
     map[tag.id] = tag
   })
   return map
 })
-// Filter out the __untagged__ pseudo-tag for tag select options (when assigning tags)
-const regularTags = computed(() => tagList.value.filter((tag) => tag.id !== UNTAGGED_FILTER))
-const tagDropdownOptions = computed(() => [
-  { content: t('knowledgeBase.untagged') || '未分类', value: '' },
-  ...regularTags.value.map((tag: any) => ({ content: tag.name, value: tag.id })),
-])
-const tagSelectOptions = computed(() => [
-  { label: t('knowledgeBase.untagged') || '未分类', value: '' },
-  ...regularTags.value.map((tag: any) => ({ label: tag.name, value: tag.id })),
-])
+// All tags are now regular tags (no pseudo-tag)
+const regularTags = computed(() => tagList.value)
+const tagDropdownOptions = computed(() =>
+  regularTags.value.map((tag: any) => ({ content: tag.name, value: String(tag.seq_id) })),
+)
+const tagSelectOptions = computed(() =>
+  regularTags.value.map((tag: any) => ({ label: tag.name, value: tag.seq_id })),
+)
 const sidebarCategoryCount = computed(() => tagList.value.length)
 const filteredTags = computed(() => {
   const query = tagSearchQuery.value.trim().toLowerCase()
@@ -1282,13 +1341,13 @@ const loadKnowledgeList = async () => {
 
 const editorVisible = ref(false)
 const editorMode = ref<'create' | 'edit'>('create')
-const currentEntryId = ref<string | null>(null)
+const currentEntryId = ref<number | null>(null)
 const editorForm = reactive<FAQEntryPayload>({
   standard_question: '',
   similar_questions: [],
   negative_questions: [],
   answers: [],
-  tag_id: '',
+  tag_id: undefined,
 })
 const editorFormRef = ref<FormInstanceFunctions>()
 const savingEntry = ref(false)
@@ -1315,6 +1374,27 @@ const importState = reactive({
   } | null,
   pollingInterval: null as ReturnType<typeof setInterval> | null,
 })
+
+// FAQ导入结果状态（持久化的）
+const importResult = ref<{
+  total_entries: number
+  success_count: number
+  failed_count: number
+  skipped_count: number
+  import_mode: string
+  imported_at: string
+  task_id: string
+  processing_time: number
+  failed_entries_url?: string
+  success_entries?: Array<{
+    index: number
+    seq_id: number
+    tag_id?: number
+    tag_name?: string
+    standard_question: string
+  }>
+  display_status: string
+} | null>(null)
 
 // Search test state
 const searchDrawerVisible = ref(false)
@@ -1395,38 +1475,26 @@ const loadTags = async (reset = false) => {
   }
 }
 
-const getTagName = (tagId?: string) => {
+const getTagName = (tagId?: number) => {
   if (!tagId) return t('knowledgeBase.untagged') || '未分类'
   return tagMap.value[tagId]?.name || (t('knowledgeBase.untagged') || '未分类')
 }
 
-const handleTagFilterChange = (value: string) => {
+const handleTagFilterChange = (value: number) => {
   selectedTagId.value = value
 }
 
-const handleTagRowClick = (tagId: string) => {
-  const normalizedId = String(tagId)
-  if (editingTagId.value && editingTagId.value !== normalizedId) {
-    cancelEditTag()
-  }
-  if (creatingTag.value) {
-    cancelCreateTag()
-  }
-  if (selectedTagId.value === normalizedId) {
-    return
-  }
-  handleTagFilterChange(normalizedId)
-}
-
-const handleUntaggedClick = () => {
-  if (creatingTag.value) {
-    cancelCreateTag()
-  }
+const handleTagRowClick = (tagSeqId: number) => {
   if (editingTagId.value) {
     cancelEditTag()
   }
-  if (selectedTagId.value === UNTAGGED_FILTER) return
-  handleTagFilterChange(UNTAGGED_FILTER)
+  if (creatingTag.value) {
+    cancelCreateTag()
+  }
+  if (selectedTagId.value === tagSeqId) {
+    return
+  }
+  handleTagFilterChange(tagSeqId)
 }
 
 const startCreateTag = () => {
@@ -1498,7 +1566,7 @@ const submitEditTag = async () => {
     MessagePlugin.warning(t('knowledgeBase.tagNameRequired'))
     return
   }
-  if (name === tagMap.value[editingTagId.value]?.name) {
+  if (name === tagMapById.value[editingTagId.value]?.name) {
     cancelEditTag()
     return
   }
@@ -1533,10 +1601,12 @@ const confirmDeleteTag = (tag: any) => {
     cancelBtn: t('common.cancel'),
     onConfirm: async () => {
       try {
-        await deleteKnowledgeBaseTag(props.kbId, tag.id, { force: true })
+        await deleteKnowledgeBaseTag(props.kbId, tag.seq_id, { force: true })
         MessagePlugin.success(t('knowledgeBase.tagDeleteSuccess'))
-        if (selectedTagId.value === tag.id) {
-          handleTagFilterChange(UNTAGGED_FILTER)
+        if (selectedTagId.value === tag.seq_id) {
+          // Reset to show all entries when current tag is deleted
+          selectedTagId.value = 0
+          handleTagFilterChange(0)
         }
         await loadTags()
         await loadEntries()
@@ -1548,16 +1618,16 @@ const confirmDeleteTag = (tag: any) => {
   })
 }
 
-const handleEntryTagChange = async (entryId: string, value?: string) => {
+const handleEntryTagChange = async (entryId: number, value?: string) => {
   if (!props.kbId) return
   const targetEntry = entries.value.find((item) => item.id === entryId)
-  const previousTagId = targetEntry ? targetEntry.tag_id : ''
-  const normalizedValue = value ?? ''
+  const previousTagId = targetEntry ? targetEntry.tag_id : undefined
+  const normalizedValue = value ? Number(value) : null
   if (normalizedValue === previousTagId) {
     return
   }
   try {
-    await updateFAQEntryTagBatch(props.kbId, { updates: { [entryId]: normalizedValue || null } })
+    await updateFAQEntryTagBatch(props.kbId, { updates: { [entryId]: normalizedValue } })
     MessagePlugin.success(t('knowledgeEditor.messages.updateSuccess'))
     await loadEntries()
     await loadTags()
@@ -1703,7 +1773,7 @@ const loadEntries = async (append = false) => {
     entries.value = []
     selectedRowKeys.value = []
     Object.keys(entryStatusLoading).forEach((key) => {
-      delete entryStatusLoading[key]
+      delete entryStatusLoading[Number(key)]
     })
   }
 
@@ -1734,7 +1804,6 @@ const loadEntries = async (append = false) => {
       similarCollapsed: true,  // 相似问默认折叠
       negativeCollapsed: true,  // 反例默认折叠
       answersCollapsed: true,   // 答案默认折叠
-      tag_id: entry.tag_id ? String(entry.tag_id) : '',
       is_enabled: entry.is_enabled !== false,
     }))
     
@@ -1794,7 +1863,7 @@ const checkAndLoadMore = () => {
   }
 }
 
-const handleCardSelect = (entryId: string, checked: boolean) => {
+const handleCardSelect = (entryId: number, checked: boolean) => {
   if (checked) {
     if (!selectedRowKeys.value.includes(entryId)) {
       selectedRowKeys.value.push(entryId)
@@ -1812,7 +1881,7 @@ const resetEditorForm = () => {
   editorForm.similar_questions = []
   editorForm.negative_questions = []
   editorForm.answers = []
-  editorForm.tag_id = ''
+  editorForm.tag_id = undefined
   answerInput.value = ''
   similarInput.value = ''
   negativeInput.value = ''
@@ -1826,7 +1895,7 @@ const openEditor = (entry?: FAQEntry) => {
     editorForm.similar_questions = [...(entry.similar_questions || [])]
     editorForm.negative_questions = [...(entry.negative_questions || [])]
     editorForm.answers = [...(entry.answers || [])]
-    editorForm.tag_id = entry.tag_id || ''
+    editorForm.tag_id = entry.tag_id || undefined
   } else {
     editorMode.value = 'create'
     currentEntryId.value = null
@@ -1901,7 +1970,7 @@ const handleSubmitEntry = async () => {
       similar_questions: [...editorForm.similar_questions],
       negative_questions: [...editorForm.negative_questions],
       answers: [...editorForm.answers],
-      tag_id: editorForm.tag_id || '',
+      tag_id: editorForm.tag_id || undefined,
     }
     if (editorMode.value === 'create') {
       await createFAQEntry(props.kbId, payload)
@@ -1944,9 +2013,9 @@ const openBatchTagDialog = () => {
 const handleBatchTag = async () => {
   if (!selectedRowKeys.value.length || !props.kbId) return
   try {
-    const updates: Record<string, string | null> = {}
+    const updates: Record<number, number | null> = {}
     selectedRowKeys.value.forEach(id => {
-      updates[id] = batchTagValue.value || null
+      updates[id] = batchTagValue.value ? Number(batchTagValue.value) : null
     })
     await updateFAQEntryTagBatch(props.kbId, { updates })
     MessagePlugin.success(t('knowledgeEditor.messages.updateSuccess'))
@@ -1962,7 +2031,7 @@ const handleBatchTag = async () => {
 const handleBatchStatusChange = async (isEnabled: boolean) => {
   if (!selectedRowKeys.value.length || !props.kbId) return
   try {
-    const by_id: Record<string, { is_enabled: boolean }> = {}
+    const by_id: Record<number, { is_enabled: boolean }> = {}
     selectedRowKeys.value.forEach(id => {
       by_id[id] = { is_enabled: isEnabled }
     })
@@ -1978,7 +2047,7 @@ const handleBatchStatusChange = async (isEnabled: boolean) => {
 const handleBatchRecommendedChange = async (isRecommended: boolean) => {
   if (!selectedRowKeys.value.length || !props.kbId) return
   try {
-    const by_id: Record<string, { is_recommended: boolean }> = {}
+    const by_id: Record<number, { is_recommended: boolean }> = {}
     selectedRowKeys.value.forEach(id => {
       by_id[id] = { is_recommended: isRecommended }
     })
@@ -2103,7 +2172,7 @@ const parseCSVFile = async (file: File): Promise<FAQEntryPayload[]> => {
                 answers: splitByDelimiter(record['机器人回答'] || record['answers']),
                 similar_questions: splitByDelimiter(record['相似问题'] || record['similar_questions']),
                 negative_questions: splitByDelimiter(record['反例问题'] || record['negative_questions']),
-                tag_id: record['tag_id'] || '',
+                tag_id: record['tag_id'] ? Number(record['tag_id']) : undefined,
                 tag_name: record['分类'] || record['tag_name'] || '',
                 is_enabled: isDisabled !== undefined ? !isDisabled : undefined, // 是否停用：FALSE表示启用，TRUE表示停用，所以取反
               }),
@@ -2150,7 +2219,7 @@ const parseExcelFile = async (file: File): Promise<FAQEntryPayload[]> => {
       answers: splitByDelimiter(normalizedRow['机器人回答'] || normalizedRow['answers']),
       similar_questions: splitByDelimiter(normalizedRow['相似问题'] || normalizedRow['similar_questions']),
       negative_questions: splitByDelimiter(normalizedRow['反例问题'] || normalizedRow['negative_questions']),
-      tag_id: normalizedRow['tag_id'] || '',
+      tag_id: normalizedRow['tag_id'] ? Number(normalizedRow['tag_id']) : undefined,
       tag_name: normalizedRow['分类'] || normalizedRow['tag_name'] || '',
       is_enabled: isDisabled !== undefined ? !isDisabled : undefined, // 是否停用：FALSE表示启用，TRUE表示停用，所以取反
     })
@@ -2193,7 +2262,7 @@ const normalizePayload = (payload: Partial<FAQEntryPayload>): FAQEntryPayload =>
   answers: payload.answers?.filter(Boolean) || [],
   similar_questions: payload.similar_questions?.filter(Boolean) || [],
   negative_questions: payload.negative_questions?.filter(Boolean) || [],
-  tag_id: payload.tag_id || '',
+  tag_id: payload.tag_id || undefined,
   tag_name: payload.tag_name || '',
   is_enabled: payload.is_enabled !== undefined ? payload.is_enabled : undefined,
 })
@@ -2251,13 +2320,18 @@ const startPolling = (taskId: string) => {
         if (status === 'success' || status === 'failed') {
           stopPolling()
           if (status === 'success') {
+            // 保存已完成的 taskId 用于后续加载结果
+            if (importState.taskId) {
+              saveLastCompletedTaskId(importState.taskId)
+            }
             MessagePlugin.success(t('knowledgeEditor.faqImport.importSuccess'))
             // 清除筛选条件，确保用户能看到所有新导入的数据
-            selectedTagId.value = UNTAGGED_FILTER
+            selectedTagId.value = 0
             entrySearchKeyword.value = ''
             overallFAQTotal.value = 0  // Reset to trigger re-fetch
             await loadEntries()
             await loadTags()
+            await loadImportResult() // 加载最新的导入结果统计
             // 任务完成后，3秒后自动关闭进度条
             setTimeout(() => {
               if (importState.taskStatus?.status === 'success') {
@@ -2384,6 +2458,105 @@ const restoreImportTask = async () => {
     if (error?.response?.status === 404 || error?.message?.includes('not found')) {
       clearTaskIdFromStorage()
     }
+  }
+}
+
+// localStorage key for last completed task
+const getLastCompletedTaskKey = () => {
+  return `faq_import_last_completed_${props.kbId}`
+}
+
+const saveLastCompletedTaskId = (taskId: string) => {
+  if (!props.kbId) return
+  try {
+    localStorage.setItem(getLastCompletedTaskKey(), taskId)
+  } catch (error) {
+    console.error('Failed to save last completed taskId:', error)
+  }
+}
+
+const getLastCompletedTaskId = (): string | null => {
+  if (!props.kbId) return null
+  try {
+    return localStorage.getItem(getLastCompletedTaskKey())
+  } catch (error) {
+    return null
+  }
+}
+
+// 加载持久化的导入结果统计
+const loadImportResult = async () => {
+  if (!props.kbId) return
+  
+  const lastTaskId = getLastCompletedTaskId()
+  if (!lastTaskId) {
+    importResult.value = null
+    return
+  }
+  
+  try {
+    const res: any = await getFAQImportProgress(lastTaskId)
+    const data = res?.data
+    if (data && data.status === 'completed') {
+      // 检查后端返回的 display_status，如果是 close 则不显示
+      if (data.display_status === 'close') {
+        importResult.value = null
+        return
+      }
+      // Map progress fields to importResult format
+      importResult.value = {
+        total_entries: data.total,
+        success_count: data.success_count,
+        failed_count: data.failed_count,
+        skipped_count: data.skipped_count || 0,
+        import_mode: data.import_mode || 'append',
+        imported_at: data.imported_at,
+        task_id: data.task_id,
+        failed_entries_url: data.failed_entries_url,
+        success_entries: data.success_entries,
+        display_status: data.display_status || 'open',
+        processing_time: data.processing_time || 0,
+      }
+    } else {
+      importResult.value = null
+    }
+  } catch (error) {
+    console.error('Failed to load FAQ import result:', error)
+    importResult.value = null
+  }
+}
+
+// 关闭导入结果统计卡片
+const closeImportResult = async () => {
+  if (!props.kbId) return
+  try {
+    await updateFAQImportResultDisplayStatus(props.kbId, 'close')
+    if (importResult.value) {
+      importResult.value.display_status = 'close'
+    }
+  } catch (error) {
+    console.error('Failed to close import result:', error)
+  }
+}
+
+// 下载失败条目原因
+const downloadFailedEntries = () => {
+  if (!importResult.value?.failed_entries_url) {
+    MessagePlugin.warning('暂无失败记录可下载')
+    return
+  }
+  // 直接打开下载链接
+  window.open(importResult.value.failed_entries_url, '_blank')
+}
+
+// 格式化导入时间
+const formatImportTime = (timeStr?: string) => {
+  if (!timeStr) return ''
+  try {
+    const date = new Date(timeStr)
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+  } catch (e) {
+    return timeStr
   }
 }
 
@@ -2610,7 +2783,7 @@ watch(
   async (newKbId) => {
     currentPage = 1
     hasMore.value = true
-    selectedTagId.value = UNTAGGED_FILTER
+    selectedTagId.value = 0
     overallFAQTotal.value = 0  // Reset to trigger re-fetch
     cancelCreateTag()
     cancelEditTag()
@@ -2847,6 +3020,7 @@ onMounted(async () => {
   // 如果已有kbId，恢复导入任务状态
   if (props.kbId) {
     await restoreImportTask()
+    await loadImportResult() // 加载导入结果
   }
   // 主动触发一次选中数量事件，确保左侧菜单能接收到初始状态
   nextTick(() => {
@@ -3539,6 +3713,133 @@ watch(() => entries.value.map(e => ({
   }
   to {
     transform: rotate(360deg);
+  }
+}
+
+// 导入结果统计卡片样式
+.faq-import-result-card {
+  margin-bottom: 16px;
+  background: #ffffff;
+  border: 1px solid #e7ebf0;
+  border-radius: 8px;
+  padding: 16px 20px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
+
+  .import-result-content {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .import-result-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+
+      .result-icon {
+        color: #07C05F;
+        flex-shrink: 0;
+      }
+
+      .result-title {
+        font-family: "PingFang SC";
+        font-weight: 600;
+        font-size: 14px;
+        color: #1d2129;
+      }
+    }
+
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+
+      .result-time {
+        font-family: "PingFang SC";
+        font-size: 13px;
+        color: #86909c;
+      }
+
+      .result-close-btn {
+        padding: 4px;
+        border-radius: 4px;
+        color: #86909c;
+        transition: all 0.2s ease;
+
+        &:hover {
+          background: #f2f3f5;
+          color: #4e5969;
+        }
+      }
+    }
+  }
+
+  .import-result-body {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+
+  .import-result-stats {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 24px;
+
+    .stat-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-family: "PingFang SC";
+      font-size: 13px;
+
+      .stat-label {
+        color: #86909c;
+      }
+
+      .stat-value {
+        font-weight: 600;
+        color: #1d2129;
+      }
+
+      &.success .stat-value {
+        color: #07C05F;
+      }
+
+      &.failed .stat-value {
+        color: #E34D59;
+      }
+
+      &.skipped .stat-value {
+        color: #ED7B2F;
+      }
+
+      .download-failed-btn {
+        margin-left: 4px;
+        padding: 0 8px;
+        height: 24px;
+        font-size: 12px;
+        border-radius: 4px;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+
+        .t-icon {
+          font-size: 12px;
+        }
+      }
+    }
+  }
+
+  .import-mode-tag {
+    flex-shrink: 0;
   }
 }
 

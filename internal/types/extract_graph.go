@@ -1,15 +1,16 @@
 package types
 
 const (
-	TypeChunkExtract       = "chunk:extract"
-	TypeDocumentProcess    = "document:process"    // 文档处理任务
-	TypeFAQImport          = "faq:import"          // FAQ导入任务
-	TypeQuestionGeneration = "question:generation" // 问题生成任务
-	TypeSummaryGeneration  = "summary:generation"  // 摘要生成任务
-	TypeKBClone            = "kb:clone"            // 知识库复制任务
-	TypeIndexDelete        = "index:delete"        // 索引删除任务
-	TypeKBDelete           = "kb:delete"           // 知识库删除任务
-	TypeDataTableSummary   = "datatable:summary"   // 表格摘要任务
+	TypeChunkExtract        = "chunk:extract"
+	TypeDocumentProcess     = "document:process"     // 文档处理任务
+	TypeFAQImport           = "faq:import"           // FAQ导入任务（包含dry run模式）
+	TypeQuestionGeneration  = "question:generation"  // 问题生成任务
+	TypeSummaryGeneration   = "summary:generation"   // 摘要生成任务
+	TypeKBClone             = "kb:clone"             // 知识库复制任务
+	TypeIndexDelete         = "index:delete"         // 索引删除任务
+	TypeKBDelete            = "kb:delete"            // 知识库删除任务
+	TypeKnowledgeListDelete = "knowledge:list_delete" // 批量删除知识任务
+	TypeDataTableSummary    = "datatable:summary"    // 表格摘要任务
 )
 
 // ExtractChunkPayload represents the extract chunk task payload
@@ -35,14 +36,15 @@ type DocumentProcessPayload struct {
 	QuestionCount            int      `json:"question_count,omitempty"`   // 每个chunk生成的问题数量
 }
 
-// FAQImportPayload represents the FAQ import task payload
+// FAQImportPayload represents the FAQ import task payload (including dry run mode)
 type FAQImportPayload struct {
 	TenantID    uint64            `json:"tenant_id"`
 	TaskID      string            `json:"task_id"`
 	KBID        string            `json:"kb_id"`
-	KnowledgeID string            `json:"knowledge_id"`
+	KnowledgeID string            `json:"knowledge_id,omitempty"` // 仅非 dry run 模式需要
 	Entries     []FAQEntryPayload `json:"entries"`
 	Mode        string            `json:"mode"`
+	DryRun      bool              `json:"dry_run"` // dry run 模式只验证不导入
 }
 
 // QuestionGenerationPayload represents the question generation task payload
@@ -83,6 +85,12 @@ type KBDeletePayload struct {
 	TenantID         uint64                  `json:"tenant_id"`
 	KnowledgeBaseID  string                  `json:"knowledge_base_id"`
 	EffectiveEngines []RetrieverEngineParams `json:"effective_engines"`
+}
+
+// KnowledgeListDeletePayload represents the batch knowledge delete task payload
+type KnowledgeListDeletePayload struct {
+	TenantID     uint64   `json:"tenant_id"`
+	KnowledgeIDs []string `json:"knowledge_ids"`
 }
 
 // KBCloneTaskStatus represents the status of a knowledge base clone task

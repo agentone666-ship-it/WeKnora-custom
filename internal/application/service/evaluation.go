@@ -12,7 +12,7 @@ import (
 	"github.com/Tencent/WeKnora/internal/logger"
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
-	"github.com/google/uuid"
+	"github.com/Tencent/WeKnora/internal/utils"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -253,7 +253,7 @@ func (e *EvaluationService) Evaluation(ctx context.Context,
 
 	// Create evaluation task with unique ID
 	logger.Info(ctx, "Creating evaluation task")
-	taskID := uuid.New().String()
+	taskID := utils.GenerateTaskID("evaluation", tenantID, datasetID)
 	logger.Infof(ctx, "Generated task ID: %s", taskID)
 
 	// Prepare evaluation detail with all parameters

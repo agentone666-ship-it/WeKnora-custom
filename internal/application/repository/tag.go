@@ -54,6 +54,31 @@ func (r *knowledgeTagRepository) GetByIDs(ctx context.Context, tenantID uint64, 
 	return tags, nil
 }
 
+// GetBySeqID retrieves a tag by its seq_id
+func (r *knowledgeTagRepository) GetBySeqID(ctx context.Context, tenantID uint64, seqID int64) (*types.KnowledgeTag, error) {
+	var tag types.KnowledgeTag
+	if err := r.db.WithContext(ctx).
+		Where("tenant_id = ? AND seq_id = ?", tenantID, seqID).
+		First(&tag).Error; err != nil {
+		return nil, err
+	}
+	return &tag, nil
+}
+
+// GetBySeqIDs retrieves multiple tags by their seq_ids in a single query
+func (r *knowledgeTagRepository) GetBySeqIDs(ctx context.Context, tenantID uint64, seqIDs []int64) ([]*types.KnowledgeTag, error) {
+	if len(seqIDs) == 0 {
+		return []*types.KnowledgeTag{}, nil
+	}
+	var tags []*types.KnowledgeTag
+	if err := r.db.WithContext(ctx).
+		Where("tenant_id = ? AND seq_id IN (?)", tenantID, seqIDs).
+		Find(&tags).Error; err != nil {
+		return nil, err
+	}
+	return tags, nil
+}
+
 // GetByName gets a knowledge tag by name
 func (r *knowledgeTagRepository) GetByName(ctx context.Context, tenantID uint64, kbID string, name string) (*types.KnowledgeTag, error) {
 	var tag types.KnowledgeTag
@@ -97,7 +122,7 @@ func (r *knowledgeTagRepository) ListByKB(
 
 	var tags []*types.KnowledgeTag
 	if err := dataQuery.
-		Order("sort_order ASC, created_at ASC").
+		Order("sort_order ASC, created_at DESC").
 		Offset(page.Offset()).
 		Limit(page.Limit()).
 		Find(&tags).Error; err != nil {
@@ -136,35 +161,14 @@ func (r *knowledgeTagRepository) CountReferences(
 	return
 }
 
-// CountUntaggedReferences returns the number of knowledges and chunks without a tag
-func (r *knowledgeTagRepository) CountUntaggedReferences(
-	ctx context.Context,
-	tenantID uint64,
-	kbID string,
-) (knowledgeCount int64, chunkCount int64, err error) {
-	if err = r.db.WithContext(ctx).
-		Model(&types.Knowledge{}).
-		Where("tenant_id = ? AND knowledge_base_id = ? AND (tag_id = '' OR tag_id IS NULL)", tenantID, kbID).
-		Count(&knowledgeCount).Error; err != nil {
-		return
-	}
-	if err = r.db.WithContext(ctx).
-		Model(&types.Chunk{}).
-		Where("tenant_id = ? AND knowledge_base_id = ? AND (tag_id = '' OR tag_id IS NULL)", tenantID, kbID).
-		Count(&chunkCount).Error; err != nil {
-		return
-	}
-	return
-}
-
 // DeleteUnusedTags deletes tags that are not referenced by any knowledge or chunk.
 // Returns the number of deleted tags.
 func (r *knowledgeTagRepository) DeleteUnusedTags(ctx context.Context, tenantID uint64, kbID string) (int64, error) {
-	// Delete tags that have no references in both knowledges and chunks tables
+	// Delete tags that have no references in both knowledges and chunks tables (excluding soft-deleted records)
 	result := r.db.WithContext(ctx).
 		Where("tenant_id = ? AND knowledge_base_id = ?", tenantID, kbID).
-		Where("id NOT IN (SELECT DISTINCT tag_id FROM knowledges WHERE tenant_id = ? AND knowledge_base_id = ? AND tag_id IS NOT NULL AND tag_id != '')", tenantID, kbID).
-		Where("id NOT IN (SELECT DISTINCT tag_id FROM chunks WHERE tenant_id = ? AND knowledge_base_id = ? AND tag_id IS NOT NULL AND tag_id != '')", tenantID, kbID).
+		Where("id NOT IN (SELECT DISTINCT tag_id FROM knowledges WHERE tenant_id = ? AND knowledge_base_id = ? AND tag_id IS NOT NULL AND tag_id != '' AND deleted_at IS NULL)", tenantID, kbID).
+		Where("id NOT IN (SELECT DISTINCT tag_id FROM chunks WHERE tenant_id = ? AND knowledge_base_id = ? AND tag_id IS NOT NULL AND tag_id != '' AND deleted_at IS NULL)", tenantID, kbID).
 		Delete(&types.KnowledgeTag{})
 	return result.RowsAffected, result.Error
 }

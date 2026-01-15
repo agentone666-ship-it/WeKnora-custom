@@ -55,7 +55,6 @@ class BaseParser(ABC):
             if not hostname:
                 logger.warning("No hostname found in URL")
                 return False
-
             # Try to parse as IP address
             try:
                 ip = ipaddress.ip_address(hostname)
@@ -743,7 +742,6 @@ class BaseParser(ABC):
                     if not self._is_safe_url(img_url):
                         logger.error(f"URL failed validation check: {img_url}")
                         return img_url, img_url, None
-
                     # Still need to get image object for OCR processing
                     # Get proxy settings from environment variables
                     http_proxy = os.environ.get("EXTERNAL_HTTP_PROXY")
@@ -794,7 +792,6 @@ class BaseParser(ABC):
                 if not self._is_safe_url(img_url):
                     logger.error(f"URL failed validation check: {img_url}")
                     return img_url, img_url, None
-
                 # Get proxy settings from environment variables
                 http_proxy = os.environ.get("EXTERNAL_HTTP_PROXY")
                 https_proxy = os.environ.get("EXTERNAL_HTTPS_PROXY")

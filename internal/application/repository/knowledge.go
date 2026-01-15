@@ -75,12 +75,7 @@ func (r *knowledgeRepository) ListPagedKnowledgeByKnowledgeBaseID(
 	query := r.db.WithContext(ctx).Model(&types.Knowledge{}).
 		Where("tenant_id = ? AND knowledge_base_id = ?", tenantID, kbID)
 	if tagID != "" {
-		if tagID == types.UntaggedTagID {
-			// Special value to filter entries without a tag
-			query = query.Where("tag_id = '' OR tag_id IS NULL")
-		} else {
-			query = query.Where("tag_id = ?", tagID)
-		}
+		query = query.Where("tag_id = ?", tagID)
 	}
 	if keyword != "" {
 		query = query.Where("file_name LIKE ?", "%"+keyword+"%")
@@ -104,12 +99,7 @@ func (r *knowledgeRepository) ListPagedKnowledgeByKnowledgeBaseID(
 	dataQuery := r.db.WithContext(ctx).
 		Where("tenant_id = ? AND knowledge_base_id = ?", tenantID, kbID)
 	if tagID != "" {
-		if tagID == types.UntaggedTagID {
-			// Special value to filter entries without a tag
-			dataQuery = dataQuery.Where("tag_id = '' OR tag_id IS NULL")
-		} else {
-			dataQuery = dataQuery.Where("tag_id = ?", tagID)
-		}
+		dataQuery = dataQuery.Where("tag_id = ?", tagID)
 	}
 	if keyword != "" {
 		dataQuery = dataQuery.Where("file_name LIKE ?", "%"+keyword+"%")
@@ -410,4 +400,17 @@ func (r *knowledgeRepository) SearchKnowledge(
 		knowledges[i] = &k
 	}
 	return knowledges, hasMore, nil
+}
+
+// ListIDsByTagID returns all knowledge IDs that have the specified tag ID
+func (r *knowledgeRepository) ListIDsByTagID(
+	ctx context.Context,
+	tenantID uint64,
+	kbID, tagID string,
+) ([]string, error) {
+	var ids []string
+	err := r.db.WithContext(ctx).Model(&types.Knowledge{}).
+		Where("tenant_id = ? AND knowledge_base_id = ? AND tag_id = ?", tenantID, kbID, tagID).
+		Pluck("id", &ids).Error
+	return ids, err
 }

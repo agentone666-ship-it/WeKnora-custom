@@ -179,12 +179,13 @@ const loadTenants = async (append = false) => {
   
   loading.value = true
   try {
-    let keyword = searchQuery.value.trim()
+    const keyword = searchQuery.value.trim()
     let tenantID: number | undefined = undefined
     
+    // 如果是纯数字，同时作为 tenant_id 和 keyword 搜索
+    // 这样既能精确匹配租户ID，也能模糊匹配名称中包含数字的租户
     if (keyword && /^\d+$/.test(keyword)) {
       tenantID = Number(keyword)
-      keyword = ''
     }
     
     const response = await searchTenants({

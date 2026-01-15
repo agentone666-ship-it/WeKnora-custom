@@ -138,16 +138,16 @@ export function updateKnowledgeBaseTag(
   return put(`/api/v1/knowledge-bases/${kbId}/tags/${tagId}`, data);
 }
 
-export function deleteKnowledgeBaseTag(kbId: string, tagId: string, params?: { force?: boolean }) {
+export function deleteKnowledgeBaseTag(kbId: string, tagSeqId: number, params?: { force?: boolean }) {
   const forceQuery = params?.force ? '?force=true' : '';
-  return del(`/api/v1/knowledge-bases/${kbId}/tags/${tagId}${forceQuery}`);
+  return del(`/api/v1/knowledge-bases/${kbId}/tags/${tagSeqId}${forceQuery}`);
 }
 
 export function updateKnowledgeTagBatch(data: { updates: Record<string, string | null> }) {
   return put(`/api/v1/knowledge/tags`, data);
 }
 
-export function updateFAQEntryTagBatch(kbId: string, data: { updates: Record<string, string | null> }) {
+export function updateFAQEntryTagBatch(kbId: string, data: { updates: Record<number, number | null> }) {
   return put(`/api/v1/knowledge-bases/${kbId}/faq/entries/tags`, data);
 }
 
@@ -164,7 +164,7 @@ const buildQuery = (params?: Record<string, any>) => {
 
 export function listFAQEntries(
   kbId: string,
-  params?: { page?: number; page_size?: number; tag_id?: string; keyword?: string },
+  params?: { page?: number; page_size?: number; tag_id?: number; keyword?: string },
 ) {
   const query = buildQuery(params);
   return get(`/api/v1/knowledge-bases/${kbId}/faq/entries${query}`);
@@ -178,7 +178,7 @@ export function createFAQEntry(kbId: string, data: any) {
   return post(`/api/v1/knowledge-bases/${kbId}/faq/entry`, data);
 }
 
-export function updateFAQEntry(kbId: string, entryId: string, data: any) {
+export function updateFAQEntry(kbId: string, entryId: number, data: any) {
   return put(`/api/v1/knowledge-bases/${kbId}/faq/entries/${entryId}`, data);
 }
 
@@ -189,19 +189,20 @@ export function updateFAQEntry(kbId: string, entryId: string, data: any) {
 export interface FAQEntryFieldsUpdate {
   is_enabled?: boolean
   is_recommended?: boolean
-  tag_id?: string | null
+  tag_id?: number | null
 }
 
 export interface FAQEntryFieldsBatchRequest {
-  by_id?: Record<string, FAQEntryFieldsUpdate>
-  by_tag?: Record<string, FAQEntryFieldsUpdate>
+  by_id?: Record<number, FAQEntryFieldsUpdate>
+  by_tag?: Record<number, FAQEntryFieldsUpdate>
+  exclude_ids?: number[]
 }
 
 export function updateFAQEntryFieldsBatch(kbId: string, data: FAQEntryFieldsBatchRequest) {
   return put(`/api/v1/knowledge-bases/${kbId}/faq/entries/fields`, data);
 }
 
-export function deleteFAQEntries(kbId: string, ids: string[]) {
+export function deleteFAQEntries(kbId: string, ids: number[]) {
   return del(`/api/v1/knowledge-bases/${kbId}/faq/entries`, { ids });
 }
 
@@ -223,6 +224,20 @@ export async function exportFAQEntries(kbId: string): Promise<Blob> {
 }
 
 // FAQ Import Progress API
+export interface FAQBlockedEntry {
+  index: number
+  standard_question: string
+  reason: string
+}
+
+export interface FAQSuccessEntry {
+  index: number
+  seq_id: number
+  tag_id?: number
+  tag_name?: string
+  standard_question: string
+}
+
 export interface FAQImportProgress {
   task_id: string
   kb_id: string
@@ -231,6 +246,9 @@ export interface FAQImportProgress {
   progress: number
   total: number
   processed: number
+  blocked: number
+  blocked_entries?: FAQBlockedEntry[]
+  success_entries?: FAQSuccessEntry[]
   message: string
   error: string
   created_at: number
@@ -239,6 +257,12 @@ export interface FAQImportProgress {
 
 export function getFAQImportProgress(taskId: string) {
   return get(`/api/v1/faq/import/progress/${taskId}`);
+}
+
+export function updateFAQImportResultDisplayStatus(knowledgeBaseId: string, displayStatus: 'open' | 'close') {
+  return put(`/api/v1/knowledge-bases/${knowledgeBaseId}/faq/import/last-result/display`, {
+    display_status: displayStatus
+  });
 }
 
 export function searchKnowledge(keyword: string, offset = 0, limit = 20, fileTypes?: string[]) {

@@ -30,8 +30,12 @@ type KnowledgeTagRepository interface {
 	Create(ctx context.Context, tag *types.KnowledgeTag) error
 	Update(ctx context.Context, tag *types.KnowledgeTag) error
 	GetByID(ctx context.Context, tenantID uint64, id string) (*types.KnowledgeTag, error)
+	// GetBySeqID retrieves a tag by its seq_id.
+	GetBySeqID(ctx context.Context, tenantID uint64, seqID int64) (*types.KnowledgeTag, error)
 	// GetByIDs retrieves multiple tags by their IDs in a single query.
 	GetByIDs(ctx context.Context, tenantID uint64, ids []string) ([]*types.KnowledgeTag, error)
+	// GetBySeqIDs retrieves multiple tags by their seq_ids in a single query.
+	GetBySeqIDs(ctx context.Context, tenantID uint64, seqIDs []int64) ([]*types.KnowledgeTag, error)
 	GetByName(ctx context.Context, tenantID uint64, kbID string, name string) (*types.KnowledgeTag, error)
 	ListByKB(
 		ctx context.Context,
@@ -47,12 +51,6 @@ type KnowledgeTagRepository interface {
 		tenantID uint64,
 		kbID string,
 		tagID string,
-	) (knowledgeCount int64, chunkCount int64, err error)
-	// CountUntaggedReferences returns number of knowledges and chunks without a tag.
-	CountUntaggedReferences(
-		ctx context.Context,
-		tenantID uint64,
-		kbID string,
 	) (knowledgeCount int64, chunkCount int64, err error)
 	// DeleteUnusedTags deletes tags that are not referenced by any knowledge or chunk.
 	DeleteUnusedTags(ctx context.Context, tenantID uint64, kbID string) (int64, error)

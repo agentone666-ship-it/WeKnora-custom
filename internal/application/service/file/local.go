@@ -109,3 +109,38 @@ func (s *localFileService) DeleteFile(ctx context.Context, filePath string) erro
 	logger.Info(ctx, "File deleted successfully")
 	return nil
 }
+
+// SaveBytes saves bytes data to a file and returns the file path
+// temp parameter is ignored for local storage (no auto-expiration support)
+func (s *localFileService) SaveBytes(ctx context.Context, data []byte, tenantID uint64, fileName string, temp bool) (string, error) {
+	logger.Infof(ctx, "Saving bytes data: fileName=%s, size=%d, tenantID=%d, temp=%v", fileName, len(data), tenantID, temp)
+
+	// Create storage directory with tenant ID
+	dir := filepath.Join(s.baseDir, fmt.Sprintf("%d", tenantID), "exports")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		logger.Errorf(ctx, "Failed to create directory: %v", err)
+		return "", fmt.Errorf("failed to create directory: %w", err)
+	}
+
+	// Generate unique filename using timestamp
+	ext := filepath.Ext(fileName)
+	baseName := fileName[:len(fileName)-len(ext)]
+	uniqueFileName := fmt.Sprintf("%s_%d%s", baseName, time.Now().UnixNano(), ext)
+	filePath := filepath.Join(dir, uniqueFileName)
+
+	// Write data to file
+	if err := os.WriteFile(filePath, data, 0o644); err != nil {
+		logger.Errorf(ctx, "Failed to write file: %v", err)
+		return "", fmt.Errorf("failed to write file: %w", err)
+	}
+
+	logger.Infof(ctx, "Bytes data saved successfully: %s", filePath)
+	return filePath, nil
+}
+
+// GetFileURL returns a download URL for the file
+// For local storage, returns the file path itself (no URL support)
+func (s *localFileService) GetFileURL(ctx context.Context, filePath string) (string, error) {
+	// Local storage doesn't support URLs, return the path
+	return filePath, nil
+}

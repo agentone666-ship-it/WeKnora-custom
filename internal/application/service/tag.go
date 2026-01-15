@@ -21,6 +21,7 @@ import (
 type knowledgeTagService struct {
 	kbService      interfaces.KnowledgeBaseService
 	repo           interfaces.KnowledgeTagRepository
+	knowledgeRepo  interfaces.KnowledgeRepository
 	chunkRepo      interfaces.ChunkRepository
 	retrieveEngine interfaces.RetrieveEngineRegistry
 	modelService   interfaces.ModelService
@@ -31,6 +32,7 @@ type knowledgeTagService struct {
 func NewKnowledgeTagService(
 	kbService interfaces.KnowledgeBaseService,
 	repo interfaces.KnowledgeTagRepository,
+	knowledgeRepo interfaces.KnowledgeRepository,
 	chunkRepo interfaces.ChunkRepository,
 	retrieveEngine interfaces.RetrieveEngineRegistry,
 	modelService interfaces.ModelService,
@@ -39,6 +41,7 @@ func NewKnowledgeTagService(
 	return &knowledgeTagService{
 		kbService:      kbService,
 		repo:           repo,
+		knowledgeRepo:  knowledgeRepo,
 		chunkRepo:      chunkRepo,
 		retrieveEngine: retrieveEngine,
 		modelService:   modelService,
@@ -72,28 +75,7 @@ func (s *knowledgeTagService) ListTags(
 		return nil, err
 	}
 
-	results := make([]*types.KnowledgeTagWithStats, 0, len(tags)+1)
-
-	// Add untagged pseudo-tag at the beginning (only on first page and when no keyword filter)
-	if page.Page <= 1 && keyword == "" {
-		untaggedKCount, untaggedCCount, err := s.repo.CountUntaggedReferences(ctx, tenantID, kbID)
-		if err != nil {
-			logger.ErrorWithFields(ctx, err, map[string]interface{}{
-				"kb_id": kbID,
-			})
-			return nil, err
-		}
-		results = append(results, &types.KnowledgeTagWithStats{
-			KnowledgeTag: types.KnowledgeTag{
-				ID:              types.UntaggedTagID,
-				TenantID:        tenantID,
-				KnowledgeBaseID: kbID,
-				Name:            "未分类",
-			},
-			KnowledgeCount: untaggedKCount,
-			ChunkCount:     untaggedCCount,
-		})
-	}
+	results := make([]*types.KnowledgeTagWithStats, 0, len(tags))
 
 	for _, tag := range tags {
 		if tag == nil {
@@ -112,11 +94,6 @@ func (s *knowledgeTagService) ListTags(
 			KnowledgeCount: kCount,
 			ChunkCount:     cCount,
 		})
-	}
-
-	// Adjust total to include the untagged pseudo-tag
-	if keyword == "" {
-		total++
 	}
 
 	return types.NewPageResult(total, page, results), nil
@@ -149,6 +126,10 @@ func (s *knowledgeTagService) CreateTag(
 	}
 
 	now := time.Now()
+	// "未分类" tag should have the lowest sort order to appear first
+	if name == types.UntaggedTagName {
+		sortOrder = -1
+	}
 	tag := &types.KnowledgeTag{
 		ID:              uuid.New().String(),
 		TenantID:        kb.TenantID,
@@ -203,6 +184,7 @@ func (s *knowledgeTagService) UpdateTag(
 }
 
 // DeleteTag deletes a tag. When force=true, also deletes all chunks under this tag.
+// For document-type knowledge bases, also deletes all knowledge files under this tag.
 // When contentOnly=true, only deletes the content under the tag but keeps the tag itself.
 func (s *knowledgeTagService) DeleteTag(ctx context.Context, id string, force bool, contentOnly bool, excludeIDs []string) error {
 	if id == "" {
@@ -246,9 +228,49 @@ func (s *knowledgeTagService) DeleteTag(ctx context.Context, id string, force bo
 		return nil
 	}
 
+	// Helper function to enqueue knowledge list delete task for document-type knowledge bases
+	enqueueKnowledgeDeleteTask := func() error {
+		if kb.Type != types.KnowledgeBaseTypeDocument {
+			return nil
+		}
+		// Get all knowledge IDs under this tag
+		knowledgeIDs, err := s.knowledgeRepo.ListIDsByTagID(ctx, tenantID, kb.ID, tag.ID)
+		if err != nil {
+			logger.Errorf(ctx, "Failed to list knowledge IDs by tag ID %s: %v", tag.ID, err)
+			return werrors.NewInternalServerError("获取标签下的文档失败")
+		}
+		if len(knowledgeIDs) == 0 {
+			return nil
+		}
+		// Enqueue async task to delete knowledge files
+		payload := types.KnowledgeListDeletePayload{
+			TenantID:     tenantID,
+			KnowledgeIDs: knowledgeIDs,
+		}
+		payloadBytes, err := json.Marshal(payload)
+		if err != nil {
+			logger.Errorf(ctx, "Failed to marshal knowledge list delete payload: %v", err)
+			return werrors.NewInternalServerError("删除标签下的文档失败")
+		}
+		task := asynq.NewTask(types.TypeKnowledgeListDelete, payloadBytes, asynq.Queue("low"), asynq.MaxRetry(3))
+		info, err := s.task.Enqueue(task)
+		if err != nil {
+			logger.Errorf(ctx, "Failed to enqueue knowledge list delete task: %v", err)
+			return werrors.NewInternalServerError("删除标签下的文档失败")
+		}
+		logger.Infof(ctx, "Enqueued knowledge list delete task %s for %d knowledge files under tag %s", info.ID, len(knowledgeIDs), tag.ID)
+		return nil
+	}
+
 	// contentOnly mode: only delete content, keep the tag
 	if contentOnly {
-		if cCount > 0 {
+		// For document-type KB, delete knowledge files first (which will also delete chunks)
+		if kb.Type == types.KnowledgeBaseTypeDocument && kCount > 0 {
+			if err := enqueueKnowledgeDeleteTask(); err != nil {
+				return err
+			}
+		} else if cCount > 0 {
+			// For FAQ-type KB, only delete chunks
 			if err := deleteChunksAndEnqueueIndexDelete(); err != nil {
 				return err
 			}
@@ -259,12 +281,22 @@ func (s *knowledgeTagService) DeleteTag(ctx context.Context, id string, force bo
 	if !force && (kCount > 0 || cCount > 0) {
 		return werrors.NewBadRequestError("标签仍有知识或FAQ条目引用，无法删除")
 	}
-	// When force=true, delete all chunks under this tag first
-	if force && cCount > 0 {
-		if err := deleteChunksAndEnqueueIndexDelete(); err != nil {
-			return err
+
+	// When force=true, delete all content under this tag first
+	if force {
+		// For document-type KB, delete knowledge files first (which will also delete chunks)
+		if kb.Type == types.KnowledgeBaseTypeDocument && kCount > 0 {
+			if err := enqueueKnowledgeDeleteTask(); err != nil {
+				return err
+			}
+		} else if cCount > 0 {
+			// For FAQ-type KB, only delete chunks
+			if err := deleteChunksAndEnqueueIndexDelete(); err != nil {
+				return err
+			}
 		}
 	}
+
 	// If there are excludeIDs, we cannot delete the tag itself as it still has content
 	if len(excludeIDs) > 0 {
 		return nil

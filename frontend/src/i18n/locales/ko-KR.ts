@@ -38,6 +38,7 @@ export default {
     tagEditSuccess: "태그 업데이트 성공",
     tagDeleteTitle: "태그 삭제",
     tagDeleteDesc: '"{name}" 태그를 삭제하시겠습니까? 해당 태그의 모든 FAQ 항목이 함께 삭제됩니다',
+    tagDeleteDescDoc: '"{name}" 태그를 삭제하시겠습니까? 해당 태그의 모든 문서가 함께 삭제됩니다',
     tagDeleteSuccess: "태그가 삭제되었습니다",
     tagEditAction: "이름 변경",
     tagDeleteAction: "삭제",
@@ -1319,6 +1320,7 @@ export default {
       questionIndexModeDescription: "병합 인덱스: 표준 질문과 유사 질문을 병합 인덱싱; 개별 인덱스: 표준 질문과 각 유사 질문을 독립적으로 인덱싱하여 더 정확하게 검색하지만 더 많은 저장 공간이 필요합니다",
       entryGuide: "FAQ 항목은 표준 질문, 유사 질문, 반례 및 여러 답변으로 구성됩니다. 지식베이스 세부 정보에서 일괄 가져오기 및 편집할 수 있습니다.",
       tagDesc: "FAQ 항목에 분류 선택",
+      tagPlaceholder: "분류를 선택하세요",
       modes: {
         questionOnly: "표준 질문/유사 질문만",
         questionAnswer: "표준 질문 + 답변",

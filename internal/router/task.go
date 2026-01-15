@@ -76,7 +76,7 @@ func RunAsynqServer(params AsynqTaskParams) *asynq.ServeMux {
 	// Register document processing handler
 	mux.HandleFunc(types.TypeDocumentProcess, params.KnowledgeService.ProcessDocument)
 
-	// Register FAQ import handler
+	// Register FAQ import handler (includes dry run mode)
 	mux.HandleFunc(types.TypeFAQImport, params.KnowledgeService.ProcessFAQImport)
 
 	// Register question generation handler
@@ -87,6 +87,9 @@ func RunAsynqServer(params AsynqTaskParams) *asynq.ServeMux {
 
 	// Register KB clone handler
 	mux.HandleFunc(types.TypeKBClone, params.KnowledgeService.ProcessKBClone)
+
+	// Register knowledge list delete handler
+	mux.HandleFunc(types.TypeKnowledgeListDelete, params.KnowledgeService.ProcessKnowledgeListDelete)
 
 	// Register index delete handler
 	mux.HandleFunc(types.TypeIndexDelete, params.TagService.ProcessIndexDelete)

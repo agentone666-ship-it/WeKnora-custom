@@ -46,7 +46,7 @@ let knowledgeScroll = ref()
 let page = 1;
 let pageSize = 35;
 
-const selectedTagId = ref<string>("__untagged__");
+const selectedTagId = ref<string>('');
 const tagList = ref<any[]>([]);
 const tagLoading = ref(false);
 const tagSearchQuery = ref('');
@@ -59,7 +59,6 @@ let tagSearchDebounce: ReturnType<typeof setTimeout> | null = null;
 let docSearchDebounce: ReturnType<typeof setTimeout> | null = null;
 const docSearchKeyword = ref('');
 const selectedFileType = ref('');
-const UNTAGGED_TAG_ID = '__untagged__';
 const fileTypeOptions = computed(() => [
   { content: t('knowledgeBase.allFileTypes') || '全部类型', value: '' },
   { content: 'PDF', value: 'pdf' },
@@ -71,18 +70,12 @@ const fileTypeOptions = computed(() => [
   { content: t('knowledgeBase.typeManual') || '手动创建', value: 'manual' },
 ]);
 type TagInputInstance = ComponentPublicInstance<{ focus: () => void; select: () => void }>;
-const tagDropdownOptions = computed(() => {
-  const options = [
-    { content: t('knowledgeBase.untagged') || '未分类', value: UNTAGGED_TAG_ID },
-    ...tagList.value
-      .filter((tag: any) => tag.id !== UNTAGGED_TAG_ID)
-      .map((tag: any) => ({
-        content: tag.name,
-        value: tag.id,
-      })),
-  ];
-  return options;
-});
+const tagDropdownOptions = computed(() =>
+  tagList.value.map((tag: any) => ({
+    content: tag.name,
+    value: tag.id,
+  })),
+);
 const tagMap = computed<Record<string, any>>(() => {
   const map: Record<string, any> = {};
   tagList.value.forEach((tag) => {
@@ -124,10 +117,9 @@ const getPageSize = () => {
 getPageSize()
 // 直接调用 API 获取知识库文件列表
 const getTagName = (tagId?: string | number) => {
-  if (!tagId && tagId !== 0) return t('knowledgeBase.untagged') || '未分类';
-  if (tagId === UNTAGGED_TAG_ID) return t('knowledgeBase.untagged') || '未分类';
+  if (!tagId && tagId !== 0) return '';
   const key = String(tagId);
-  return tagMap.value[key]?.name || (t('knowledgeBase.untagged') || '未分类');
+  return tagMap.value[key]?.name || '';
 };
 
 const formatDocTime = (time?: string) => {
@@ -227,22 +219,6 @@ const handleTagFilterChange = (value: string) => {
 };
 
 const handleTagRowClick = (tagId: string) => {
-  const normalizedId = String(tagId);
-  if (editingTagId.value && editingTagId.value !== normalizedId) {
-    editingTagId.value = null;
-    editingTagName.value = '';
-  }
-  if (creatingTag.value) {
-    creatingTag.value = false;
-    newTagName.value = '';
-  }
-  if (selectedTagId.value === normalizedId) {
-    return;
-  }
-  handleTagFilterChange(normalizedId);
-};
-
-const handleUntaggedClick = () => {
   if (creatingTag.value) {
     creatingTag.value = false;
     newTagName.value = '';
@@ -251,8 +227,8 @@ const handleUntaggedClick = () => {
     editingTagId.value = null;
     editingTagName.value = '';
   }
-  if (selectedTagId.value === UNTAGGED_TAG_ID) return;
-  handleTagFilterChange(UNTAGGED_TAG_ID);
+  if (selectedTagId.value === tagId) return;
+  handleTagFilterChange(tagId);
 };
 
 const startCreateTag = () => {
@@ -354,18 +330,24 @@ const confirmDeleteTag = (tag: any) => {
   if (editingTagId.value) {
     cancelEditTag();
   }
+  const deleteDescKey = isFAQ.value ? 'knowledgeBase.tagDeleteDesc' : 'knowledgeBase.tagDeleteDescDoc';
   const confirm = window.confirm(
-    t('knowledgeBase.tagDeleteDesc', { name: tag.name }) as string,
+    t(deleteDescKey, { name: tag.name }) as string,
   );
   if (!confirm) return;
-  deleteKnowledgeBaseTag(kbId.value, tag.id, { force: true })
+  deleteKnowledgeBaseTag(kbId.value, tag.seq_id, { force: true })
     .then(() => {
       MessagePlugin.success(t('knowledgeBase.tagDeleteSuccess'));
       if (selectedTagId.value === tag.id) {
-        handleTagFilterChange(UNTAGGED_TAG_ID);
+        // Reset to show all entries when current tag is deleted
+        selectedTagId.value = '';
+        handleTagFilterChange('');
       }
       loadTags(kbId.value);
-      loadKnowledgeFiles(kbId.value);
+      // 由于后端是异步删除文档，延迟刷新以确保看到最新数据
+      setTimeout(() => {
+        loadKnowledgeFiles(kbId.value);
+      }, 500);
     })
     .catch((error: any) => {
       MessagePlugin.error(error?.message || t('common.operationFailed'));
@@ -374,8 +356,8 @@ const confirmDeleteTag = (tag: any) => {
 
 const handleKnowledgeTagChange = async (knowledgeId: string, tagValue: string) => {
   try {
-    // When selecting "untagged", pass null to clear the tag
-    const tagIdToUpdate = tagValue === UNTAGGED_TAG_ID ? null : (tagValue || null);
+    // Pass the tag value directly (empty string means no tag)
+    const tagIdToUpdate = tagValue || null;
     await updateKnowledgeTagBatch({ updates: { [knowledgeId]: tagIdToUpdate } });
     MessagePlugin.success(t('knowledgeBase.tagUpdateSuccess') || '分类已更新');
     loadKnowledgeFiles(kbId.value);
@@ -394,7 +376,7 @@ const loadKnowledgeBaseInfo = async (targetKbId: string) => {
   try {
     const res: any = await getKnowledgeBaseById(targetKbId);
     kbInfo.value = res?.data || null;
-    selectedTagId.value = UNTAGGED_TAG_ID;
+    selectedTagId.value = '';
     if (!isFAQ.value) {
       loadKnowledgeFiles(targetKbId);
     } else {
@@ -1053,16 +1035,12 @@ async function createNewSession(value: string): Promise<void> {
                   v-for="tag in filteredTags"
                   :key="tag.id"
                   class="tag-list-item"
-                  :class="{ active: selectedTagId === tag.id, editing: editingTagId === tag.id && tag.id !== UNTAGGED_TAG_ID }"
-                  @click="tag.id === UNTAGGED_TAG_ID ? handleUntaggedClick() : handleTagRowClick(tag.id)"
+                  :class="{ active: selectedTagId === tag.id, editing: editingTagId === tag.id }"
+                  @click="handleTagRowClick(tag.id)"
                 >
                   <div class="tag-list-left">
                     <t-icon name="folder" size="18px" />
-                    <!-- Untagged pseudo-tag: show translated name, no editing -->
-                    <template v-if="tag.id === UNTAGGED_TAG_ID">
-                      <span class="tag-name">{{ $t('knowledgeBase.untagged') || '未分类' }}</span>
-                    </template>
-                    <template v-else-if="editingTagId === tag.id">
+                    <template v-if="editingTagId === tag.id">
                       <div class="tag-edit-input" @click.stop>
                         <t-input
                           :ref="setEditingTagInputRefByTag(tag.id)"
@@ -1080,11 +1058,7 @@ async function createNewSession(value: string): Promise<void> {
                   </div>
                   <div class="tag-list-right">
                     <span class="tag-count">{{ tag.knowledge_count || 0 }}</span>
-                    <!-- Untagged pseudo-tag: no edit/delete actions -->
-                    <template v-if="tag.id === UNTAGGED_TAG_ID">
-                      <!-- Empty placeholder for alignment -->
-                    </template>
-                    <template v-else-if="editingTagId === tag.id">
+                    <template v-if="editingTagId === tag.id">
                       <div class="tag-inline-actions" @click.stop>
                         <t-button
                           variant="text"

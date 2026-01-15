@@ -93,6 +93,8 @@ type Knowledge struct {
 	StorageSize int64 `json:"storage_size"`
 	// Metadata of the knowledge
 	Metadata JSON `json:"metadata"           gorm:"type:json"`
+	// Last FAQ import result (for FAQ type knowledge only)
+	LastFAQImportResult JSON `json:"last_faq_import_result" gorm:"type:json"`
 	// Creation time of the knowledge
 	CreatedAt time.Time `json:"created_at"`
 	// Last updated time of the knowledge
@@ -213,6 +215,32 @@ func (k *Knowledge) SetManualMetadata(meta *ManualKnowledgeMetadata) error {
 	}
 	k.Metadata = jsonValue
 	return nil
+}
+
+// SetLastFAQImportResult sets FAQ import result to the dedicated field.
+func (k *Knowledge) SetLastFAQImportResult(result *FAQImportResult) error {
+	if result == nil {
+		k.LastFAQImportResult = nil
+		return nil
+	}
+	jsonValue, err := result.ToJSON()
+	if err != nil {
+		return err
+	}
+	k.LastFAQImportResult = jsonValue
+	return nil
+}
+
+// GetLastFAQImportResult parses and returns FAQ import result from the dedicated field.
+func (k *Knowledge) GetLastFAQImportResult() (*FAQImportResult, error) {
+	if len(k.LastFAQImportResult) == 0 {
+		return nil, nil
+	}
+	var result FAQImportResult
+	if err := json.Unmarshal(k.LastFAQImportResult, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
 }
 
 // IsManual returns true if the knowledge item is manual Markdown knowledge.

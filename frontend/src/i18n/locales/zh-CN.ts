@@ -39,6 +39,7 @@ export default {
     tagEditSuccess: "标签更新成功",
     tagDeleteTitle: "删除标签",
     tagDeleteDesc: '确定删除标签"{name}"？该标签下的所有 FAQ 条目将被一并删除',
+    tagDeleteDescDoc: '确定删除标签"{name}"？该标签下的所有文档将被一并删除',
     tagDeleteSuccess: "标签已删除",
     tagEditAction: "重命名",
     tagDeleteAction: "删除",
@@ -1511,6 +1512,7 @@ export default {
       questionIndexModeDescription: "合并索引：标准问和相似问合并索引；分别索引：标准问和每个相似问独立索引，检索更精确但需要更多存储",
       entryGuide: "FAQ 条目由标准问、相似问、反例和多个答案组成，可在知识库详情中批量导入、编辑。",
       tagDesc: "为 FAQ 条目选择分类",
+      tagPlaceholder: "请选择分类",
       modes: {
         questionOnly: "仅标准问/相似问",
         questionAnswer: "标准问 + 答案",

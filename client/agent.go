@@ -12,14 +12,26 @@ import (
 	"strings"
 )
 
+// MentionedItem represents a mentioned item in the request
+type MentionedItem struct {
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Type   string `json:"type"`    // "kb" for knowledge base, "file" for file
+	KBType string `json:"kb_type"` // "document" or "faq" (only for kb type)
+}
+
 // AgentQARequest agent Q&A request payload.
 type AgentQARequest struct {
-	Query            string   `json:"query"`                        // Required query text
-	KnowledgeBaseIDs []string `json:"knowledge_base_ids,omitempty"` // Optional KBs for this query
-	AgentEnabled     bool     `json:"agent_enabled"`                // Whether to run in agent mode
-	WebSearchEnabled bool     `json:"web_search_enabled"`           // Whether to enable web search
-	SummaryModelID   string   `json:"summary_model_id,omitempty"`   // Optional summary model override
-	MCPServiceIDs    []string `json:"mcp_service_ids,omitempty"`    // Optional MCP service allow list
+	Query            string          `json:"query"`                        // Required query text
+	KnowledgeBaseIDs []string        `json:"knowledge_base_ids,omitempty"` // Optional KBs for this query
+	KnowledgeIDs     []string        `json:"knowledge_ids,omitempty"`      // Optional specific knowledge IDs for this query
+	AgentEnabled     bool            `json:"agent_enabled"`                // Whether to run in agent mode
+	AgentID          string          `json:"agent_id,omitempty"`           // Optional custom agent ID
+	WebSearchEnabled bool            `json:"web_search_enabled"`           // Whether to enable web search
+	SummaryModelID   string          `json:"summary_model_id,omitempty"`   // Optional summary model override
+	MentionedItems   []MentionedItem `json:"mentioned_items,omitempty"`    // @mentioned knowledge bases and files
+	DisableTitle     bool            `json:"disable_title,omitempty"`      // Whether to disable auto title generation
+	MCPServiceIDs    []string        `json:"mcp_service_ids,omitempty"`    // Optional MCP service allow list (deprecated)
 }
 
 // AgentResponseType defines the type of agent response

@@ -102,6 +102,8 @@ type ImageInfo struct {
 type Chunk struct {
 	// Unique identifier of the chunk, using UUID format
 	ID string `json:"id"                       gorm:"type:varchar(36);primaryKey"`
+	// SeqID is an auto-increment integer ID for external API usage (FAQ entries)
+	SeqID int64 `json:"seq_id"                   gorm:"type:bigint;uniqueIndex;autoIncrement"`
 	// Tenant ID, used for multi-tenant isolation
 	TenantID uint64 `json:"tenant_id"`
 	// ID of the parent knowledge, associated with the Knowledge model
