@@ -3937,7 +3937,7 @@ func (s *knowledgeService) UpdateFAQEntry(ctx context.Context,
 	}
 
 	// 检查标准问和相似问是否与其他条目重复
-	if err := s.checkFAQQuestionDuplicate(ctx, tenantID, kb.ID, "", meta); err != nil {
+	if err := s.checkFAQQuestionDuplicate(ctx, tenantID, kb.ID, chunk.ID, meta); err != nil {
 		return nil, err
 	}
 
@@ -5412,6 +5412,22 @@ func (s *knowledgeService) checkFAQQuestionDuplicate(
 	excludeChunkID string,
 	meta *types.FAQChunkMetadata,
 ) error {
+	// 首先检查当前条目自身的相似问是否与标准问重复
+	for _, q := range meta.SimilarQuestions {
+		if q == meta.StandardQuestion {
+			return werrors.NewBadRequestError(fmt.Sprintf("相似问「%s」不能与标准问相同", q))
+		}
+	}
+
+	// 检查当前条目自身的相似问之间是否有重复
+	seen := make(map[string]struct{})
+	for _, q := range meta.SimilarQuestions {
+		if _, exists := seen[q]; exists {
+			return werrors.NewBadRequestError(fmt.Sprintf("相似问「%s」重复", q))
+		}
+		seen[q] = struct{}{}
+	}
+
 	// 查询知识库中已有的所有FAQ chunks的metadata
 	existingChunks, err := s.chunkRepo.ListAllFAQChunksWithMetadataByKnowledgeBaseID(ctx, tenantID, kbID)
 	if err != nil {
