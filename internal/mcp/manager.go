@@ -35,17 +35,17 @@ func NewMCPManager() *MCPManager {
 }
 
 // GetOrCreateClient gets an existing client or creates a new one
-// For stdio transport, always creates a new client (not cached)
-// For SSE/HTTP Streamable, caches and reuses existing connections
+// Caches and reuses existing connections for SSE/HTTP Streamable
+// Note: Stdio transport is disabled for security reasons
 func (m *MCPManager) GetOrCreateClient(service *types.MCPService) (MCPClient, error) {
 	// Check if service is enabled
 	if !service.Enabled {
 		return nil, fmt.Errorf("MCP service %s is not enabled", service.Name)
 	}
 
-	// For stdio transport, always create a new client (don't cache)
+	// Stdio transport is disabled for security reasons
 	if service.TransportType == types.MCPTransportStdio {
-		return m.createStdioClient(service)
+		return nil, fmt.Errorf("stdio transport is disabled for security reasons; please use SSE or HTTP Streamable transport instead")
 	}
 
 	// For SSE/HTTP Streamable, check if client already exists and reuse
@@ -92,32 +92,6 @@ func (m *MCPManager) GetOrCreateClient(service *types.MCPService) (MCPClient, er
 	m.clients[service.ID] = client
 
 	logger.GetLogger(m.ctx).Infof("MCP client created and initialized for service: %s", service.Name)
-	return client, nil
-}
-
-// createStdioClient creates a new stdio client (not cached)
-func (m *MCPManager) createStdioClient(service *types.MCPService) (MCPClient, error) {
-	// Create new client
-	config := &ClientConfig{
-		Service: service,
-	}
-
-	client, err := NewMCPClient(config)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create stdio MCP client: %w", err)
-	}
-
-	// For stdio, Connect() starts the subprocess
-	// Use manager's context for the connection lifecycle
-	if err := client.Connect(m.ctx); err != nil {
-		return nil, fmt.Errorf("failed to connect to stdio MCP service: %w", err)
-	}
-
-	if err := m.initializeClient(service, client, "failed to initialize stdio MCP client"); err != nil {
-		return nil, err
-	}
-
-	logger.GetLogger(m.ctx).Infof("MCP stdio client created and initialized for service: %s", service.Name)
 	return client, nil
 }
 

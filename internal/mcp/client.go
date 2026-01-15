@@ -9,7 +9,6 @@ import (
 
 	"github.com/Tencent/WeKnora/internal/logger"
 	"github.com/Tencent/WeKnora/internal/types"
-	secutils "github.com/Tencent/WeKnora/internal/utils"
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/client/transport"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -119,36 +118,8 @@ func NewMCPClient(config *ClientConfig) (MCPClient, error) {
 			return nil, fmt.Errorf("failed to create HTTP streamable client: %w", err)
 		}
 	case types.MCPTransportStdio:
-		if config.Service.StdioConfig == nil {
-			return nil, fmt.Errorf("stdio_config is required for stdio transport")
-		}
-
-		// Security validation: validate command, args, and env vars before execution
-		// This prevents command injection attacks (CWE-78)
-		if err := secutils.ValidateStdioConfig(
-			config.Service.StdioConfig.Command,
-			config.Service.StdioConfig.Args,
-			config.Service.EnvVars,
-		); err != nil {
-			return nil, fmt.Errorf("stdio configuration validation failed: %w", err)
-		}
-
-		// Convert env vars map to []string format (KEY=value)
-		envVars := make([]string, 0, len(config.Service.EnvVars))
-		for key, value := range config.Service.EnvVars {
-			envVars = append(envVars, fmt.Sprintf("%s=%s", key, value))
-		}
-
-		// Create stdio client with options
-		// NewStdioMCPClientWithOptions(command string, env []string, args []string, opts ...transport.StdioOption)
-		mcpClient, err = client.NewStdioMCPClientWithOptions(
-			config.Service.StdioConfig.Command,
-			envVars,
-			config.Service.StdioConfig.Args,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create stdio client: %w", err)
-		}
+		// Stdio transport is disabled for security reasons (potential command injection vulnerabilities)
+		return nil, fmt.Errorf("stdio transport is disabled for security reasons; please use SSE or HTTP Streamable transport instead")
 	default:
 		return nil, ErrUnsupportedTransport
 	}
