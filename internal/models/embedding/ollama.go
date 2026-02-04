@@ -95,7 +95,9 @@ func (e *OllamaEmbedder) BatchEmbed(ctx context.Context, texts []string) ([][]fl
 
 	// Set truncation parameters
 	if e.truncatePromptTokens > 0 {
-		req.Options["truncate"] = e.truncatePromptTokens
+		req.Options["num_ctx"] = e.truncatePromptTokens
+		truncate := true
+		req.Truncate = &truncate
 	}
 
 	// Send request
