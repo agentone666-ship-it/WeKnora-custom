@@ -44,6 +44,7 @@ type sessionService struct {
 	chunkService         interfaces.ChunkService          // Service for chunk operations
 	webSearchStateRepo   interfaces.WebSearchStateService // Service for web search state
 	kbShareService       interfaces.KBShareService        // Service for KB sharing operations
+	memoryService        interfaces.MemoryService         // Service for memory operations
 }
 
 // NewSessionService creates a new session service instance with all required dependencies
@@ -60,6 +61,7 @@ func NewSessionService(cfg *config.Config,
 	sessionStorage llmcontext.ContextStorage,
 	webSearchStateRepo interfaces.WebSearchStateService,
 	kbShareService interfaces.KBShareService,
+	memoryService interfaces.MemoryService,
 ) interfaces.SessionService {
 	return &sessionService{
 		cfg:                  cfg,
@@ -75,6 +77,7 @@ func NewSessionService(cfg *config.Config,
 		sessionStorage:       sessionStorage,
 		webSearchStateRepo:   webSearchStateRepo,
 		kbShareService:       kbShareService,
+		memoryService:        memoryService,
 	}
 }
 
@@ -443,13 +446,15 @@ func (s *sessionService) KnowledgeQA(
 	webSearchEnabled bool,
 	eventBus *event.EventBus,
 	customAgent *types.CustomAgent,
+	enableMemory bool,
 ) error {
 	logger.Infof(
 		ctx,
-		"Knowledge base question answering parameters, session ID: %s, query: %s, webSearchEnabled: %v",
+		"Knowledge base question answering parameters, session ID: %s, query: %s, webSearchEnabled: %v, enableMemory: %v",
 		session.ID,
 		query,
 		webSearchEnabled,
+		enableMemory,
 	)
 
 	// Use custom agent's knowledge bases only if request didn't specify any
@@ -636,10 +641,15 @@ func (s *sessionService) KnowledgeQA(
 		chatModelID,
 		len(searchTargets),
 	)
+
+	// Get UserID from context
+	userID, _ := ctx.Value(types.UserIDContextKey).(string)
+
 	chatManage := &types.ChatManage{
 		Query:                query,
 		RewriteQuery:         query,
 		SessionID:            session.ID,
+		UserID:               userID,
 		MessageID:            assistantMessageID, // NEW: For event emission in pipeline
 		KnowledgeBaseIDs:     knowledgeBaseIDs,   // Multi-KB support
 		KnowledgeIDs:         knowledgeIDs,       // Specific knowledge (file) IDs
@@ -658,6 +668,7 @@ func (s *sessionService) KnowledgeQA(
 		FallbackPrompt:       fallbackPrompt,
 		EventBus:             eventBus.AsEventBusInterface(), // NEW: For pipeline to emit events directly
 		WebSearchEnabled:     webSearchEnabled,
+		EnableMemory:         enableMemory,      // Enable memory feature
 		TenantID:             retrievalTenantID, // Effective tenant for retrieval (shared agent = agent's tenant)
 		RewritePromptSystem:  rewritePromptSystem,
 		RewritePromptUser:    rewritePromptUser,
@@ -1157,9 +1168,11 @@ func (s *sessionService) SearchKnowledge(ctx context.Context,
 	}
 
 	// Create default retrieval parameters
+	userID, _ := ctx.Value(types.UserIDContextKey).(string)
 	chatManage := &types.ChatManage{
 		Query:            query,
 		RewriteQuery:     query,
+		UserID:           userID,
 		KnowledgeBaseIDs: knowledgeBaseIDs,
 		KnowledgeIDs:     knowledgeIDs,
 		SearchTargets:    searchTargets,
