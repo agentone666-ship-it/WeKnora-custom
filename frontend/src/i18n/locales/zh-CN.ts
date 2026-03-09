@@ -152,6 +152,10 @@ export default {
     docActionUnsupported: "当前知识库类型不支持该操作",
     notInitialized:
       "该知识库尚未完成初始化配置，请先前往设置页面配置模型信息后再上传文件",
+    missingStorageEngine:
+      "该知识库尚未选择存储引擎，请先前往设置页面配置存储引擎后再上传内容。",
+    missingStorageEngineUpload: "请先配置存储引擎后再上传内容",
+    goToStorageSettings: "前往配置",
     getInfoFailed: "获取知识库信息失败，无法上传文件",
     missingId: "缺少知识库ID",
     deleteFailed: "删除失败，请稍后再试！",
@@ -1897,6 +1901,7 @@ export default {
       buildDataFailed: "数据构建失败",
       updateSuccess: "配置保存成功",
       indexModeRequired: "请选择 FAQ 的索引方式",
+      storageChangeConfirm: "知识库中已有文件，更改存储引擎后旧文件可能无法正常访问。是否确认更改？",
     },
     document: {
       title: "文档",
@@ -3036,6 +3041,7 @@ export default {
       notConfigured: "未配置",
       unavailable: "不可用",
       lockedHint: "知识库中已有文件，无法切换存储引擎。如需更换，请先清空知识库中的所有文件。",
+      changeWarning: "更改存储引擎仅影响新上传的文件。已有文件仍使用原存储引擎读取，但部分旧文件可能无法自动识别而导致访问失败。",
       goGlobalSettings: "去全局设置中配置",
       engineLocal: "Local（本地存储）",
       engineLocalDesc: "仅适合单机部署，简单轻量",

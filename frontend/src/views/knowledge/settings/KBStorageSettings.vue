@@ -24,7 +24,6 @@
             size="medium"
             :placeholder="$t('kbSettings.storage.selectPlaceholder')"
             style="width: 100%; min-width: 220px;"
-            :disabled="props.hasFiles"
             @change="handleChange"
           >
             <t-option
@@ -41,7 +40,7 @@
               </span>
             </t-option>
           </t-select>
-          <p v-if="props.hasFiles" class="option-hint locked-hint">{{ $t('kbSettings.storage.lockedHint') }}</p>
+          <p v-if="props.hasFiles" class="option-hint change-warning">{{ $t('kbSettings.storage.changeWarning') }}</p>
           <p v-else-if="selectedOption?.desc" class="option-hint">{{ selectedOption.desc }}</p>
           <a v-if="showGoSettings" href="javascript:void(0)" class="go-settings" @click.prevent="goToStorageSettings">{{ $t('kbSettings.storage.goGlobalSettings') }}</a>
         </div>
@@ -251,6 +250,10 @@ onMounted(load)
   line-height: 1.4;
 
   &.locked-hint {
+    color: var(--td-warning-color);
+  }
+
+  &.change-warning {
     color: var(--td-warning-color);
   }
 }

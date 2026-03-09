@@ -43,6 +43,11 @@ const folderUploadInputRef = ref<HTMLInputElement | null>(null);
 const uploading = ref(false);
 const kbLoading = ref(false);
 const isFAQ = computed(() => (kbInfo.value?.type || '') === 'faq');
+const missingStorageEngine = computed(() => {
+  if (!kbInfo.value || isFAQ.value) return false
+  const spc = kbInfo.value.storage_provider_config
+  return !spc || !spc.provider
+})
 const parserEngines = ref<ParserEngineInfo[]>([]);
 
 const supportedFileTypes = computed<Set<string>>(() => {
@@ -947,6 +952,10 @@ const ensureDocumentKbReady = () => {
     MessagePlugin.warning(t('knowledgeBase.notInitialized'));
     return false;
   }
+  if (missingStorageEngine.value) {
+    MessagePlugin.warning(t('knowledgeBase.missingStorageEngineUpload'));
+    return false;
+  }
   return true;
 };
 
@@ -1459,6 +1468,11 @@ async function createNewSession(value: string): Promise<void> {
             <span>{{ $t('knowledgeBase.unsupportedTypesHint', { types: unsupportedFileTypes.map(t => '.' + t).join('、') }) }}</span>
             <span class="parser-hint-link">{{ $t('knowledgeBase.goToParserSettings') }} →</span>
           </p>
+          <div v-if="missingStorageEngine" class="storage-engine-warning" @click="handleOpenKBSettings">
+            <t-icon name="error-circle" class="warning-icon" />
+            <span>{{ $t('knowledgeBase.missingStorageEngine') }}</span>
+            <span class="warning-link">{{ $t('knowledgeBase.goToStorageSettings') }} →</span>
+          </div>
         </div>
       </div>
       
@@ -2709,6 +2723,41 @@ async function createNewSession(value: string): Promise<void> {
     }
 
     .parser-hint-link {
+      color: var(--td-brand-color);
+      margin-left: 2px;
+      white-space: nowrap;
+    }
+  }
+
+  .storage-engine-warning {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 8px 0 0;
+    padding: 8px 12px;
+    background: var(--td-warning-color-1, #fff8e6);
+    border: 1px solid var(--td-warning-color-3, #ffcc33);
+    border-radius: 6px;
+    color: var(--td-warning-color);
+    font-size: 13px;
+    line-height: 1.4;
+    cursor: pointer;
+    transition: background 0.15s ease;
+
+    &:hover {
+      background: var(--td-warning-color-2, #fff1c9);
+
+      .warning-link {
+        text-decoration: underline;
+      }
+    }
+
+    .warning-icon {
+      font-size: 14px;
+      flex-shrink: 0;
+    }
+
+    .warning-link {
       color: var(--td-brand-color);
       margin-left: 2px;
       white-space: nowrap;
