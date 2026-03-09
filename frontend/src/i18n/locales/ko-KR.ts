@@ -160,6 +160,10 @@ export default {
     docActionUnsupported: "현재 지식베이스 유형은 이 작업을 지원하지 않습니다",
     notInitialized:
       "이 지식베이스는 아직 초기화되지 않았습니다. 설정 페이지에서 모델 정보를 먼저 구성한 후 파일을 업로드하세요",
+    missingStorageEngine:
+      "이 지식베이스에 스토리지 엔진이 선택되지 않았습니다. 콘텐츠를 업로드하기 전에 설정 페이지에서 스토리지 엔진을 구성하세요.",
+    missingStorageEngineUpload: "콘텐츠를 업로드하기 전에 스토리지 엔진을 구성하세요",
+    goToStorageSettings: "설정으로 이동",
     getInfoFailed: "지식베이스 정보를 가져오는 데 실패하여 파일을 업로드할 수 없습니다",
     missingId: "지식베이스 ID가 없습니다",
     deleteFailed: "삭제 실패, 나중에 다시 시도하세요!",
@@ -1932,6 +1936,7 @@ export default {
       buildDataFailed: "데이터 구축 실패",
       updateSuccess: "설정 저장 성공",
       indexModeRequired: "FAQ 인덱스 방식을 선택해주세요",
+      storageChangeConfirm: "지식베이스에 파일이 있습니다. 스토리지 엔진을 변경하면 이전 파일에 접근할 수 없게 될 수 있습니다. 계속하시겠습니까?",
     },
     document: {
       title: "문서",
@@ -3111,6 +3116,7 @@ export default {
       notConfigured: '미구성',
       unavailable: '사용 불가',
       lockedHint: '지식베이스에 파일이 있어 스토리지 엔진을 변경할 수 없습니다. 변경하려면 모든 파일을 먼저 삭제하세요.',
+      changeWarning: '스토리지 엔진을 변경하면 새로 업로드된 파일에만 영향을 미칩니다. 기존 파일은 여전히 원래 스토리지 엔진에서 읽히지만, 일부 이전 파일의 경로를 자동으로 인식할 수 없어 접근이 불가능할 수 있습니다.',
       goGlobalSettings: '전역 설정으로 이동',
       engineLocal: 'Local（로컬 스토리지）',
       engineLocalDesc: '단일 노드 배포에 적합, 간단하고 가벼움',

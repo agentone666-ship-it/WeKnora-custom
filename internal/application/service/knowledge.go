@@ -162,6 +162,22 @@ func (s *knowledgeService) isKnowledgeDeleting(ctx context.Context, tenantID uin
 	return knowledge.ParseStatus == types.ParseStatusDeleting
 }
 
+// checkStorageEngineConfigured verifies that the knowledge base has a storage engine configured
+// (either at the KB level or via the tenant default). Returns an error if no storage engine is found.
+func checkStorageEngineConfigured(ctx context.Context, kb *types.KnowledgeBase) error {
+	provider := kb.GetStorageProvider()
+	if provider == "" {
+		tenant, _ := ctx.Value(types.TenantInfoContextKey).(*types.Tenant)
+		if tenant != nil && tenant.StorageEngineConfig != nil {
+			provider = strings.ToLower(strings.TrimSpace(tenant.StorageEngineConfig.DefaultProvider))
+		}
+	}
+	if provider == "" {
+		return werrors.NewBadRequestError("请先为知识库选择存储引擎，再上传内容。请前往知识库设置页面进行配置。")
+	}
+	return nil
+}
+
 // CreateKnowledgeFromFile creates a knowledge entry from an uploaded file
 func (s *knowledgeService) CreateKnowledgeFromFile(ctx context.Context,
 	kbID string, file *multipart.FileHeader, metadata map[string]string, enableMultimodel *bool, customFileName string, tagID string,
@@ -182,6 +198,10 @@ func (s *knowledgeService) CreateKnowledgeFromFile(ctx context.Context,
 	kb, err := s.kbService.GetKnowledgeBaseByID(ctx, kbID)
 	if err != nil {
 		logger.Errorf(ctx, "Failed to get knowledge base: %v", err)
+		return nil, err
+	}
+
+	if err := checkStorageEngineConfigured(ctx, kb); err != nil {
 		return nil, err
 	}
 
@@ -434,6 +454,10 @@ func (s *knowledgeService) CreateKnowledgeFromURL(ctx context.Context,
 		return nil, err
 	}
 
+	if err := checkStorageEngineConfigured(ctx, kb); err != nil {
+		return nil, err
+	}
+
 	// Validate URL format and security
 	logger.Info(ctx, "Validating URL")
 	if !isValidURL(url) || !secutils.IsValidURL(url) {
@@ -612,6 +636,10 @@ func (s *knowledgeService) createKnowledgeFromFileURL(
 	kb, err := s.kbService.GetKnowledgeBaseByID(ctx, kbID)
 	if err != nil {
 		logger.Errorf(ctx, "Failed to get knowledge base: %v", err)
+		return nil, err
+	}
+
+	if err := checkStorageEngineConfigured(ctx, kb); err != nil {
 		return nil, err
 	}
 
@@ -808,6 +836,10 @@ func (s *knowledgeService) CreateKnowledgeFromManual(ctx context.Context,
 	kb, err := s.kbService.GetKnowledgeBaseByID(ctx, kbID)
 	if err != nil {
 		logger.Errorf(ctx, "Failed to get knowledge base: %v", err)
+		return nil, err
+	}
+
+	if err := checkStorageEngineConfigured(ctx, kb); err != nil {
 		return nil, err
 	}
 

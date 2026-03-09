@@ -193,7 +193,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
-import { MessagePlugin } from 'tdesign-vue-next'
+import { MessagePlugin, DialogPlugin } from 'tdesign-vue-next'
 import { createKnowledgeBase, getKnowledgeBaseById, listKnowledgeFiles, updateKnowledgeBase } from '@/api/knowledge-base'
 import { updateKBConfig, type KBModelConfigRequest } from '@/api/initialization'
 import { listModels } from '@/api/model'
@@ -229,6 +229,7 @@ const saving = ref(false)
 const loading = ref(false)
 const allModels = ref<any[]>([])
 const hasFiles = ref(false)
+const initialStorageProvider = ref<string>('')
 
 const navItems = computed(() => {
   const items = [
@@ -401,6 +402,7 @@ const loadKBData = async () => {
         questionCount: kb.question_generation_config?.question_count || 3
       },
     }
+    initialStorageProvider.value = formData.value.storageProvider
   } catch (error) {
     console.error('Failed to load knowledge base data:', error)
     MessagePlugin.error(t('knowledgeEditor.messages.loadDataFailed'))
@@ -568,6 +570,34 @@ const handleSubmit = async () => {
     return
   }
 
+  // 编辑模式下，若已有文件且存储引擎发生了变化，弹窗确认
+  if (
+    props.mode === 'edit' &&
+    hasFiles.value &&
+    formData.value &&
+    initialStorageProvider.value &&
+    formData.value.storageProvider !== initialStorageProvider.value
+  ) {
+    const dialog = DialogPlugin.confirm({
+      header: t('common.confirm'),
+      body: t('knowledgeEditor.messages.storageChangeConfirm'),
+      confirmBtn: t('common.confirm'),
+      cancelBtn: t('common.cancel'),
+      onConfirm: () => {
+        dialog.destroy()
+        doSubmit()
+      },
+      onCancel: () => {
+        dialog.destroy()
+      },
+    })
+    return
+  }
+
+  doSubmit()
+}
+
+const doSubmit = async () => {
   saving.value = true
   try {
     const data = buildSubmitData()
@@ -653,6 +683,7 @@ const resetState = () => {
   currentSection.value = 'basic'
   formData.value = null
   hasFiles.value = false
+  initialStorageProvider.value = ''
   saving.value = false
   loading.value = false
 }

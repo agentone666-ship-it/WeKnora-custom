@@ -151,6 +151,9 @@ export default {
     confirmDeleteQuestion: 'Are you sure you want to delete this question? The corresponding vector index will also be removed.',
     legacyQuestionCannotDelete: 'Legacy format questions cannot be deleted. Please regenerate questions.',
     notInitialized: 'Knowledge base is not initialized. Please configure models in settings before uploading files',
+    missingStorageEngine: 'This knowledge base has no storage engine selected. Please configure a storage engine in settings before uploading content.',
+    missingStorageEngineUpload: 'Please configure a storage engine before uploading content',
+    goToStorageSettings: 'Go to Settings',
     getInfoFailed: 'Failed to get knowledge base information, file upload is not possible',
     missingId: 'Knowledge base ID is missing',
     deleteFailed: 'Delete failed. Please try again later!',
@@ -1442,7 +1445,8 @@ export default {
       missingId: 'Knowledge base ID is missing',
       buildDataFailed: 'Failed to construct submission data',
       updateSuccess: 'Configuration saved successfully',
-      indexModeRequired: 'Please select an indexing mode for FAQ knowledge bases'
+      indexModeRequired: 'Please select an indexing mode for FAQ knowledge bases',
+      storageChangeConfirm: 'This knowledge base already has files. Changing the storage engine may make old files inaccessible. Do you want to proceed?'
     },
     document: {
       title: 'Document Management',
@@ -3043,6 +3047,7 @@ export default {
       notConfigured: 'Not Configured',
       unavailable: 'Unavailable',
       lockedHint: 'This knowledge base already has files. Cannot switch storage engine. To change, please clear all files first.',
+      changeWarning: 'Changing the storage engine only affects newly uploaded files. Existing files will still be read from the original storage engine, but some old files may become inaccessible if their paths cannot be automatically recognized.',
       goGlobalSettings: 'Go to Global Settings',
       engineLocal: 'Local Storage',
       engineLocalDesc: 'For single-node deployment, simple and lightweight',
