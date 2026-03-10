@@ -1,6 +1,6 @@
 // @ts-nocheck
 <script setup lang="ts">
-import { ref, shallowRef, watch, onUnmounted, nextTick, defineAsyncComponent, onMounted } from 'vue';
+import { ref, shallowRef, watch, onUnmounted, nextTick, defineAsyncComponent } from 'vue';
 import { previewKnowledgeFile } from '@/api/knowledge-base/index';
 import { MessagePlugin } from 'tdesign-vue-next';
 import hljs from 'highlight.js';
@@ -33,29 +33,15 @@ const imageNaturalHeight = ref(0);
 let loadedForId = '';
 
 const isFullscreen = ref(false);
-const previewContainerRef = ref<HTMLElement | null>(null);
 
 function toggleFullscreen() {
-  if (!document.fullscreenElement) {
-    if (previewContainerRef.value?.requestFullscreen) {
-      previewContainerRef.value.requestFullscreen().catch((err: any) => {
-        console.error(`Error attempting to enable fullscreen: ${err.message}`);
-      });
-    }
+  isFullscreen.value = !isFullscreen.value;
+  if (isFullscreen.value) {
+    document.body.style.overflow = 'hidden';
   } else {
-    if (document.exitFullscreen) {
-      document.exitFullscreen();
-    }
+    document.body.style.overflow = '';
   }
 }
-
-function handleFullscreenChange() {
-  isFullscreen.value = !!document.fullscreenElement;
-}
-
-onMounted(() => {
-  document.addEventListener('fullscreenchange', handleFullscreenChange);
-});
 
 
 const fileTypeMap: Record<string, typeof previewType.value> = {};
@@ -322,13 +308,13 @@ watch(
 );
 
 onUnmounted(() => {
-  document.removeEventListener('fullscreenchange', handleFullscreenChange);
+  document.body.style.overflow = '';
   cleanup();
 });
 </script>
 
 <template>
-  <div ref="previewContainerRef" class="document-preview" :class="{ 'is-fullscreen': isFullscreen }">
+  <div class="document-preview" :class="{ 'is-fullscreen': isFullscreen }">
     <!-- Toolbar -->
     <div class="preview-toolbar" v-if="!loading && !error && previewType !== 'unsupported'">
       <t-space size="small">
@@ -439,17 +425,37 @@ onUnmounted(() => {
 }
 
 .is-fullscreen {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 2001;
   background: var(--td-bg-color-container);
   padding: 0;
   overflow-y: auto;
-  z-index: 1000;
 
-  .preview-container {
-    max-height: 100vh;
+  .preview-toolbar {
+    position: fixed;
+    top: 12px;
+    right: 32px;
+    z-index: 2002;
   }
 
-  .preview-pdf, .preview-pptx {
+  .preview-pdf {
     height: 100vh;
+  }
+
+  .preview-pptx {
+    height: auto;
+    min-height: 100vh;
+    overflow: visible;
+    border: none;
+
+    :deep(.pptx-preview-wrapper) {
+      height: auto !important;
+      overflow-y: visible !important;
+    }
   }
 
   .preview-docx {
@@ -461,6 +467,22 @@ onUnmounted(() => {
       height: 100%;
       flex: 1;
     }
+  }
+
+  .preview-image {
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    .image-wrapper img {
+      max-height: calc(100vh - 80px);
+    }
+  }
+
+  .preview-excel .excel-container,
+  .preview-markdown,
+  .preview-text .code-preview {
+    max-height: 100vh;
   }
 }
 
@@ -563,12 +585,17 @@ onUnmounted(() => {
 
 // ── PPTX ──
 .preview-pptx {
-  height: @preview-max-h;
+  max-height: @preview-max-h;
   min-height: 500px;
   border: 1px solid @border-color;
   border-radius: @border-radius;
-  overflow: hidden;
+  overflow: auto;
   background: @bg-subtle;
+
+  :deep(.pptx-preview-wrapper) {
+    height: auto !important;
+    overflow-y: visible !important;
+  }
 }
 
 // ── Excel ──
@@ -702,12 +729,12 @@ onUnmounted(() => {
 
 :deep(.vue-office-pptx) {
   width: 100%;
-  height: 100%;
+  min-height: 100%;
 }
 
 :deep(.vue-office-pptx-main) {
   width: 100%;
-  height: 100%;
+  min-height: 100%;
 }
 
 :deep(.excel-sheet) {
