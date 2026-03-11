@@ -233,10 +233,19 @@ func (g *pgRepository) KeywordsRetrieve(ctx context.Context,
 
 	logger.GetLogger(ctx).Infof("[Postgres] Keywords retrieval found %d results", len(embeddingDBList))
 	results := make([]*types.IndexWithScore, len(embeddingDBList))
+	const maxKeywordResultLog = 8
 	for i := range embeddingDBList {
 		results[i] = fromDBVectorEmbeddingWithScore(&embeddingDBList[i], types.MatchTypeKeywords)
-		logger.GetLogger(ctx).Debugf("[Postgres] Keywords result %d: chunk=%s, score=%f",
-			i, results[i].ChunkID, results[i].Score)
+		if i < maxKeywordResultLog {
+			logger.GetLogger(ctx).Debugf("[Postgres] Keywords result %d: chunk=%s, score=%f",
+				i, results[i].ChunkID, results[i].Score)
+		}
+	}
+	if len(results) > maxKeywordResultLog {
+		logger.GetLogger(ctx).Debugf(
+			"[Postgres] Keywords result summary: total=%d logged=%d truncated=%d",
+			len(results), maxKeywordResultLog, len(results)-maxKeywordResultLog,
+		)
 	}
 	return []*types.RetrieveResult{
 		{
@@ -387,10 +396,19 @@ func (g *pgRepository) VectorRetrieve(ctx context.Context,
 
 	logger.GetLogger(ctx).Infof("[Postgres] Vector retrieval found %d results", len(embeddingDBList))
 	results := make([]*types.IndexWithScore, len(embeddingDBList))
+	const maxVectorResultLog = 8
 	for i := range embeddingDBList {
 		results[i] = fromDBVectorEmbeddingWithScore(&embeddingDBList[i], types.MatchTypeEmbedding)
-		logger.GetLogger(ctx).Debugf("[Postgres] Vector search result %d: chunk_id %s, score %.4f",
-			i, results[i].ChunkID, results[i].Score)
+		if i < maxVectorResultLog {
+			logger.GetLogger(ctx).Debugf("[Postgres] Vector search result %d: chunk_id %s, score %.4f",
+				i, results[i].ChunkID, results[i].Score)
+		}
+	}
+	if len(results) > maxVectorResultLog {
+		logger.GetLogger(ctx).Debugf(
+			"[Postgres] Vector search result summary: total=%d logged=%d truncated=%d",
+			len(results), maxVectorResultLog, len(results)-maxVectorResultLog,
+		)
 	}
 	return []*types.RetrieveResult{
 		{
@@ -494,7 +512,7 @@ func (g *pgRepository) CopyIndices(ctx context.Context,
 			// Create new vector index, copy the content and vector of the source index
 			targetVector := &pgVector{
 				Content:         sourceVector.Content,
-				SourceID:        targetSourceID,        // Handle SourceID transformation properly
+				SourceID:        targetSourceID, // Handle SourceID transformation properly
 				SourceType:      sourceVector.SourceType,
 				ChunkID:         targetChunkID,         // Update to target chunk ID
 				KnowledgeID:     targetKnowledgeID,     // Update to target knowledge ID

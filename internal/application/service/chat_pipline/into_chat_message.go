@@ -77,6 +77,30 @@ func (p *PluginIntoChatMessage) OnEvent(ctx context.Context,
 	// Prepare weekday names
 	weekdayName := []string{"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"}
 
+	// Intent-based no-search path: bypass "reference materials" template entirely.
+	if chatManage.SkipKBSearch {
+		// Prefer rewritten query in no-search mode; fallback to original query.
+		userContent := safeQuery
+		if rewrite := strings.TrimSpace(chatManage.RewriteQuery); rewrite != "" {
+			if safeRewrite, ok := utils.ValidateInput(rewrite); ok {
+				userContent = safeRewrite
+			} else {
+				pipelineWarn(ctx, "IntoChatMessage", "invalid_rewrite_query_fallback", map[string]interface{}{
+					"session_id": chatManage.SessionID,
+				})
+			}
+		}
+		if chatManage.ImageOCRText != "" && !chatManage.ChatModelSupportsVision {
+			userContent += "\n\n[用户上传图片内容]\n" + chatManage.ImageOCRText
+		}
+		chatManage.UserContent = userContent
+		pipelineInfo(ctx, "IntoChatMessage", "skip_template_no_search", map[string]interface{}{
+			"session_id":       chatManage.SessionID,
+			"user_content_len": len(chatManage.UserContent),
+		})
+		return next()
+	}
+
 	var contextsBuilder strings.Builder
 
 	// Build contexts string based on FAQ priority strategy

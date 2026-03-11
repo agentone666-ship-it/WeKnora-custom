@@ -11,9 +11,11 @@ import (
 	"time"
 
 	"github.com/Tencent/WeKnora/internal/config"
+	"github.com/Tencent/WeKnora/internal/event"
 	"github.com/Tencent/WeKnora/internal/models/chat"
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
+	"github.com/google/uuid"
 )
 
 // PluginRewrite is a plugin for rewriting user queries
@@ -26,10 +28,10 @@ type PluginRewrite struct {
 
 // reg is a regular expression used to match and remove content between <think></think> tags
 var reg = regexp.MustCompile(`(?s)<think>.*?</think>`)
+var rewriteImageSepPattern = regexp.MustCompile(`(?s)^(.*?)\s*\n?---\n(.*)$`)
 
 const (
-	noSearchPrefix     = "[NO_SEARCH]"
-	imageDescSeparator = "\n---\n"
+	noSearchPrefix = "[NO_SEARCH]"
 )
 
 // NewPluginRewrite creates a new query rewriting plugin instance
@@ -118,8 +120,23 @@ func (p *PluginRewrite) OnEvent(ctx context.Context,
 		maxTokens = 500
 	}
 
+	// --- Emit progress event for image analysis ---
+	var toolCallID string
+	if useImages && chatManage.EventBus != nil {
+		toolCallID = uuid.New().String()
+		chatManage.EventBus.Emit(ctx, types.Event{
+			Type:      types.EventType(event.EventAgentToolCall),
+			SessionID: chatManage.SessionID,
+			Data: event.AgentToolCallData{
+				ToolCallID: toolCallID,
+				ToolName:   "image_analysis",
+			},
+		})
+	}
+
 	// --- Call model ---
 	thinking := false
+	vlmStart := time.Now()
 	response, err := rewriteModel.Chat(ctx, []chat.Message{
 		{Role: "system", Content: systemContent},
 		userMsg,
@@ -129,6 +146,19 @@ func (p *PluginRewrite) OnEvent(ctx context.Context,
 		Thinking:            &thinking,
 	})
 	if err != nil {
+		if toolCallID != "" && chatManage.EventBus != nil {
+			chatManage.EventBus.Emit(ctx, types.Event{
+				Type:      types.EventType(event.EventAgentToolResult),
+				SessionID: chatManage.SessionID,
+				Data: event.AgentToolResultData{
+					ToolCallID: toolCallID,
+					ToolName:   "image_analysis",
+					Output:     "图片分析失败",
+					Success:    false,
+					Duration:   time.Since(vlmStart).Milliseconds(),
+				},
+			})
+		}
 		pipelineError(ctx, "Rewrite", "model_call", map[string]interface{}{
 			"session_id": chatManage.SessionID,
 			"error":      err.Error(),
@@ -136,9 +166,23 @@ func (p *PluginRewrite) OnEvent(ctx context.Context,
 		return next()
 	}
 
+	// --- Emit completion event for image analysis ---
+	if toolCallID != "" && chatManage.EventBus != nil {
+		chatManage.EventBus.Emit(ctx, types.Event{
+			Type:      types.EventType(event.EventAgentToolResult),
+			SessionID: chatManage.SessionID,
+			Data: event.AgentToolResultData{
+				ToolCallID: toolCallID,
+				ToolName:   "image_analysis",
+				Output:     "已分析图片内容",
+				Success:    true,
+				Duration:   time.Since(vlmStart).Milliseconds(),
+			},
+		})
+	}
+
 	// --- Parse structured output ---
 	p.parseRewriteOutput(chatManage, response.Content)
-
 	pipelineInfo(ctx, "Rewrite", "output", map[string]interface{}{
 		"session_id":      chatManage.SessionID,
 		"rewrite_query":   chatManage.RewriteQuery,
@@ -261,6 +305,13 @@ func (p *PluginRewrite) buildPrompts(chatManage *types.ChatManage, historyList [
 	if chatManage.RewritePromptSystem != "" {
 		systemPrompt = chatManage.RewritePromptSystem
 	}
+	// Strengthen context inheritance in multi-turn conversation:
+	// for follow-up questions that clearly refer to previous turns (especially
+	// uploaded-image understanding), prefer NO_SEARCH over KB retrieval.
+	systemPrompt += "\n\n## Additional Context Inheritance Guidance\n" +
+		"- If the current question is a follow-up to previous conversation content (especially previously uploaded images) and can be answered by that context, you MUST classify it as NO_SEARCH.\n" +
+		"- Examples: “第一张图再详细描述一下”, “第二张门上的字是什么意思”, “这个再展开讲讲”.\n" +
+		"- In these follow-up cases, output with [NO_SEARCH] prefix."
 
 	conversationText := formatConversationHistory(historyList)
 	currentTime := time.Now().Format("2006-01-02 15:04:05")
@@ -296,11 +347,16 @@ func (p *PluginRewrite) parseRewriteOutput(chatManage *types.ChatManage, raw str
 		content = strings.TrimSpace(strings.TrimPrefix(content, noSearchPrefix))
 	}
 
-	// 2. Split rewritten query and image description
-	if idx := strings.Index(content, imageDescSeparator); idx >= 0 {
-		chatManage.RewriteQuery = strings.TrimSpace(content[:idx])
-		chatManage.ImageOCRText = strings.TrimSpace(content[idx+len(imageDescSeparator):])
-	} else if content != "" {
+	// 2. Split rewritten query and image description.
+	// Be tolerant to model output variants like:
+	// - "query\n---\nimage_desc" (expected)
+	// - "query---\nimage_desc"   (missing leading newline before separator)
+	if m := rewriteImageSepPattern.FindStringSubmatch(content); len(m) == 3 {
+		chatManage.RewriteQuery = strings.TrimSpace(m[1])
+		chatManage.ImageOCRText = strings.TrimSpace(m[2])
+		return
+	}
+	if content != "" {
 		chatManage.RewriteQuery = content
 	}
 }

@@ -48,75 +48,27 @@ conversation:
     - Otherwise, output the rewritten question directly (no prefix = default to search)
     - IMPORTANT: This is a knowledge base Q&A system. Default to SEARCH. Only add [NO_SEARCH] when you are very confident the question has nothing to do with the knowledge base.
 
-    When to output [NO_SEARCH] (ONLY these narrow cases):
+    When to output [NO_SEARCH]:
     - Pure greetings, thanks, or farewell with no question ("谢谢", "你好", "再见")
     - Requests to summarize or manipulate the previous conversation itself ("总结一下我们的对话")
-    - When unsure, do NOT add the prefix (default to search)
+    - Pure image understanding with NO intent to search documents: describing, summarizing, translating, or extracting content from the image itself ("这张图片是什么", "描述一下图片内容", "帮我翻译图中文字", "图里的表格数据是什么", "帮我识别一下这张图")
+    - Follow-up questions that clearly refer to previous conversation content (especially previously uploaded images) and can be answered from dialogue context directly ("第一张图再详细描述一下", "第二张门上的字是什么意思", "这个再展开讲讲")
 
     When NOT to output [NO_SEARCH] (common mistakes to avoid):
-    - User uploads an image and asks to find/search/look up something → SEARCH (the image content is the search query)
-    - User asks about image content that may relate to documents ("这个报错怎么解决") → SEARCH
-    - User asks a question with an image, even if it seems like a simple image description → SEARCH (the knowledge base may contain relevant information)
+    - User uploads an image and asks to FIND/SEARCH related content in knowledge base → SEARCH (the image content is the search query)
+    - User asks how to fix/solve/handle something shown in the image ("这个报错怎么解决") → SEARCH (knowledge base may have solutions)
+    - User asks a question that implies comparing image content against documents → SEARCH
 
     ## Task 3: Image Analysis (only when images are attached)
     If the user's message includes images, after the rewritten question, add a separator "---" on a new line, then provide a concise description of the image content. This description is used as a text fallback for models that cannot process images directly.
+    If the image contains OCR text, also extract the key text information (OCR) from the image and include it in the description.
 
     ## Output Format
     - Text only (needs search): rewritten question
     - Text only (no search): [NO_SEARCH] rewritten question
-    - With images (needs search): rewritten question\n---\nimage description
-    - With images (no search): [NO_SEARCH] rewritten question\n---\nimage description
+    - With images (needs search): rewritten question\n---\nimage description (including extracted OCR if present)
+    - With images (no search): [NO_SEARCH] rewritten question\n---\nimage description (including extracted OCR if present)
 
-    ## Few-shot Examples
-
-    Example 1 (text, needs search):
-    Conversation history:
-    User: What features does Slack have?
-    Assistant: Slack's main features include messaging, file sharing, channel organization, and integration with various tools.
-    User question: Is it secure?
-    Output: Is Slack secure?
-
-    Example 2 (text, needs search):
-    Conversation history:
-    User: My laptop battery drains too fast, what should I do?
-    Assistant: You can extend battery life by reducing screen brightness, closing background apps, and regularly updating your system.
-    User question: Would that affect the user experience?
-    Output: Would reducing screen brightness and closing background apps affect the user experience?
-
-    Example 3 (text, no search - greeting):
-    Conversation history:
-    User: How do I install WeKnora?
-    Assistant: You can install WeKnora using docker compose...
-    User question: Thanks!
-    Output: [NO_SEARCH] Thanks!
-
-    Example 4 (text, no search - summarize conversation):
-    Conversation history:
-    User: What is RAG?
-    Assistant: RAG stands for Retrieval Augmented Generation...
-    User question: Summarize what we discussed
-    Output: [NO_SEARCH] Summarize our discussion about RAG
-
-    Example 5 (image, needs search - user wants to find related info):
-    User question: 找一下这张图 [image attached]
-    Output: 找一下这张图片相关的内容
-    ---
-    图片中显示了一个系统架构图，包含前端、后端和数据库三层。
-
-    Example 6 (image, needs search - error screenshot):
-    Conversation history:
-    User: How do I configure the search settings?
-    Assistant: You can configure search settings in the admin panel...
-    User question: I got this error, how to fix it? [image attached]
-    Output: How to fix this search configuration error?
-    ---
-    The image shows an error dialog with the message "Invalid rerank model ID: model not found".
-
-    Example 7 (image, needs search - image as query):
-    User question: What is this? [image attached]
-    Output: What is the content shown in this image?
-    ---
-    The image shows a product specification table with model numbers and parameters.
   rewrite_prompt_user: |
     ## Conversation History
     {{conversation}}

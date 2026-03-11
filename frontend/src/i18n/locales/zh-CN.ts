@@ -1868,6 +1868,7 @@ export default {
       advanced: "高级设置",
       faq: "FAQ 设置",
       graph: "知识图谱",
+      multimodal: "多模态",
       share: "共享管理",
     },
     basic: {
@@ -2066,9 +2067,13 @@ export default {
       childChunkSizeLabel: "子块大小",
       childChunkSizeDescription: "用于向量匹配的子块字符数（64-1024）",
     },
+    multimodal: {
+      title: "多模态配置",
+      description: "配置多模态内容理解能力，启用后支持图片等非文本内容的解析和检索",
+    },
     advanced: {
       title: "高级设置",
-      description: "配置问题生成、多模态等高级功能",
+      description: "配置问题生成等高级功能",
       questionGeneration: {
         label: "AI 问题生成",
         description: "解析文档时调用大模型为每个分块生成相关问题，提高检索召回率。启用后会增加文档解析耗时。",
@@ -3246,6 +3251,9 @@ export default {
       selectPlaceholder: "选择 MCP 服务",
     },
     imageUpload: {
+      navLabel: "多模态",
+      sectionTitle: "多模态配置",
+      sectionDesc: "配置图片上传和视觉语言模型，启用后用户可在对话中上传图片",
       label: "图片上传",
       desc: "启用后用户可在对话中上传图片进行多模态问答",
       vlmModel: "VLM 模型",

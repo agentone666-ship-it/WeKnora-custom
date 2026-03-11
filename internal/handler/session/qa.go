@@ -165,21 +165,10 @@ func (h *Handler) parseQARequest(c *gin.Context, logPrefix string) (*qaRequestCo
 			return nil, nil, errors.NewBadRequestError(fmt.Sprintf("Image save failed: %v", err))
 		}
 
-		// Decide whether to run VLM analysis here or defer.
-		// Agent mode defers to the async execution flow (so SSE stream is up and progress is visible).
-		// Normal mode defers when the RAG pipeline will run (rewrite step handles it).
-		// Only run here for Normal mode pure-chat paths (no KB, no web search).
-		isAgentEntry := logPrefix == "AgentQA"
-		hasRequestKBs := len(kbIDs) > 0 || len(knowledgeIDs) > 0
-		agentWillResolveKBs := !hasRequestKBs &&
-			!customAgent.Config.RetrieveKBOnlyWhenMentioned &&
-			customAgent.Config.KBSelectionMode != "" &&
-			customAgent.Config.KBSelectionMode != "none"
-		willDeferVLM := isAgentEntry || hasRequestKBs || agentWillResolveKBs || request.WebSearchEnabled
-		if !willDeferVLM {
-			agentVLMModelID := customAgent.Config.VLMModelID
-			h.analyzeImageAttachments(ctx, request.Images, agentVLMModelID, request.Query)
-		}
+		// VLM analysis is always deferred to after SSE stream is up:
+		// - Agent mode: runs in async execution flow with tool_call/tool_result events
+		// - Normal RAG mode: runs in the pipeline rewrite step with progress events
+		// - Normal pure-chat mode: runs in the async goroutine with progress events
 	}
 
 	// Build request context
@@ -477,6 +466,54 @@ func (h *Handler) executeNormalModeQA(reqCtx *qaRequestContext, generateTitle bo
 					errors.NewInternalServerError(fmt.Sprintf("Knowledge QA service panicked: %v\n%s", r, string(buf))), nil)
 			}
 		}()
+
+		// For pure-chat path (no KB, no web search), VLM analysis isn't handled by the
+		// rewrite pipeline step, so run it here with progress events.
+		// RAG paths (with KB/web search, including agent-resolved KBs) defer VLM analysis
+		// to the rewrite step to avoid duplicate progress events.
+		hasRequestKBs := len(reqCtx.knowledgeBaseIDs) > 0 || len(reqCtx.knowledgeIDs) > 0
+		agentWillResolveKBs := false
+		if !hasRequestKBs && reqCtx.customAgent != nil && !reqCtx.customAgent.Config.RetrieveKBOnlyWhenMentioned {
+			mode := reqCtx.customAgent.Config.KBSelectionMode
+			switch mode {
+			case "all":
+				agentWillResolveKBs = true
+			case "selected", "":
+				// "" keeps backward-compatible behavior (same as selected).
+				agentWillResolveKBs = len(reqCtx.customAgent.Config.KnowledgeBases) > 0
+			case "none":
+				agentWillResolveKBs = false
+			default:
+				agentWillResolveKBs = len(reqCtx.customAgent.Config.KnowledgeBases) > 0
+			}
+		}
+		isPureChatPath := !hasRequestKBs && !agentWillResolveKBs && !reqCtx.webSearchEnabled
+		if isPureChatPath && len(reqCtx.images) > 0 &&
+			reqCtx.customAgent != nil && reqCtx.customAgent.Config.VLMModelID != "" {
+			toolCallID := uuid.New().String()
+			streamCtx.eventBus.Emit(streamCtx.asyncCtx, event.Event{
+				Type:      event.EventAgentToolCall,
+				SessionID: sessionID,
+				Data: event.AgentToolCallData{
+					ToolCallID: toolCallID,
+					ToolName:   "image_analysis",
+				},
+			})
+			vlmStart := time.Now()
+			h.analyzeImageAttachments(streamCtx.asyncCtx, reqCtx.images,
+				reqCtx.customAgent.Config.VLMModelID, reqCtx.query)
+			streamCtx.eventBus.Emit(streamCtx.asyncCtx, event.Event{
+				Type:      event.EventAgentToolResult,
+				SessionID: sessionID,
+				Data: event.AgentToolResultData{
+					ToolCallID: toolCallID,
+					ToolName:   "image_analysis",
+					Output:     "已分析图片内容",
+					Success:    true,
+					Duration:   time.Since(vlmStart).Milliseconds(),
+				},
+			})
+		}
 
 		imageURLs, imageOCRText := extractImageURLsAndOCRText(reqCtx.images)
 		err := h.sessionService.KnowledgeQA(
