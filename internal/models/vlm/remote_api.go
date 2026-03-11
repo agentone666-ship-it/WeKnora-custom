@@ -13,9 +13,9 @@ import (
 )
 
 const (
-	defaultTimeout  = 30 * time.Second
-	defaultMaxToks  = 5000
-	defaultTemp     = float32(0.1)
+	defaultTimeout = 90 * time.Second
+	defaultMaxToks = 5000
+	defaultTemp    = float32(0.1)
 )
 
 // RemoteAPIVLM implements VLM via an OpenAI-compatible chat completions API.

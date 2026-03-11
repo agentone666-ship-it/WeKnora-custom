@@ -27,6 +27,11 @@ type PluginRewrite struct {
 // reg is a regular expression used to match and remove content between <think></think> tags
 var reg = regexp.MustCompile(`(?s)<think>.*?</think>`)
 
+const (
+	noSearchPrefix     = "[NO_SEARCH]"
+	imageDescSeparator = "\n---\n"
+)
+
 // NewPluginRewrite creates a new query rewriting plugin instance
 // Also registers the plugin with the event manager
 func NewPluginRewrite(eventManager *EventManager,
@@ -48,18 +53,24 @@ func (p *PluginRewrite) ActivationEvents() []types.EventType {
 	return []types.EventType{types.REWRITE_QUERY}
 }
 
-// OnEvent processes triggered events
-// When receiving a REWRITE_QUERY event, it rewrites the user query using conversation history and the language model
+// OnEvent processes triggered events.
+// Handles three input combinations:
+//   - Text only: standard rewrite + intent classification (uses chat model)
+//   - Text + images: multimodal rewrite + intent + image description (uses VLM/vision model)
+//   - Images only: multimodal analysis + intent + image description (uses VLM/vision model)
 func (p *PluginRewrite) OnEvent(ctx context.Context,
 	eventType types.EventType, chatManage *types.ChatManage, next func() *PluginError,
 ) *PluginError {
-	// Initialize rewritten query as original query
 	chatManage.RewriteQuery = chatManage.Query
 
-	if !chatManage.EnableRewrite {
+	hasImages := len(chatManage.Images) > 0
+	needRewrite := chatManage.EnableRewrite
+	// When images are present we always run the step for image analysis + intent,
+	// even without history or rewrite enabled.
+	if !needRewrite && !hasImages {
 		pipelineInfo(ctx, "Rewrite", "skip", map[string]interface{}{
 			"session_id": chatManage.SessionID,
-			"reason":     "rewrite_disabled",
+			"reason":     "rewrite_disabled_no_images",
 		})
 		return next()
 	}
@@ -68,126 +79,53 @@ func (p *PluginRewrite) OnEvent(ctx context.Context,
 		"session_id":     chatManage.SessionID,
 		"tenant_id":      chatManage.TenantID,
 		"user_query":     chatManage.Query,
+		"has_images":     hasImages,
 		"enable_rewrite": chatManage.EnableRewrite,
 	})
 
-	// Get conversation history
-	history, err := p.messageService.GetRecentMessagesBySession(ctx, chatManage.SessionID, 20)
-	if err != nil {
-		pipelineWarn(ctx, "Rewrite", "history_fetch", map[string]interface{}{
-			"session_id": chatManage.SessionID,
-			"error":      err.Error(),
-		})
-	}
+	// --- Load and prepare conversation history ---
+	historyList := p.loadHistory(ctx, chatManage)
 
-	// Convert historical messages to conversation history structure
-	historyMap := make(map[string]*types.History)
-
-	// Process historical messages, grouped by requestID
-	for _, message := range history {
-		history, ok := historyMap[message.RequestID]
-		if !ok {
-			history = &types.History{}
-		}
-		if message.Role == "user" {
-			// User message as query
-			history.Query = message.Content
-			history.CreateAt = message.CreatedAt
-		} else {
-			// System message as answer, while removing thinking process
-			history.Answer = reg.ReplaceAllString(message.Content, "")
-			history.KnowledgeReferences = message.KnowledgeReferences
-		}
-		historyMap[message.RequestID] = history
-	}
-
-	// Convert to list and filter incomplete conversations
-	historyList := make([]*types.History, 0)
-	for _, history := range historyMap {
-		if history.Answer != "" && history.Query != "" {
-			historyList = append(historyList, history)
-		}
-	}
-
-	// Sort by time, keep the most recent conversations
-	sort.Slice(historyList, func(i, j int) bool {
-		return historyList[i].CreateAt.After(historyList[j].CreateAt)
-	})
-
-	// Limit the number of historical records
-	maxRounds := p.config.Conversation.MaxRounds
-	if chatManage.MaxRounds > 0 {
-		maxRounds = chatManage.MaxRounds
-	}
-	if len(historyList) > maxRounds {
-		historyList = historyList[:maxRounds]
-	}
-
-	// Reverse to chronological order
-	slices.Reverse(historyList)
-	chatManage.History = historyList
-	if len(historyList) == 0 {
+	// Skip if there's nothing to do: no history to rewrite AND no images to analyse
+	if len(historyList) == 0 && !hasImages {
 		pipelineInfo(ctx, "Rewrite", "skip", map[string]interface{}{
 			"session_id": chatManage.SessionID,
-			"reason":     "empty_history",
+			"reason":     "empty_history_no_images",
 		})
 		return next()
 	}
-	pipelineInfo(ctx, "Rewrite", "history_ready", map[string]interface{}{
-		"session_id":     chatManage.SessionID,
-		"history_rounds": len(historyList),
-		"max_rounds":     maxRounds,
-	})
 
-	userPrompt := p.config.Conversation.RewritePromptUser
-	if chatManage.RewritePromptUser != "" {
-		userPrompt = chatManage.RewritePromptUser
-	}
-	systemPrompt := p.config.Conversation.RewritePromptSystem
-	if chatManage.RewritePromptSystem != "" {
-		systemPrompt = chatManage.RewritePromptSystem
-	}
-
-	// Format conversation history for template
-	conversationText := formatConversationHistory(historyList)
-	currentTime := time.Now().Format("2006-01-02 15:04:05")
-	yesterday := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
-
-	// Replace placeholders in prompts
-	userContent := strings.ReplaceAll(userPrompt, "{{conversation}}", conversationText)
-	userContent = strings.ReplaceAll(userContent, "{{query}}", chatManage.Query)
-	userContent = strings.ReplaceAll(userContent, "{{current_time}}", currentTime)
-	userContent = strings.ReplaceAll(userContent, "{{yesterday}}", yesterday)
-
-	systemContent := strings.ReplaceAll(systemPrompt, "{{conversation}}", conversationText)
-	systemContent = strings.ReplaceAll(systemContent, "{{query}}", chatManage.Query)
-	systemContent = strings.ReplaceAll(systemContent, "{{current_time}}", currentTime)
-	systemContent = strings.ReplaceAll(systemContent, "{{yesterday}}", yesterday)
-
-	rewriteModel, err := p.modelService.GetChatModel(ctx, chatManage.ChatModelID)
-	if err != nil {
+	// --- Select the appropriate model ---
+	rewriteModel, useImages := p.selectModel(ctx, chatManage, hasImages)
+	if rewriteModel == nil {
 		pipelineError(ctx, "Rewrite", "get_model", map[string]interface{}{
-			"session_id":    chatManage.SessionID,
-			"chat_model_id": chatManage.ChatModelID,
-			"error":         err.Error(),
+			"session_id": chatManage.SessionID,
 		})
 		return next()
 	}
 
-	// Call model to rewrite query
+	// --- Build prompts ---
+	systemContent, userContent := p.buildPrompts(chatManage, historyList)
+
+	// Build user message (with images when using a vision-capable model)
+	userMsg := chat.Message{Role: "user", Content: userContent}
+	if useImages {
+		userMsg.Images = chatManage.Images
+	}
+
+	maxTokens := 60
+	if useImages {
+		maxTokens = 500
+	}
+
+	// --- Call model ---
 	thinking := false
 	response, err := rewriteModel.Chat(ctx, []chat.Message{
-		{
-			Role:    "system",
-			Content: systemContent,
-		},
-		{
-			Role:    "user",
-			Content: userContent,
-		},
+		{Role: "system", Content: systemContent},
+		userMsg,
 	}, &chat.ChatOptions{
 		Temperature:         0.3,
-		MaxCompletionTokens: 50,
+		MaxCompletionTokens: maxTokens,
 		Thinking:            &thinking,
 	})
 	if err != nil {
@@ -198,15 +136,173 @@ func (p *PluginRewrite) OnEvent(ctx context.Context,
 		return next()
 	}
 
-	if response.Content != "" {
-		// Update rewritten query
-		chatManage.RewriteQuery = response.Content
-	}
+	// --- Parse structured output ---
+	p.parseRewriteOutput(chatManage, response.Content)
+
 	pipelineInfo(ctx, "Rewrite", "output", map[string]interface{}{
-		"session_id":    chatManage.SessionID,
-		"rewrite_query": chatManage.RewriteQuery,
+		"session_id":      chatManage.SessionID,
+		"rewrite_query":   chatManage.RewriteQuery,
+		"skip_kb_search":  chatManage.SkipKBSearch,
+		"has_image_desc":  chatManage.ImageOCRText != "",
+		"original_output": response.Content,
 	})
 	return next()
+}
+
+// loadHistory fetches and processes conversation history for rewrite context.
+func (p *PluginRewrite) loadHistory(ctx context.Context, chatManage *types.ChatManage) []*types.History {
+	history, err := p.messageService.GetRecentMessagesBySession(ctx, chatManage.SessionID, 20)
+	if err != nil {
+		pipelineWarn(ctx, "Rewrite", "history_fetch", map[string]interface{}{
+			"session_id": chatManage.SessionID,
+			"error":      err.Error(),
+		})
+	}
+
+	historyMap := make(map[string]*types.History)
+	for _, message := range history {
+		h, ok := historyMap[message.RequestID]
+		if !ok {
+			h = &types.History{}
+		}
+		if message.Role == "user" {
+			h.Query = message.Content
+			h.CreateAt = message.CreatedAt
+		} else {
+			h.Answer = reg.ReplaceAllString(message.Content, "")
+			h.KnowledgeReferences = message.KnowledgeReferences
+		}
+		historyMap[message.RequestID] = h
+	}
+
+	historyList := make([]*types.History, 0)
+	for _, h := range historyMap {
+		if h.Answer != "" && h.Query != "" {
+			historyList = append(historyList, h)
+		}
+	}
+
+	sort.Slice(historyList, func(i, j int) bool {
+		return historyList[i].CreateAt.After(historyList[j].CreateAt)
+	})
+
+	maxRounds := p.config.Conversation.MaxRounds
+	if chatManage.MaxRounds > 0 {
+		maxRounds = chatManage.MaxRounds
+	}
+	if len(historyList) > maxRounds {
+		historyList = historyList[:maxRounds]
+	}
+
+	slices.Reverse(historyList)
+	chatManage.History = historyList
+
+	if len(historyList) > 0 {
+		pipelineInfo(ctx, "Rewrite", "history_ready", map[string]interface{}{
+			"session_id":     chatManage.SessionID,
+			"history_rounds": len(historyList),
+		})
+	}
+
+	return historyList
+}
+
+// selectModel picks the model for rewrite. When images are present it prefers
+// a vision-capable model (either the chat model itself, or the agent's VLM).
+// Returns (model, useImages).
+func (p *PluginRewrite) selectModel(ctx context.Context, chatManage *types.ChatManage, hasImages bool) (chat.Chat, bool) {
+	if hasImages {
+		if chatManage.ChatModelSupportsVision {
+			m, err := p.modelService.GetChatModel(ctx, chatManage.ChatModelID)
+			if err == nil {
+				return m, true
+			}
+			pipelineWarn(ctx, "Rewrite", "vision_model_fallback", map[string]interface{}{
+				"session_id": chatManage.SessionID,
+				"error":      err.Error(),
+			})
+		}
+		if chatManage.VLMModelID != "" {
+			m, err := p.modelService.GetChatModel(ctx, chatManage.VLMModelID)
+			if err == nil {
+				return m, true
+			}
+			pipelineWarn(ctx, "Rewrite", "vlm_model_fallback", map[string]interface{}{
+				"session_id":   chatManage.SessionID,
+				"vlm_model_id": chatManage.VLMModelID,
+				"error":        err.Error(),
+			})
+		}
+		pipelineWarn(ctx, "Rewrite", "no_vision_model", map[string]interface{}{
+			"session_id": chatManage.SessionID,
+		})
+	}
+
+	// Fallback: text-only rewrite with chat model
+	m, err := p.modelService.GetChatModel(ctx, chatManage.ChatModelID)
+	if err != nil {
+		pipelineError(ctx, "Rewrite", "get_model", map[string]interface{}{
+			"session_id":    chatManage.SessionID,
+			"chat_model_id": chatManage.ChatModelID,
+			"error":         err.Error(),
+		})
+		return nil, false
+	}
+	return m, false
+}
+
+// buildPrompts constructs system and user prompts with placeholder replacement.
+func (p *PluginRewrite) buildPrompts(chatManage *types.ChatManage, historyList []*types.History) (string, string) {
+	userPrompt := p.config.Conversation.RewritePromptUser
+	if chatManage.RewritePromptUser != "" {
+		userPrompt = chatManage.RewritePromptUser
+	}
+	systemPrompt := p.config.Conversation.RewritePromptSystem
+	if chatManage.RewritePromptSystem != "" {
+		systemPrompt = chatManage.RewritePromptSystem
+	}
+
+	conversationText := formatConversationHistory(historyList)
+	currentTime := time.Now().Format("2006-01-02 15:04:05")
+	yesterday := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
+
+	replacePlaceholders := func(s string) string {
+		s = strings.ReplaceAll(s, "{{conversation}}", conversationText)
+		s = strings.ReplaceAll(s, "{{query}}", chatManage.Query)
+		s = strings.ReplaceAll(s, "{{current_time}}", currentTime)
+		s = strings.ReplaceAll(s, "{{yesterday}}", yesterday)
+		return s
+	}
+
+	return replacePlaceholders(systemPrompt), replacePlaceholders(userPrompt)
+}
+
+// parseRewriteOutput extracts intent classification, rewritten query, and
+// optional image description from the model's structured output.
+//
+// Expected formats:
+//
+//	Text only:  "[NO_SEARCH] rewritten question"  or  "rewritten question"
+//	With images: "[NO_SEARCH]\nrewritten question\n---\nimage description"
+func (p *PluginRewrite) parseRewriteOutput(chatManage *types.ChatManage, raw string) {
+	content := strings.TrimSpace(raw)
+	if content == "" {
+		return
+	}
+
+	// 1. Parse intent marker
+	if strings.HasPrefix(content, noSearchPrefix) {
+		chatManage.SkipKBSearch = true
+		content = strings.TrimSpace(strings.TrimPrefix(content, noSearchPrefix))
+	}
+
+	// 2. Split rewritten query and image description
+	if idx := strings.Index(content, imageDescSeparator); idx >= 0 {
+		chatManage.RewriteQuery = strings.TrimSpace(content[:idx])
+		chatManage.ImageOCRText = strings.TrimSpace(content[idx+len(imageDescSeparator):])
+	} else if content != "" {
+		chatManage.RewriteQuery = content
+	}
 }
 
 // formatConversationHistory formats conversation history for prompt template

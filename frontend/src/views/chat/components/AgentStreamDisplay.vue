@@ -33,7 +33,7 @@
                   <div class="action-header" @click="toggleEvent(event.event_id)">
                     <div class="action-title">
                       <img class="action-title-icon" :src="thinkingIcon" alt="" />
-                      <span class="action-name">{{ $t('agent.think') }}</span>
+                      <span v-if="isEventExpanded(event.event_id)" class="action-name">{{ $t('agent.think') }}</span>
                       <span v-if="getThinkingSummary(event) && !isEventExpanded(event.event_id)" class="action-summary">{{ getThinkingSummary(event) }}</span>
                     </div>
                     <div v-if="event.content" class="action-show-icon">
@@ -134,12 +134,7 @@
                           <div class="detail-output">{{ event.output }}</div>
                         </div>
                       </div>
-                      <div v-if="event.arguments && event.tool_name !== 'todo_write' && !event.display_type" class="tool-arguments-wrapper">
-                        <div class="arguments-header">
-                          <span class="arguments-label">{{ $t('agent.argumentsLabel') }}</span>
-                        </div>
-                        <pre class="detail-code">{{ formatJSON(event.arguments) }}</pre>
-                      </div>
+                      <!-- Raw arguments hidden for user-friendly display -->
                   </div>
                 </div>
               </div>
@@ -296,12 +291,7 @@
                 </div>
               </div>
 
-              <div v-if="event.arguments && event.tool_name !== 'todo_write' && !event.display_type" class="tool-arguments-wrapper">
-                <div class="arguments-header">
-                  <span class="arguments-label">{{ $t('agent.argumentsLabel') }}</span>
-                </div>
-                <pre class="detail-code">{{ formatJSON(event.arguments) }}</pre>
-              </div>
+              <!-- Raw arguments hidden for user-friendly display -->
           </div>
         </div>
       </div>
@@ -435,12 +425,49 @@ const TOOL_NAME_KEYS: Record<string, string> = {
   todo_write: 'agentStream.tools.todoWrite',
   knowledge_graph_extract: 'agentStream.tools.knowledgeGraphExtract',
   thinking: 'agentStream.tools.thinking',
+  image_analysis: 'agentStream.tools.imageAnalysis',
 };
 
 const getLocalizedToolName = (toolName?: string | null): string => {
   if (!toolName) return t('agent.toolFallback');
   const key = TOOL_NAME_KEYS[toolName];
   return key ? t(key) : toolName;
+};
+
+const TOOL_NAME_DISPLAY: Record<string, string> = {
+  knowledge_search: '语义搜索',
+  search_knowledge: '语义搜索',
+  grep_chunks: '文本搜索',
+  list_knowledge_chunks: '阅读文档内容',
+  get_document_info: '获取文档信息',
+  query_knowledge_graph: '知识图谱查询',
+  web_search: '网络搜索',
+  web_fetch: '网页抓取',
+  todo_write: '制定计划',
+  final_answer: '生成回答',
+  thinking: '思考',
+  read_skill: '读取技能',
+  execute_skill_script: '执行技能脚本',
+  data_analysis: '数据分析',
+  data_schema: '数据结构',
+  database_query: '数据库查询',
+  image_analysis: '查看图片内容',
+};
+
+const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+const ID_LABEL_RE = /\b(knowledge_base_id|knowledge_id|chunk_id|knowledge_base_ids)\s*[:=]\s*/gi;
+
+const sanitizeForDisplay = (text: string): string => {
+  if (!text) return text;
+  let result = text;
+  for (const [name, display] of Object.entries(TOOL_NAME_DISPLAY)) {
+    result = result.replaceAll(name, display);
+  }
+  result = result.replace(ID_LABEL_RE, '');
+  result = result.replace(UUID_RE, '');
+  result = result.replace(/`\s*`/g, '');
+  result = result.replace(/\(\s*\)/g, '');
+  return result;
 };
 
 // 根元素引用
@@ -759,13 +786,12 @@ const getThinkingContent = (event: any): string => {
 const getThinkingSummary = (event: any): string => {
   const content = getThinkingContent(event);
   if (!content) return '';
-  // Strip markdown formatting and take first meaningful line
-  const cleaned = content
-    .replace(/^#+\s+/gm, '') // remove heading markers
-    .replace(/\*\*/g, '')     // remove bold
-    .replace(/\*/g, '')       // remove italic
-    .replace(/`/g, '')        // remove code ticks
-    .replace(/\n+/g, ' ')    // collapse newlines
+  const cleaned = sanitizeForDisplay(content)
+    .replace(/^#+\s+/gm, '')
+    .replace(/\*\*/g, '')
+    .replace(/\*/g, '')
+    .replace(/`/g, '')
+    .replace(/\n+/g, ' ')
     .trim();
   if (cleaned.length <= 50) return cleaned;
   return cleaned.slice(0, 50) + '...';
@@ -1321,12 +1347,12 @@ const preprocessMarkdown = (contentStr: string): string => {
     );
 };
 
-// Get tokens from markdown content
+// Get tokens from markdown content (with sanitization for user-friendly display)
 const getTokens = (content: any) => {
   const contentStr = typeof content === 'string' ? content : String(content || '');
   if (!contentStr.trim()) return [];
 
-  const processed = preprocessMarkdown(contentStr);
+  const processed = preprocessMarkdown(sanitizeForDisplay(contentStr));
   return marked.lexer(processed);
 };
 
@@ -1524,6 +1550,8 @@ const getToolIcon = (toolName: string): string => {
     return documentIcon;
   } else if (toolName === 'todo_write') {
     return fileAddIcon;
+  } else if (toolName === 'image_analysis') {
+    return thinkingIcon;
   } else {
     return documentIcon; // default icon
   }
@@ -1621,6 +1649,9 @@ const getQueryText = (args: any): string => {
 // Get tool title - prefer summary over description, add query for search tools
 const getToolTitle = (event: any): string => {
   if (event.pending) {
+    if (event.tool_name === 'image_analysis') {
+      return t('agentStream.toolStatus.imageAnalyzing');
+    }
     const localizedName = getLocalizedToolName(event.tool_name);
     return t('agentStream.toolStatus.calling', { name: localizedName });
   }
@@ -1706,6 +1737,9 @@ const getToolTitle = (event: any): string => {
 // Tool description
 const getToolDescription = (event: any): string => {
   if (event.pending) {
+    if (event.tool_name === 'image_analysis') {
+      return t('agentStream.toolStatus.imageAnalyzing');
+    }
     const localizedName = getLocalizedToolName(event.tool_name);
     return t('agentStream.toolStatus.calling', { name: localizedName });
   }
@@ -1723,6 +1757,8 @@ const getToolDescription = (event: any): string => {
     return success ? t('agentStream.toolStatus.thinkingDone') : t('agentStream.toolStatus.thinkingFailed');
   } else if (toolName === 'todo_write') {
     return success ? t('agentStream.toolStatus.updateTodos') : t('agentStream.toolStatus.updateTodosFailed');
+  } else if (toolName === 'image_analysis') {
+    return success ? t('agentStream.toolStatus.imageAnalysisDone') : t('agentStream.toolStatus.imageAnalysisFailed');
   } else {
     const localizedName = getLocalizedToolName(toolName);
     return success ? t('agentStream.toolStatus.called', { name: localizedName }) : t('agentStream.toolStatus.calledFailed', { name: localizedName });
@@ -2121,7 +2157,6 @@ const handleAddToKnowledge = (answerEvent: any) => {
 
     &.action-error {
       border-left: 2px solid var(--td-error-color);
-      animation: shakeError 0.4s ease-out;
     }
     
     &.action-pending {

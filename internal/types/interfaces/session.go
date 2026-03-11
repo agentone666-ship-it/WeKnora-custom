@@ -44,6 +44,7 @@ type SessionService interface {
 		session *types.Session, query string, knowledgeBaseIDs []string, knowledgeIDs []string,
 		assistantMessageID string, summaryModelID string, webSearchEnabled bool, eventBus *event.EventBus,
 		customAgent *types.CustomAgent, enableMemory bool,
+		imageURLs []string, imageOCRText string,
 	) error
 	// KnowledgeQAByEvent performs knowledge-based question answering by event
 	KnowledgeQAByEvent(ctx context.Context, chatManage *types.ChatManage, eventList []types.EventType) error
@@ -65,6 +66,7 @@ type SessionService interface {
 		customAgent *types.CustomAgent,
 		knowledgeBaseIDs []string,
 		knowledgeIDs []string,
+		imageURLs []string, imageOCRText string,
 	) error
 	// ClearContext clears the LLM context for a session
 	ClearContext(ctx context.Context, sessionID string) error

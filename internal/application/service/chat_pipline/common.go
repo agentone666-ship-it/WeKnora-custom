@@ -67,8 +67,13 @@ func prepareMessagesWithHistory(chatManage *types.ChatManage) []chat.Message {
 		chatMessages = append(chatMessages, chat.Message{Role: "assistant", Content: history.Answer})
 	}
 
-	// Add current user message
-	chatMessages = append(chatMessages, chat.Message{Role: "user", Content: chatManage.UserContent})
+	// Add current user message. Only include images when the chat model supports
+	// vision; non-vision models rely on the text description in UserContent.
+	userMsg := chat.Message{Role: "user", Content: chatManage.UserContent}
+	if chatManage.ChatModelSupportsVision && len(chatManage.Images) > 0 {
+		userMsg.Images = chatManage.Images
+	}
+	chatMessages = append(chatMessages, userMsg)
 
 	return chatMessages
 }

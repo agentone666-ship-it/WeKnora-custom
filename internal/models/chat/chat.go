@@ -46,6 +46,7 @@ type Message struct {
 	Name       string     `json:"name,omitempty"`         // Function/tool name (for tool role)
 	ToolCallID string     `json:"tool_call_id,omitempty"` // Tool call ID (for tool role)
 	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`   // Tool calls (for assistant role)
+	Images     []string   `json:"images,omitempty"`       // Image URLs for multimodal (only for current user message)
 }
 
 // ToolCall represents a tool call in a message
