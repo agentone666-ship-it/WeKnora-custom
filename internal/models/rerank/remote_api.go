@@ -82,11 +82,7 @@ func (r *OpenAIReranker) Rerank(ctx context.Context, query string, documents []s
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", r.apiKey))
 
-	// Log the curl equivalent for debugging (API key masked for security)
-	logger.GetLogger(ctx).Infof(
-		"curl -X POST %s/rerank -H \"Content-Type: application/json\" -H \"Authorization: Bearer ***\" -d '%s'",
-		r.baseURL, string(jsonData),
-	)
+	logger.Debugf(ctx, "%s", buildRerankRequestDebug(r.modelName, fmt.Sprintf("%s/rerank", r.baseURL), query, documents))
 
 	resp, err := r.client.Do(req)
 	if err != nil {

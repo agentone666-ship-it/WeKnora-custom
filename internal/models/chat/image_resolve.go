@@ -3,6 +3,7 @@ package chat
 import (
 	"encoding/base64"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -55,6 +56,7 @@ func readLocalStorageBytes(storagePath string) []byte {
 	localPath := filepath.Join(baseDir, filepath.FromSlash(relPath))
 	data, err := os.ReadFile(localPath)
 	if err != nil {
+		log.Printf("[image-resolve] failed to read local file %s: %v", localPath, err)
 		return nil
 	}
 	return data

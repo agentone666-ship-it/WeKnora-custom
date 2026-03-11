@@ -155,15 +155,58 @@
                   />
                 </div>
 
+                <!-- 多模态配置 -->
+                <div v-if="!isFAQ" v-show="currentSection === 'multimodal'" class="section">
+                  <div v-if="formData" class="kb-multimodal-settings">
+                    <div class="section-header">
+                      <h2>{{ $t('knowledgeEditor.multimodal.title') }}</h2>
+                      <p class="section-description">{{ $t('knowledgeEditor.multimodal.description') }}</p>
+                    </div>
+
+                    <div class="settings-group">
+                      <!-- 多模态开关 -->
+                      <div class="setting-row">
+                        <div class="setting-info">
+                          <label>{{ $t('knowledgeEditor.advanced.multimodal.label') }}</label>
+                          <p class="desc">{{ $t('knowledgeEditor.advanced.multimodal.description') }}</p>
+                        </div>
+                        <div class="setting-control">
+                          <t-switch
+                            v-model="formData.multimodalConfig.enabled"
+                            @change="handleMultimodalToggle"
+                            size="medium"
+                          />
+                        </div>
+                      </div>
+
+                      <!-- VLLM 模型选择（多模态启用时） -->
+                      <div v-if="formData.multimodalConfig.enabled" class="setting-row">
+                        <div class="setting-info">
+                          <label>{{ $t('knowledgeEditor.advanced.multimodal.vllmLabel') }} <span class="required">*</span></label>
+                          <p class="desc">{{ $t('knowledgeEditor.advanced.multimodal.vllmDescription') }}</p>
+                        </div>
+                        <div class="setting-control">
+                          <ModelSelector
+                            model-type="VLLM"
+                            :selected-model-id="formData.multimodalConfig.vllmModelId"
+                            :all-models="allModels"
+                            @update:selected-model-id="handleMultimodalVLLMChange"
+                            @add-model="handleAddVLLMModel"
+                            :placeholder="$t('knowledgeEditor.advanced.multimodal.vllmPlaceholder')"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
                 <!-- 高级设置 -->
                 <div v-if="!isFAQ" v-show="currentSection === 'advanced'" class="section">
                   <KBAdvancedSettings
                     ref="advancedSettingsRef"
                     v-if="formData"
-                    :multimodal="formData.multimodalConfig"
                     :question-generation="formData.questionGenerationConfig"
                     :all-models="allModels"
-                    @update:multimodal="handleMultimodalUpdate"
                     @update:question-generation="handleQuestionGenerationUpdate"
                   />
                 </div>
@@ -203,6 +246,7 @@ import KBParserSettings from './settings/KBParserSettings.vue'
 import KBStorageSettings from './settings/KBStorageSettings.vue'
 import KBChunkingSettings from './settings/KBChunkingSettings.vue'
 import KBAdvancedSettings from './settings/KBAdvancedSettings.vue'
+import ModelSelector from '@/components/ModelSelector.vue'
 import GraphSettings from './settings/GraphSettings.vue'
 import KBShareSettings from './settings/KBShareSettings.vue'
 import { useI18n } from 'vue-i18n'
@@ -244,6 +288,7 @@ const navItems = computed(() => {
       { key: 'storage', icon: 'cloud', label: t('knowledgeEditor.sidebar.storage') },
       { key: 'chunking', icon: 'file-copy', label: t('knowledgeEditor.sidebar.chunking') },
       { key: 'graph', icon: 'chart-bubble', label: t('knowledgeEditor.sidebar.graph') },
+      { key: 'multimodal', icon: 'image', label: t('knowledgeEditor.sidebar.multimodal') },
       { key: 'advanced', icon: 'setting', label: t('knowledgeEditor.sidebar.advanced') }
     )
   }
@@ -431,10 +476,20 @@ const handleParserEngineRulesUpdate = (rules: any[]) => {
   }
 }
 
-const handleMultimodalUpdate = (config: any) => {
-  if (formData.value) {
-    formData.value.multimodalConfig = { ...config }
+const handleMultimodalToggle = () => {
+  if (formData.value && !formData.value.multimodalConfig.enabled) {
+    formData.value.multimodalConfig.vllmModelId = ''
   }
+}
+
+const handleMultimodalVLLMChange = (modelId: string) => {
+  if (formData.value) {
+    formData.value.multimodalConfig.vllmModelId = modelId
+  }
+}
+
+const handleAddVLLMModel = () => {
+  uiStore.openSettings('models', 'vllm')
 }
 
 const handleStorageProviderUpdate = (value: string) => {
@@ -480,13 +535,10 @@ const validateForm = (): boolean => {
   }
 
   // 验证多模态配置（如果启用）
-  if (formData.value.multimodalConfig.enabled) {
-    const validation = (advancedSettingsRef.value as any)?.validateMultimodal?.()
-    if (validation && !validation.valid) {
-      MessagePlugin.warning(validation.message || t('knowledgeEditor.messages.multimodalInvalid'))
-      currentSection.value = 'advanced'
-      return false
-    }
+  if (formData.value.multimodalConfig.enabled && !formData.value.multimodalConfig.vllmModelId) {
+    MessagePlugin.warning(t('knowledgeEditor.messages.multimodalInvalid'))
+    currentSection.value = 'multimodal'
+    return false
   }
 
   if (formData.value.type === 'faq' && !formData.value.faqConfig?.indexMode) {
@@ -1012,6 +1064,81 @@ watch(
         color: var(--td-text-color-placeholder);
       }
     }
+  }
+}
+
+// 多模态配置内联样式（与子组件 KBStorageSettings/KBAdvancedSettings 一致）
+.kb-multimodal-settings {
+  width: 100%;
+
+  .section-header {
+    margin-bottom: 32px;
+
+    h2 {
+      font-size: 20px;
+      font-weight: 600;
+      color: var(--td-text-color-primary);
+      margin: 0 0 8px 0;
+    }
+
+    .section-description {
+      font-size: 14px;
+      color: var(--td-text-color-secondary);
+      margin: 0;
+      line-height: 1.5;
+    }
+  }
+
+  .settings-group {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .setting-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    padding: 20px 0;
+    border-bottom: 1px solid var(--td-component-stroke);
+
+    &:last-child {
+      border-bottom: none;
+    }
+  }
+
+  .setting-info {
+    flex: 1;
+    max-width: 65%;
+    padding-right: 24px;
+
+    label {
+      font-size: 15px;
+      font-weight: 500;
+      color: var(--td-text-color-primary);
+      display: block;
+      margin-bottom: 4px;
+    }
+
+    .desc {
+      font-size: 13px;
+      color: var(--td-text-color-secondary);
+      margin: 0;
+      line-height: 1.5;
+    }
+  }
+
+  .setting-control {
+    flex-shrink: 0;
+    min-width: 280px;
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+  }
+
+  .required {
+    color: var(--td-error-color);
+    margin-left: 2px;
+    font-weight: 500;
   }
 }
 </style>

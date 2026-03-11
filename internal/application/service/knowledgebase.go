@@ -1231,6 +1231,9 @@ func (s *knowledgeBaseService) processSearchResults(ctx context.Context,
 	// Build final search results - preserve original order from input chunks
 	var searchResults []*types.SearchResult
 	addedChunkIDs := make(map[string]bool)
+	const maxInvalidChunkLog = 8
+	invalidChunkCnt := 0
+	invalidChunkSamples := make([]string, 0, maxInvalidChunkLog)
 
 	// First pass: Add results in the original order from input chunks
 	for _, inputChunk := range chunks {
@@ -1240,7 +1243,10 @@ func (s *knowledgeBaseService) processSearchResults(ctx context.Context,
 			continue
 		}
 		if !s.isValidTextChunk(chunk) {
-			logger.Debugf(ctx, "Chunk is not valid text chunk: %s, type: %s", chunk.ID, chunk.ChunkType)
+			invalidChunkCnt++
+			if len(invalidChunkSamples) < maxInvalidChunkLog {
+				invalidChunkSamples = append(invalidChunkSamples, chunk.ID+":"+chunk.ChunkType)
+			}
 			continue
 		}
 		if addedChunkIDs[chunk.ID] {
@@ -1256,6 +1262,12 @@ func (s *knowledgeBaseService) processSearchResults(ctx context.Context,
 		} else {
 			logger.Warnf(ctx, "Knowledge not found for chunk: %s, knowledge_id: %s", chunk.ID, chunk.KnowledgeID)
 		}
+	}
+	if invalidChunkCnt > 0 {
+		logger.Debugf(ctx,
+			"Skip non-text chunks in search results: total=%d sampled=%d samples=%v",
+			invalidChunkCnt, len(invalidChunkSamples), invalidChunkSamples,
+		)
 	}
 
 	// Second pass: Add additional chunks (parent, nearby, relation) that weren't in original input

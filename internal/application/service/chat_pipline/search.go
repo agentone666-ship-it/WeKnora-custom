@@ -113,15 +113,7 @@ func (p *PluginSearch) OnEvent(ctx context.Context,
 
 	chatManage.SearchResult = allResults
 
-	// Log all search results with scores before any processing
-	for i, r := range chatManage.SearchResult {
-		pipelineInfo(ctx, "Search", "result_score_before_normalize", map[string]interface{}{
-			"index":      i,
-			"chunk_id":   r.ID,
-			"score":      fmt.Sprintf("%.4f", r.Score),
-			"match_type": r.MatchType,
-		})
-	}
+	logSearchScoreSample(ctx, "result_score_before_normalize", chatManage.SearchResult)
 
 	// If recall is low, attempt query expansion with keyword-focused search
 	if chatManage.EnableQueryExpansion && len(chatManage.SearchResult) < max(1, chatManage.EmbeddingTopK) {
@@ -131,15 +123,7 @@ func (p *PluginSearch) OnEvent(ctx context.Context,
 		}
 	}
 
-	// Log final scores after all processing
-	for i, r := range chatManage.SearchResult {
-		pipelineInfo(ctx, "Search", "final_score", map[string]interface{}{
-			"index":      i,
-			"chunk_id":   r.ID,
-			"score":      fmt.Sprintf("%.4f", r.Score),
-			"match_type": r.MatchType,
-		})
-	}
+	logSearchScoreSample(ctx, "final_score", chatManage.SearchResult)
 
 	// Return if we have results
 	if len(chatManage.SearchResult) != 0 {
@@ -202,6 +186,27 @@ func removeDuplicateResults(results []*types.SearchResult) []*types.SearchResult
 
 func buildContentSignature(content string) string {
 	return searchutil.BuildContentSignature(content)
+}
+
+func logSearchScoreSample(ctx context.Context, action string, results []*types.SearchResult) {
+	const maxLogRows = 8
+	limit := min(maxLogRows, len(results))
+	for i := 0; i < limit; i++ {
+		r := results[i]
+		pipelineInfo(ctx, "Search", action, map[string]interface{}{
+			"index":      i,
+			"chunk_id":   r.ID,
+			"score":      fmt.Sprintf("%.4f", r.Score),
+			"match_type": r.MatchType,
+		})
+	}
+	if len(results) > limit {
+		pipelineInfo(ctx, "Search", action+"_summary", map[string]interface{}{
+			"total":     len(results),
+			"logged":    limit,
+			"truncated": len(results) - limit,
+		})
+	}
 }
 
 // searchByTargets performs KB searches using pre-computed SearchTargets

@@ -319,6 +319,17 @@
                       </div>
                     </div>
 
+                  </div>
+                </div>
+
+                <!-- 多模态配置 -->
+                <div v-show="currentSection === 'multimodal'" class="section">
+                  <div class="section-header">
+                    <h2>{{ $t('agentEditor.imageUpload.sectionTitle') }}</h2>
+                    <p class="section-description">{{ $t('agentEditor.imageUpload.sectionDesc') }}</p>
+                  </div>
+
+                  <div class="settings-group">
                     <!-- 图片上传（多模态） -->
                     <div class="setting-row">
                       <div class="setting-info">
@@ -1357,6 +1368,8 @@ const navItems = computed(() => {
   }
   // 网络搜索（独立菜单）
   items.push({ key: 'websearch', icon: 'internet', label: t('agent.editor.webSearchConfig') });
+  // 多模态配置（图片上传）
+  items.push({ key: 'multimodal', icon: 'image', label: t('agentEditor.imageUpload.navLabel') });
   // 多轮对话（仅普通模式显示，Agent模式内部自动控制）
   if (!isAgentMode.value) {
     items.push({ key: 'conversation', icon: 'chat', label: t('agent.editor.conversationSettings') });
@@ -2727,7 +2740,7 @@ const handleSave = async () => {
   // 校验 VLM 模型（当图片上传启用时必填）
   if (formData.value.config.image_upload_enabled && !formData.value.config.vlm_model_id) {
     MessagePlugin.error(t('agentEditor.imageUpload.vlmModelRequired'));
-    currentSection.value = 'model';
+    currentSection.value = 'multimodal';
     return;
   }
 

@@ -1409,6 +1409,7 @@ export default {
       advanced: 'Advanced Settings',
       faq: 'FAQ Settings',
       graph: 'Knowledge Graph',
+      multimodal: 'Multimodal',
       share: 'Sharing'
     },
     basic: {
@@ -1610,9 +1611,13 @@ export default {
       childChunkSizeLabel: 'Child Chunk Size',
       childChunkSizeDescription: 'Size of child chunks used for embedding matching (64-1024)'
     },
+    multimodal: {
+      title: 'Multimodal Configuration',
+      description: 'Configure multimodal content understanding for parsing and retrieving non-text content like images',
+    },
     advanced: {
       title: 'Advanced Settings',
-      description: 'Configure question generation, multimodal features',
+      description: 'Configure question generation and other advanced features',
       questionGeneration: {
         label: 'AI Question Generation',
         description: 'Generate related questions for each chunk using LLM during document parsing to improve retrieval recall. Enabling this will increase document parsing time.',
@@ -3252,6 +3257,9 @@ export default {
       selectPlaceholder: 'Select MCP services',
     },
     imageUpload: {
+      navLabel: 'Multimodal',
+      sectionTitle: 'Multimodal Configuration',
+      sectionDesc: 'Configure image upload and vision-language model for multimodal conversations',
       label: 'Image Upload',
       desc: 'Allow users to upload images for multimodal Q&A in conversations',
       vlmModel: 'VLM Model',
