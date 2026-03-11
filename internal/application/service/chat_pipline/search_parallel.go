@@ -89,6 +89,15 @@ func (p *PluginSearchParallel) ActivationEvents() []types.EventType {
 func (p *PluginSearchParallel) OnEvent(ctx context.Context,
 	eventType types.EventType, chatManage *types.ChatManage, next func() *PluginError,
 ) *PluginError {
+	// Intent-based skip: rewrite step determined KB retrieval is unnecessary
+	if chatManage.SkipKBSearch {
+		pipelineInfo(ctx, "SearchParallel", "skip", map[string]interface{}{
+			"session_id": chatManage.SessionID,
+			"reason":     "intent_no_search",
+		})
+		return next()
+	}
+
 	pipelineInfo(ctx, "SearchParallel", "start", map[string]interface{}{
 		"session_id":    chatManage.SessionID,
 		"has_entities":  len(chatManage.Entity) > 0,

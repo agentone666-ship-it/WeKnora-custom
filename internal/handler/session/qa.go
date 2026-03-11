@@ -14,6 +14,7 @@ import (
 	"github.com/Tencent/WeKnora/internal/types"
 	secutils "github.com/Tencent/WeKnora/internal/utils"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 )
 
 // qaRequestContext holds all the common data needed for QA requests
@@ -32,7 +33,8 @@ type qaRequestContext struct {
 	webSearchEnabled  bool
 	enableMemory      bool // Whether memory feature is enabled
 	mentionedItems    types.MentionedItems
-	effectiveTenantID uint64 // when using shared agent, tenant ID for model/KB/MCP resolution; 0 = use context tenant
+	effectiveTenantID uint64            // when using shared agent, tenant ID for model/KB/MCP resolution; 0 = use context tenant
+	images            []ImageAttachment // Uploaded images with analysis text
 }
 
 // parseQARequest parses and validates a QA request, returns the request context
@@ -63,7 +65,7 @@ func (h *Handler) parseQARequest(c *gin.Context, logPrefix string) (*qaRequestCo
 	// Log request details
 	if requestJSON, err := json.Marshal(request); err == nil {
 		logger.Infof(ctx, "[%s] Request: session_id=%s, request=%s",
-			logPrefix, sessionID, secutils.SanitizeForLog(string(requestJSON)))
+			logPrefix, sessionID, secutils.SanitizeForLog(secutils.CompactImageDataURLForLog(string(requestJSON))))
 	}
 
 	// Get session
@@ -148,6 +150,38 @@ func (h *Handler) parseQARequest(c *gin.Context, logPrefix string) (*qaRequestCo
 	logger.Infof(ctx, "[%s] @mention merge: request.KnowledgeBaseIDs=%v, request.MentionedItems=%d, merged kbIDs=%v, merged knowledgeIDs=%v",
 		logPrefix, request.KnowledgeBaseIDs, len(request.MentionedItems), kbIDs, knowledgeIDs)
 
+	// Process inline base64 images: decode and save to storage.
+	// VLM analysis for RAG paths is deferred to the pipeline rewrite step.
+	// For pure chat paths with non-vision models, VLM analysis runs here as fallback.
+	if len(request.Images) > 0 {
+		if customAgent == nil || !customAgent.Config.ImageUploadEnabled {
+			logger.Warnf(ctx, "[%s] Image upload is not enabled for this agent, rejecting %d images", logPrefix, len(request.Images))
+			return nil, nil, errors.NewBadRequestError("Image upload is not enabled for this agent")
+		}
+		tenantID := c.GetUint64(types.TenantIDContextKey.String())
+		agentStorageProvider := customAgent.Config.ImageStorageProvider
+		if err := h.saveImageAttachments(ctx, request.Images, tenantID, agentStorageProvider); err != nil {
+			logger.Errorf(ctx, "[%s] Failed to save images: %v", logPrefix, err)
+			return nil, nil, errors.NewBadRequestError(fmt.Sprintf("Image save failed: %v", err))
+		}
+
+		// Decide whether to run VLM analysis here or defer.
+		// Agent mode defers to the async execution flow (so SSE stream is up and progress is visible).
+		// Normal mode defers when the RAG pipeline will run (rewrite step handles it).
+		// Only run here for Normal mode pure-chat paths (no KB, no web search).
+		isAgentEntry := logPrefix == "AgentQA"
+		hasRequestKBs := len(kbIDs) > 0 || len(knowledgeIDs) > 0
+		agentWillResolveKBs := !hasRequestKBs &&
+			!customAgent.Config.RetrieveKBOnlyWhenMentioned &&
+			customAgent.Config.KBSelectionMode != "" &&
+			customAgent.Config.KBSelectionMode != "none"
+		willDeferVLM := isAgentEntry || hasRequestKBs || agentWillResolveKBs || request.WebSearchEnabled
+		if !willDeferVLM {
+			agentVLMModelID := customAgent.Config.VLMModelID
+			h.analyzeImageAttachments(ctx, request.Images, agentVLMModelID, request.Query)
+		}
+	}
+
 	// Build request context
 	reqCtx := &qaRequestContext{
 		ctx:         ctx,
@@ -170,6 +204,7 @@ func (h *Handler) parseQARequest(c *gin.Context, logPrefix string) (*qaRequestCo
 		enableMemory:      request.EnableMemory,
 		mentionedItems:    convertMentionedItems(request.MentionedItems),
 		effectiveTenantID: effectiveTenantID,
+		images:            request.Images,
 	}
 
 	return reqCtx, &request, nil
@@ -379,7 +414,7 @@ func (h *Handler) executeNormalModeQA(reqCtx *qaRequestContext, generateTitle bo
 	sessionID := reqCtx.sessionID
 
 	// Create user message
-	if err := h.createUserMessage(ctx, sessionID, reqCtx.query, reqCtx.requestID, reqCtx.mentionedItems); err != nil {
+	if err := h.createUserMessage(ctx, sessionID, reqCtx.query, reqCtx.requestID, reqCtx.mentionedItems, convertImageAttachments(reqCtx.images)); err != nil {
 		reqCtx.c.Error(errors.NewInternalServerError(err.Error()))
 		return
 	}
@@ -443,6 +478,7 @@ func (h *Handler) executeNormalModeQA(reqCtx *qaRequestContext, generateTitle bo
 			}
 		}()
 
+		imageURLs, imageOCRText := extractImageURLsAndOCRText(reqCtx.images)
 		err := h.sessionService.KnowledgeQA(
 			streamCtx.asyncCtx,
 			reqCtx.session,
@@ -455,6 +491,7 @@ func (h *Handler) executeNormalModeQA(reqCtx *qaRequestContext, generateTitle bo
 			streamCtx.eventBus,
 			reqCtx.customAgent,
 			reqCtx.enableMemory,
+			imageURLs, imageOCRText,
 		)
 		if err != nil {
 			logger.ErrorWithFields(streamCtx.asyncCtx, err, nil)
@@ -497,7 +534,7 @@ func (h *Handler) executeAgentModeQA(reqCtx *qaRequestContext) {
 	}
 
 	// Create user message
-	if err := h.createUserMessage(ctx, sessionID, reqCtx.query, reqCtx.requestID, reqCtx.mentionedItems); err != nil {
+	if err := h.createUserMessage(ctx, sessionID, reqCtx.query, reqCtx.requestID, reqCtx.mentionedItems, convertImageAttachments(reqCtx.images)); err != nil {
 		reqCtx.c.Error(errors.NewInternalServerError(err.Error()))
 		return
 	}
@@ -531,6 +568,37 @@ func (h *Handler) executeAgentModeQA(reqCtx *qaRequestContext) {
 			logger.Infof(streamCtx.asyncCtx, "Agent QA service completed for session: %s", sessionID)
 		}()
 
+		// Run VLM analysis inside the async flow so SSE stream is already up
+		// and the user can see progress. Emit tool_call/tool_result events.
+		if len(reqCtx.images) > 0 && reqCtx.customAgent != nil && reqCtx.customAgent.Config.VLMModelID != "" {
+			toolCallID := uuid.New().String()
+			streamCtx.eventBus.Emit(streamCtx.asyncCtx, event.Event{
+				Type:      event.EventAgentToolCall,
+				SessionID: sessionID,
+				Data: event.AgentToolCallData{
+					ToolCallID: toolCallID,
+					ToolName:   "image_analysis",
+					Iteration:  0,
+				},
+			})
+			vlmStart := time.Now()
+			h.analyzeImageAttachments(streamCtx.asyncCtx, reqCtx.images,
+				reqCtx.customAgent.Config.VLMModelID, reqCtx.query)
+			streamCtx.eventBus.Emit(streamCtx.asyncCtx, event.Event{
+				Type:      event.EventAgentToolResult,
+				SessionID: sessionID,
+				Data: event.AgentToolResultData{
+					ToolCallID: toolCallID,
+					ToolName:   "image_analysis",
+					Output:     "已查看图片内容",
+					Success:    true,
+					Duration:   time.Since(vlmStart).Milliseconds(),
+					Iteration:  0,
+				},
+			})
+		}
+
+		imageURLs, imageOCRText := extractImageURLsAndOCRText(reqCtx.images)
 		err := h.sessionService.AgentQA(
 			streamCtx.asyncCtx,
 			reqCtx.session,
@@ -541,6 +609,7 @@ func (h *Handler) executeAgentModeQA(reqCtx *qaRequestContext) {
 			reqCtx.customAgent,
 			reqCtx.knowledgeBaseIDs,
 			reqCtx.knowledgeIDs,
+			imageURLs, imageOCRText,
 		)
 		if err != nil {
 			logger.ErrorWithFields(streamCtx.asyncCtx, err, nil)
@@ -573,3 +642,4 @@ func (h *Handler) completeAssistantMessage(ctx context.Context, assistantMessage
 	bgCtx := context.WithoutCancel(ctx)
 	go h.messageService.IndexMessageToKB(bgCtx, userQuery, assistantMessage.Content, assistantMessage.ID, assistantMessage.SessionID)
 }
+

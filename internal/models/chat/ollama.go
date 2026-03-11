@@ -4,7 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/Tencent/WeKnora/internal/logger"
 	"github.com/Tencent/WeKnora/internal/models/utils/ollama"
@@ -40,9 +44,38 @@ func (c *OllamaChat) convertMessages(messages []Message) []ollamaapi.Message {
 		if msg.Role == "tool" {
 			msgOllama.ToolName = msg.Name
 		}
+		if len(msg.Images) > 0 && msg.Role == "user" {
+			for _, imgURL := range msg.Images {
+				if imgData := resolveImageForOllama(imgURL); imgData != nil {
+					msgOllama.Images = append(msgOllama.Images, imgData)
+				}
+			}
+		}
 		ollamaMessages = append(ollamaMessages, msgOllama)
 	}
 	return ollamaMessages
+}
+
+// resolveImageForOllama resolves an image URL into raw bytes for Ollama.
+// Handles local serving paths (/files/...), data URIs, and remote HTTP URLs.
+func resolveImageForOllama(imageURL string) ollamaapi.ImageData {
+	if data := resolveImageURLForOllama(imageURL); data != nil {
+		return data
+	}
+	if strings.HasPrefix(imageURL, "http://") || strings.HasPrefix(imageURL, "https://") {
+		client := &http.Client{Timeout: 30 * time.Second}
+		resp, err := client.Get(imageURL)
+		if err != nil {
+			return nil
+		}
+		defer resp.Body.Close()
+		data, err := io.ReadAll(io.LimitReader(resp.Body, 20*1024*1024))
+		if err != nil {
+			return nil
+		}
+		return data
+	}
+	return nil
 }
 
 // buildChatRequest 构建聊天请求参数

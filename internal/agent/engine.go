@@ -118,6 +118,7 @@ func (e *AgentEngine) Execute(
 	ctx context.Context,
 	sessionID, messageID, query string,
 	llmContext []chat.Message,
+	imageURLs ...[]string,
 ) (*types.AgentState, error) {
 	logger.Infof(ctx, "========== Agent Execution Started ==========")
 	// Ensure tools are cleaned up after execution
@@ -167,9 +168,13 @@ func (e *AgentEngine) Execute(
 	logger.Debugf(ctx, "[Agent] SystemPrompt (stream)\n----\n%s\n----", systemPrompt)
 
 	// Initialize messages with history
-	messages := e.buildMessagesWithLLMContext(systemPrompt, query, llmContext)
-	logger.Infof(ctx, "[Agent] Total messages for LLM: %d (system: 1, history: %d, user query: 1)",
-		len(messages), len(llmContext))
+	var imgs []string
+	if len(imageURLs) > 0 {
+		imgs = imageURLs[0]
+	}
+	messages := e.buildMessagesWithLLMContext(systemPrompt, query, llmContext, imgs)
+	logger.Infof(ctx, "[Agent] Total messages for LLM: %d (system: 1, history: %d, user query: 1, images: %d)",
+		len(messages), len(llmContext), len(imgs))
 
 	// Get tool definitions for function calling
 	tools := e.buildToolsForLLM()
@@ -1047,6 +1052,7 @@ func countTotalToolCalls(steps []types.AgentStep) int {
 func (e *AgentEngine) buildMessagesWithLLMContext(
 	systemPrompt, currentQuery string,
 	llmContext []chat.Message,
+	imageURLs []string,
 ) []chat.Message {
 	messages := []chat.Message{
 		{Role: "system", Content: systemPrompt},
@@ -1064,10 +1070,12 @@ func (e *AgentEngine) buildMessagesWithLLMContext(
 		logger.Infof(context.Background(), "Added %d history messages to context", len(llmContext))
 	}
 
-	messages = append(messages, chat.Message{
+	userMsg := chat.Message{
 		Role:    "user",
 		Content: currentQuery,
-	})
+		Images:  imageURLs,
+	}
+	messages = append(messages, userMsg)
 
 	return messages
 }

@@ -109,6 +109,15 @@ type CustomAgentConfig struct {
 	// When false, knowledge base retrieval happens according to KBSelectionMode
 	RetrieveKBOnlyWhenMentioned bool `yaml:"retrieve_kb_only_when_mentioned" json:"retrieve_kb_only_when_mentioned"`
 
+	// ===== Image Upload / Multimodal Settings =====
+	// Whether image upload is enabled for this agent (default: false)
+	ImageUploadEnabled bool `yaml:"image_upload_enabled" json:"image_upload_enabled"`
+	// VLM model ID for image analysis (optional, falls back to tenant-level VLM)
+	VLMModelID string `yaml:"vlm_model_id" json:"vlm_model_id"`
+	// Storage provider for image uploads: "local", "minio", "cos", "tos"
+	// Empty means use the global/tenant default provider.
+	ImageStorageProvider string `yaml:"image_storage_provider" json:"image_storage_provider"`
+
 	// ===== File Type Restriction Settings =====
 	// Supported file types for this agent (e.g., ["csv", "xlsx", "xls"])
 	// Empty means all file types are supported
@@ -174,8 +183,13 @@ func (c *CustomAgentConfig) Scan(value interface{}) error {
 	if value == nil {
 		return nil
 	}
-	b, ok := value.([]byte)
-	if !ok {
+	var b []byte
+	switch v := value.(type) {
+	case []byte:
+		b = v
+	case string:
+		b = []byte(v)
+	default:
 		return nil
 	}
 	return json.Unmarshal(b, c)

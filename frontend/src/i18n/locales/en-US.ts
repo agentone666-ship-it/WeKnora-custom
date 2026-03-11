@@ -279,6 +279,7 @@ export default {
 
   agent: {
     taskLabel: 'Task:',
+    think: 'Thinking',
     copy: 'Copy',
     addToKnowledgeBase: 'Add to Knowledge Base',
     updatePlan: 'Update Plan',
@@ -1291,6 +1292,7 @@ export default {
     cannotRemoveAgentKb: 'Cannot remove knowledge base configured by agent',
     agentConfiguredKb: 'Configured by agent, cannot be removed',
     modelLockedByAgent: 'Model selection is locked by the current agent',
+    imageUploadDisabledByAgent: 'Image upload is not enabled for this agent',
     goToAgentSettings: 'Go to agent settings'
   },
   createChat: {
@@ -1778,6 +1780,9 @@ export default {
     noAnswerContent: '(No answer content)',
     noMatchFound: 'No matching content found',
     deleteSessionFailed: 'Delete failed, please try again later!',
+    imageTooMany: 'Maximum 5 images allowed',
+    imageTypeSizeError: 'Only JPG/PNG/GIF/WEBP under 10MB supported',
+    imageUploadTooltip: 'Upload image (paste/drop supported)',
   },
   tenant: {
     title: 'Tenant Information',
@@ -2025,6 +2030,8 @@ export default {
       dimensionDetected: 'Detection succeeded. Vector dimension: {value}',
       dimensionFailed: 'Detection failed, please enter the dimension manually',
       remoteDimensionDetected: 'Detected vector dimension: {value}',
+      supportsVisionLabel: 'Supports Vision / Multimodal',
+      supportsVisionDesc: 'Whether the model accepts image and multimodal input',
       dimensionHint: 'Model selected. Click "Detect Dimension" to fetch the vector dimension automatically.',
       loadModelListFailed: 'Failed to load model list',
       listRefreshed: 'List refreshed',
@@ -3106,6 +3113,7 @@ export default {
       todoWrite: 'Plan Management',
       knowledgeGraphExtract: 'Knowledge Graph Extraction',
       thinking: 'Thinking',
+      imageAnalysis: 'Image Analysis',
     },
     summary: {
       searchKb: 'Searched knowledge base <strong>{count}</strong> time(s)',
@@ -3153,6 +3161,9 @@ export default {
       thinkingFailed: 'Thinking failed',
       updateTodos: 'Updating task list',
       updateTodosFailed: 'Failed to update task list',
+      imageAnalyzing: 'Viewing image content...',
+      imageAnalysisDone: 'Image content viewed',
+      imageAnalysisFailed: 'Image viewing failed',
       called: 'Called {name}',
       calledFailed: 'Failed to call {name}',
     },
@@ -3239,6 +3250,20 @@ export default {
       selectLabel: 'Select MCP Services',
       selectDesc: 'Select MCP services to enable',
       selectPlaceholder: 'Select MCP services',
+    },
+    imageUpload: {
+      label: 'Image Upload',
+      desc: 'Allow users to upload images for multimodal Q&A in conversations',
+      vlmModel: 'VLM Model',
+      vlmModelDesc: 'Vision language model for image analysis',
+      vlmModelPlaceholder: 'Select VLM model',
+      vlmModelRequired: 'VLM model is required when image upload is enabled',
+      storageProvider: 'Image Storage',
+      storageProviderDesc: 'Storage engine for uploaded images. Leave empty to use system default',
+      storageProviderPlaceholder: 'Select storage engine',
+      storageDefault: 'System Default',
+      notConfigured: 'Not Configured',
+      goStorageSettings: 'Go to Storage Settings',
     },
     faq: {
       title: 'FAQ Priority Strategy',

@@ -29,7 +29,7 @@ export function useStream() {
   let renderTimer: number | null = null
 
   // 启动流式请求
-  const startStream = async (params: { session_id: any; query: any; knowledge_base_ids?: string[]; knowledge_ids?: string[]; agent_enabled?: boolean; agent_id?: string; web_search_enabled?: boolean; enable_memory?: boolean; summary_model_id?: string; mcp_service_ids?: string[]; mentioned_items?: Array<{id: string; name: string; type: string; kb_type?: string}>; method: string; url: string }) => {
+  const startStream = async (params: { session_id: any; query: any; knowledge_base_ids?: string[]; knowledge_ids?: string[]; agent_enabled?: boolean; agent_id?: string; web_search_enabled?: boolean; enable_memory?: boolean; summary_model_id?: string; mcp_service_ids?: string[]; mentioned_items?: Array<{id: string; name: string; type: string; kb_type?: string}>; images?: Array<{data: string}>; method: string; url: string }) => {
     // 重置状态
     output.value = '';
     error.value = null;
@@ -113,6 +113,10 @@ export function useStream() {
       // Include mentioned_items if provided (for displaying @mentions in chat)
       if (params.mentioned_items !== undefined && params.mentioned_items.length > 0) {
         postBody.mentioned_items = params.mentioned_items;
+      }
+      // Include images if provided (base64 data URIs for multimodal chat)
+      if (params.images !== undefined && params.images.length > 0) {
+        postBody.images = params.images;
       }
       
       await fetchEventSource(url, {

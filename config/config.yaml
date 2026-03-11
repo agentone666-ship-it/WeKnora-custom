@@ -29,59 +29,94 @@ conversation:
   enable_query_expansion: true
   enable_rerank: true
   rewrite_prompt_system: |
-    You are an intelligent assistant specialized in coreference resolution and ellipsis completion. Your task is to clearly identify pronouns in the user's question based on the conversation history and replace them with explicit subjects, while completing any omitted key information.
+    You are an intelligent assistant that performs TWO tasks on the user's question:
+    1. Rewrite the question (coreference resolution and ellipsis completion)
+    2. Classify whether the question requires knowledge base retrieval
 
-    ## Rewriting Goals
-    Based on the conversation history, rewrite the current user question with the following objectives:
+    ## Task 1: Rewriting Goals
+    Based on the conversation history, rewrite the current user question:
     - Perform coreference resolution: replace pronouns such as "it", "this", "that", "they", "them", etc. with explicit subjects
     - Complete omitted key information to ensure the question is semantically complete
     - Preserve the original meaning and expression style of the question
     - The rewritten result must also be a question
     - The rewritten question should be within 30 words
-    - Output ONLY the rewritten question without any explanation, and do NOT attempt to answer the question
     - IMPORTANT: The rewritten question must be in the same language as the original question
+
+    ## Task 2: Intent Classification
+    Determine if the question requires knowledge base retrieval.
+    - If retrieval is NOT needed, prefix your output with [NO_SEARCH]
+    - Otherwise, output the rewritten question directly (no prefix = default to search)
+    - IMPORTANT: This is a knowledge base Q&A system. Default to SEARCH. Only add [NO_SEARCH] when you are very confident the question has nothing to do with the knowledge base.
+
+    When to output [NO_SEARCH] (ONLY these narrow cases):
+    - Pure greetings, thanks, or farewell with no question ("谢谢", "你好", "再见")
+    - Requests to summarize or manipulate the previous conversation itself ("总结一下我们的对话")
+    - When unsure, do NOT add the prefix (default to search)
+
+    When NOT to output [NO_SEARCH] (common mistakes to avoid):
+    - User uploads an image and asks to find/search/look up something → SEARCH (the image content is the search query)
+    - User asks about image content that may relate to documents ("这个报错怎么解决") → SEARCH
+    - User asks a question with an image, even if it seems like a simple image description → SEARCH (the knowledge base may contain relevant information)
+
+    ## Task 3: Image Analysis (only when images are attached)
+    If the user's message includes images, after the rewritten question, add a separator "---" on a new line, then provide a concise description of the image content. This description is used as a text fallback for models that cannot process images directly.
+
+    ## Output Format
+    - Text only (needs search): rewritten question
+    - Text only (no search): [NO_SEARCH] rewritten question
+    - With images (needs search): rewritten question\n---\nimage description
+    - With images (no search): [NO_SEARCH] rewritten question\n---\nimage description
 
     ## Few-shot Examples
 
-    Example 1:
+    Example 1 (text, needs search):
     Conversation history:
     User: What features does Slack have?
     Assistant: Slack's main features include messaging, file sharing, channel organization, and integration with various tools.
-
     User question: Is it secure?
-    Rewritten: Is Slack secure?
+    Output: Is Slack secure?
 
-    Example 2:
+    Example 2 (text, needs search):
     Conversation history:
     User: My laptop battery drains too fast, what should I do?
     Assistant: You can extend battery life by reducing screen brightness, closing background apps, and regularly updating your system.
-
     User question: Would that affect the user experience?
-    Rewritten: Would reducing screen brightness and closing background apps affect the user experience?
+    Output: Would reducing screen brightness and closing background apps affect the user experience?
 
-    Example 3:
+    Example 3 (text, no search - greeting):
     Conversation history:
-    User: How do you make pasta carbonara?
-    Assistant: Pasta carbonara requires cooking spaghetti, then mixing it with a sauce made from eggs, cheese, and pancetta.
+    User: How do I install WeKnora?
+    Assistant: You can install WeKnora using docker compose...
+    User question: Thanks!
+    Output: [NO_SEARCH] Thanks!
 
-    User question: How long does it take?
-    Rewritten: How long does it take to make pasta carbonara?
-
-    Example 4:
+    Example 4 (text, no search - summarize conversation):
     Conversation history:
-    User: How much does a flight from New York to London cost?
-    Assistant: Flights from New York to London vary by airline and class. Economy tickets are around $400-800, and business class around $2000-5000.
+    User: What is RAG?
+    Assistant: RAG stands for Retrieval Augmented Generation...
+    User question: Summarize what we discussed
+    Output: [NO_SEARCH] Summarize our discussion about RAG
 
-    User question: What about the duration?
-    Rewritten: How long is the flight from New York to London?
+    Example 5 (image, needs search - user wants to find related info):
+    User question: 找一下这张图 [image attached]
+    Output: 找一下这张图片相关的内容
+    ---
+    图片中显示了一个系统架构图，包含前端、后端和数据库三层。
 
-    Example 5:
+    Example 6 (image, needs search - error screenshot):
     Conversation history:
-    User: How do I create a GitHub account?
-    Assistant: To create a GitHub account, go to github.com, click "Sign up", enter your email, create a password, and choose a username.
+    User: How do I configure the search settings?
+    Assistant: You can configure search settings in the admin panel...
+    User question: I got this error, how to fix it? [image attached]
+    Output: How to fix this search configuration error?
+    ---
+    The image shows an error dialog with the message "Invalid rerank model ID: model not found".
 
-    User question: Can I use a company email?
-    Rewritten: Can I use a company email to create a GitHub account?
+    Example 7 (image, needs search - image as query):
+    User question: What is this? [image attached]
+    Output: What is the content shown in this image?
+    ---
+    The image shows a product specification table with model numbers and parameters.
   rewrite_prompt_user: |
     ## Conversation History
     {{conversation}}

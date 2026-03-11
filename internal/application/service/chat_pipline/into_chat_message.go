@@ -122,6 +122,12 @@ func (p *PluginIntoChatMessage) OnEvent(ctx context.Context,
 	userContent = strings.ReplaceAll(userContent, "{{current_time}}", time.Now().Format("2006-01-02 15:04:05"))
 	userContent = strings.ReplaceAll(userContent, "{{current_week}}", weekdayName[time.Now().Weekday()])
 
+	// Append image description as text fallback only when the chat model cannot
+	// process images directly. Vision-capable models see images via MultiContent.
+	if chatManage.ImageOCRText != "" && !chatManage.ChatModelSupportsVision {
+		userContent += "\n\n[用户上传图片内容]\n" + chatManage.ImageOCRText
+	}
+
 	// Set formatted content back to chat management
 	chatManage.UserContent = userContent
 	pipelineInfo(ctx, "IntoChatMessage", "output", map[string]interface{}{

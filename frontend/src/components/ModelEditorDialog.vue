@@ -230,6 +230,15 @@
           </p>
         </div>
 
+        <!-- Chat/VLLM: supports vision toggle -->
+        <div v-if="modelType === 'chat' || modelType === 'vllm'" class="form-item">
+          <label class="form-label">{{ $t('model.editor.supportsVisionLabel') }}</label>
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <t-switch v-model="formData.supportsVision" />
+            <span class="form-desc">{{ $t('model.editor.supportsVisionDesc') }}</span>
+          </div>
+        </div>
+
       </t-form>
           </div>
 
@@ -266,6 +275,7 @@ interface ModelFormData {
   dimension?: number
   interfaceType?: 'ollama' | 'openai'
   isDefault: boolean
+  supportsVision?: boolean
 }
 
 interface Props {
@@ -455,7 +465,8 @@ const formData = ref<ModelFormData>({
   apiKey: '',
   dimension: undefined,
   interfaceType: 'ollama',
-  isDefault: false
+  isDefault: false,
+  supportsVision: false
 })
 
 const rules = computed(() => ({
@@ -597,7 +608,8 @@ const resetForm = () => {
     apiKey: '',
     dimension: undefined, // 默认不填，让用户手动输入或通过检测按钮获取
     interfaceType: undefined,
-    isDefault: false
+    isDefault: false,
+    supportsVision: false
   }
   modelChecked.value = false
   modelAvailable.value = false

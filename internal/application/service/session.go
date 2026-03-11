@@ -523,6 +523,7 @@ func (s *sessionService) KnowledgeQA(
 	eventBus *event.EventBus,
 	customAgent *types.CustomAgent,
 	enableMemory bool,
+	imageURLs []string, imageOCRText string,
 ) error {
 	logger.Infof(
 		ctx,
@@ -690,6 +691,18 @@ func (s *sessionService) KnowledgeQA(
 		}
 	}
 
+	// Resolve chat model vision capability and VLM model ID for image routing
+	var chatModelSupportsVision bool
+	var vlmModelID string
+	if chatModelID != "" {
+		if chatModelInfo, err := s.modelService.GetModelByID(ctx, chatModelID); err == nil && chatModelInfo != nil {
+			chatModelSupportsVision = chatModelInfo.Parameters.SupportsVision
+		}
+	}
+	if customAgent != nil {
+		vlmModelID = customAgent.Config.VLMModelID
+	}
+
 	// Retrieval scope: when agent is set, use agent's tenant (own or shared); otherwise session tenant or context
 	retrievalTenantID := session.TenantID
 	if customAgent != nil && customAgent.TenantID != 0 {
@@ -754,6 +767,11 @@ func (s *sessionService) KnowledgeQA(
 		FAQPriorityEnabled:       faqPriorityEnabled,
 		FAQDirectAnswerThreshold: faqDirectAnswerThreshold,
 		FAQScoreBoost:            faqScoreBoost,
+		// Image support
+		Images:                  imageURLs,
+		ImageOCRText:            imageOCRText,
+		VLMModelID:              vlmModelID,
+		ChatModelSupportsVision: chatModelSupportsVision,
 	}
 
 	// Determine pipeline based on knowledge bases availability and web search setting
@@ -763,7 +781,12 @@ func (s *sessionService) KnowledgeQA(
 	if len(knowledgeBaseIDs) == 0 && len(knowledgeIDs) == 0 && !webSearchEnabled {
 		logger.Info(ctx, "No knowledge bases selected and web search disabled, using chat pipeline")
 		// For pure chat, UserContent is the Query (since INTO_CHAT_MESSAGE is skipped)
-		chatManage.UserContent = query
+		// Only append image text description for non-vision models; vision models see images directly
+		userContent := query
+		if imageOCRText != "" && !chatModelSupportsVision {
+			userContent += "\n\n[用户上传图片内容]\n" + imageOCRText
+		}
+		chatManage.UserContent = userContent
 
 		// Use chat_history_stream if multi-turn is enabled, otherwise use chat_stream
 		if maxRounds > 0 {
@@ -1368,6 +1391,7 @@ func (s *sessionService) AgentQA(
 	customAgent *types.CustomAgent,
 	knowledgeBaseIDs []string,
 	knowledgeIDs []string,
+	imageURLs []string, imageOCRText string,
 ) error {
 	sessionID := session.ID
 	sessionJSON, err := json.Marshal(session)
@@ -1587,10 +1611,28 @@ func (s *sessionService) AgentQA(
 		return err
 	}
 
+	// Route image data based on agent model's vision capability
+	var agentModelSupportsVision bool
+	if effectiveModelID != "" {
+		if modelInfo, err := s.modelService.GetModelByID(ctx, effectiveModelID); err == nil && modelInfo != nil {
+			agentModelSupportsVision = modelInfo.Parameters.SupportsVision
+		}
+	}
+
+	agentQuery := query
+	var agentImageURLs []string
+	if agentModelSupportsVision && len(imageURLs) > 0 {
+		agentImageURLs = imageURLs
+		logger.Infof(ctx, "Agent model supports vision, passing %d image(s) directly", len(agentImageURLs))
+	} else if imageOCRText != "" {
+		agentQuery = query + "\n\n[用户上传图片内容]\n" + imageOCRText
+		logger.Infof(ctx, "Agent model does not support vision, appending image OCR text (%d chars)", len(imageOCRText))
+	}
+
 	// Execute agent with streaming (asynchronously)
 	// Events will be emitted to EventBus and handled by the Handler layer
 	logger.Info(ctx, "Executing agent with streaming")
-	if _, err := engine.Execute(ctx, sessionID, assistantMessageID, query, llmContext); err != nil {
+	if _, err := engine.Execute(ctx, sessionID, assistantMessageID, agentQuery, llmContext, agentImageURLs); err != nil {
 		logger.Errorf(ctx, "Agent execution failed: %v", err)
 		// Emit error event to the EventBus used by this agent
 		eventBus.Emit(ctx, event.Event{

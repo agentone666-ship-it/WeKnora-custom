@@ -22,6 +22,8 @@ type Handler struct {
 	customAgentService   interfaces.CustomAgentService   // Service for managing custom agents
 	tenantService        interfaces.TenantService        // Service for loading tenant (shared agent context)
 	agentShareService    interfaces.AgentShareService    // Service for resolving shared agents (KB scope in retrieval)
+	fileService          interfaces.FileService          // Service for file storage (image uploads)
+	modelService         interfaces.ModelService         // Service for model management (VLM access)
 }
 
 // NewHandler creates a new instance of Handler with all necessary dependencies
@@ -34,6 +36,8 @@ func NewHandler(
 	customAgentService interfaces.CustomAgentService,
 	tenantService interfaces.TenantService,
 	agentShareService interfaces.AgentShareService,
+	fileService interfaces.FileService,
+	modelService interfaces.ModelService,
 ) *Handler {
 	return &Handler{
 		sessionService:       sessionService,
@@ -44,6 +48,8 @@ func NewHandler(
 		customAgentService:   customAgentService,
 		tenantService:        tenantService,
 		agentShareService:    agentShareService,
+		fileService:          fileService,
+		modelService:         modelService,
 	}
 }
 

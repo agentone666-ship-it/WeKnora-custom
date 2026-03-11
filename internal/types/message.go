@@ -28,6 +28,42 @@ type MentionedItem struct {
 	KBType string `json:"kb_type"` // "document" or "faq" (only for kb type)
 }
 
+// MessageImage represents an image attached to a chat message
+type MessageImage struct {
+	URL     string `json:"url"`
+	Caption string `json:"caption,omitempty"`
+}
+
+// MessageImages is a slice of MessageImage for database storage
+type MessageImages []MessageImage
+
+// Value implements the driver.Valuer interface for database serialization
+func (m MessageImages) Value() (driver.Value, error) {
+	if m == nil {
+		return json.Marshal([]MessageImage{})
+	}
+	return json.Marshal(m)
+}
+
+// Scan implements the sql.Scanner interface for database deserialization
+func (m *MessageImages) Scan(value interface{}) error {
+	if value == nil {
+		*m = make(MessageImages, 0)
+		return nil
+	}
+	var b []byte
+	switch v := value.(type) {
+	case []byte:
+		b = v
+	case string:
+		b = []byte(v)
+	default:
+		*m = make(MessageImages, 0)
+		return nil
+	}
+	return json.Unmarshal(b, m)
+}
+
 // MentionedItems is a slice of MentionedItem for database storage
 type MentionedItems []MentionedItem
 
@@ -45,8 +81,13 @@ func (m *MentionedItems) Scan(value interface{}) error {
 		*m = make(MentionedItems, 0)
 		return nil
 	}
-	b, ok := value.([]byte)
-	if !ok {
+	var b []byte
+	switch v := value.(type) {
+	case []byte:
+		b = v
+	case string:
+		b = []byte(v)
+	default:
 		*m = make(MentionedItems, 0)
 		return nil
 	}
@@ -76,6 +117,8 @@ type Message struct {
 	// Mentioned knowledge bases and files (for user messages)
 	// Stores the @mentioned items when user sends a message
 	MentionedItems MentionedItems `json:"mentioned_items,omitempty" gorm:"type:jsonb,column:mentioned_items"`
+	// Attached images with OCR/Caption text (for user messages)
+	Images MessageImages `json:"images,omitempty" gorm:"type:jsonb;column:images"`
 	// Whether message generation is complete
 	IsCompleted bool `json:"is_completed"`
 	// Whether this response is a fallback (no knowledge base match found)
@@ -111,8 +154,13 @@ func (a *AgentSteps) Scan(value interface{}) error {
 		*a = make(AgentSteps, 0)
 		return nil
 	}
-	b, ok := value.([]byte)
-	if !ok {
+	var b []byte
+	switch v := value.(type) {
+	case []byte:
+		b = v
+	case string:
+		b = []byte(v)
+	default:
 		*a = make(AgentSteps, 0)
 		return nil
 	}
@@ -136,6 +184,9 @@ func (m *Message) BeforeCreate(tx *gorm.DB) (err error) {
 	}
 	if m.MentionedItems == nil {
 		m.MentionedItems = make(MentionedItems, 0)
+	}
+	if m.Images == nil {
+		m.Images = make(MessageImages, 0)
 	}
 	return nil
 }

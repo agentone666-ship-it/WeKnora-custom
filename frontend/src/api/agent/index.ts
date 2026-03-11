@@ -35,6 +35,11 @@ export interface CustomAgentConfig {
   // false: 根据 kb_selection_mode 自动检索知识库
   retrieve_kb_only_when_mentioned?: boolean;
 
+  // ===== 图片上传/多模态设置 =====
+  image_upload_enabled?: boolean;    // 是否启用图片上传（默认: false）
+  vlm_model_id?: string;            // VLM模型ID（图片分析用）
+  image_storage_provider?: string;   // 图片存储提供商
+
   // ===== 文件类型限制 =====
   // 支持的文件类型（如 ["csv", "xlsx", "xls"]）
   // 为空表示支持所有文件类型

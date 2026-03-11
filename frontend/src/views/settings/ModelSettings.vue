@@ -293,7 +293,8 @@ function convertToLegacyFormat(model: ModelConfig) {
     apiKey: model.parameters.api_key || '',
     provider: model.parameters.provider || '', // 添加 provider 字段
     dimension: model.parameters.embedding_parameters?.dimension,
-    isBuiltin: model.is_builtin || false
+    isBuiltin: model.is_builtin || false,
+    supportsVision: model.parameters.supports_vision || false
   }
 }
 
@@ -408,6 +409,9 @@ const handleModelSave = async (modelData: any) => {
             dimension: modelData.dimension,
             truncate_prompt_tokens: 0
           }
+        } : {}),
+        ...((currentModelType.value === 'chat' || currentModelType.value === 'vllm') ? {
+          supports_vision: modelData.supportsVision ?? false
         } : {})
       }
     }

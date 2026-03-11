@@ -21,10 +21,12 @@ type AgentStreamEvent struct {
 // AgentEngine defines the interface for agent execution engine
 type AgentEngine interface {
 	// Execute executes the agent with conversation history and returns a stream of events
+	// imageURLs is optional - when provided, images are passed to the LLM as multimodal content
 	Execute(
 		ctx context.Context,
 		sessionID, messageID, query string,
 		llmContext []chat.Message,
+		imageURLs ...[]string,
 	) (*types.AgentState, error)
 }
 
