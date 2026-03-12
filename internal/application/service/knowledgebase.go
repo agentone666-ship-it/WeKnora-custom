@@ -291,11 +291,12 @@ func (s *knowledgeBaseService) UpdateKnowledgeBase(ctx context.Context,
 	// Update the knowledge base properties
 	kb.Name = name
 	kb.Description = description
-	kb.ChunkingConfig = config.ChunkingConfig
-	kb.ImageProcessingConfig = config.ImageProcessingConfig
-	// Update FAQ config if provided
-	if config.FAQConfig != nil {
-		kb.FAQConfig = config.FAQConfig
+	if config != nil {
+		kb.ChunkingConfig = config.ChunkingConfig
+		kb.ImageProcessingConfig = config.ImageProcessingConfig
+		if config.FAQConfig != nil {
+			kb.FAQConfig = config.FAQConfig
+		}
 	}
 	kb.UpdatedAt = time.Now()
 	kb.EnsureDefaults()

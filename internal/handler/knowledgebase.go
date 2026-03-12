@@ -427,7 +427,7 @@ func (h *KnowledgeBaseHandler) TogglePinKnowledgeBase(c *gin.Context) {
 type UpdateKnowledgeBaseRequest struct {
 	Name        string                     `json:"name"        binding:"required"`
 	Description string                     `json:"description"`
-	Config      *types.KnowledgeBaseConfig `json:"config"      binding:"required"`
+	Config      *types.KnowledgeBaseConfig `json:"config"`
 }
 
 // UpdateKnowledgeBase godoc
