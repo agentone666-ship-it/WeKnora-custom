@@ -1,0 +1,623 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>网页内容收藏 - 快速笔记 5.0</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+:root { --primary: #07C160; --primary-dark: #06ad54; --bg: #f5f6f7; --white: #fff; --text: #1a1a1a; --text2: #555; --text3: #999; --border: #eaeaea; --sidebar-w: 220px; }
+body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; display: flex; flex-direction: column; }
+
+/* 顶部导航 */
+.top-bar { background: var(--white); border-bottom: 1px solid var(--border); padding: 0 32px; height: 56px; display: flex; align-items: center; gap: 16px; position: sticky; top: 0; z-index: 10; flex-shrink: 0; }
+.top-bar-logo { display: flex; align-items: center; gap: 10px; }
+.top-bar-logo-icon { width: 32px; height: 32px; background: var(--primary); border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 15px; font-weight: 700; }
+.top-bar-logo-icon svg { width: 18px; height: 18px; color: #fff; }
+.top-bar-logo h1 { font-size: 16px; font-weight: 700; color: var(--text); }
+.top-bar-divider { width: 1px; height: 20px; background: var(--border); }
+.top-bar-title { font-size: 14px; color: var(--text2); }
+.top-bar-spacer { flex: 1; }
+.top-bar-actions { display: flex; gap: 8px; }
+.top-bar-btn { height: 34px; padding: 0 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--white); font-size: 13px; color: var(--text2); cursor: pointer; display: flex; align-items: center; gap: 6px; transition: all 0.15s; }
+.top-bar-btn:hover { border-color: var(--primary); color: var(--primary); }
+.top-bar-btn svg { width: 14px; height: 14px; }
+
+/* ===== 主体左右布局 ===== */
+.main-layout { flex: 1; display: flex; overflow: hidden; }
+
+/* 左侧分类栏 */
+.sidebar { width: var(--sidebar-w); background: var(--white); border-right: 1px solid var(--border); display: flex; flex-direction: column; flex-shrink: 0; overflow-y: auto; }
+.sidebar-title { font-size: 11px; font-weight: 600; color: var(--text3); letter-spacing: 0.5px; text-transform: uppercase; padding: 20px 20px 10px; }
+.sidebar-list { list-style: none; padding: 0 8px; flex: 1; }
+.sidebar-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px; cursor: pointer; font-size: 13px; color: var(--text2); transition: all 0.15s; margin-bottom: 2px; user-select: none; }
+.sidebar-item:hover { background: #f5f5f5; color: var(--text); }
+.sidebar-item.active { background: rgba(7, 193, 96, 0.08); color: var(--primary); font-weight: 600; }
+.sidebar-item .si-icon { width: 32px; height: 32px; border-radius: 9px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; transition: all 0.15s; }
+.sidebar-item .si-icon svg { width: 16px; height: 16px; }
+.sidebar-item.active .si-icon { background: rgba(7, 193, 96, 0.12); }
+.sidebar-item .si-icon-all { background: #f0f0f0; color: var(--text3); }
+.sidebar-item.active .si-icon-all { background: rgba(7, 193, 96, 0.12); color: var(--primary); }
+.sidebar-item .si-icon-select { background: #f0f7ff; color: #5b9bd5; }
+.sidebar-item.active .si-icon-select { background: rgba(7, 193, 96, 0.12); color: var(--primary); }
+.sidebar-item .si-icon-smart { background: #fff7ed; color: #e8913a; }
+.sidebar-item.active .si-icon-smart { background: rgba(7, 193, 96, 0.12); color: var(--primary); }
+.sidebar-item .si-icon-markdown { background: #f0f0ff; color: #6c6ce0; }
+.sidebar-item.active .si-icon-markdown { background: rgba(7, 193, 96, 0.12); color: var(--primary); }
+.sidebar-item .si-label { flex: 1; }
+.sidebar-item .si-count { font-size: 11px; color: var(--text3); background: #f0f0f0; padding: 1px 7px; border-radius: 10px; font-weight: 500; min-width: 22px; text-align: center; transition: all 0.15s; }
+.sidebar-item.active .si-count { background: rgba(7, 193, 96, 0.12); color: var(--primary); }
+
+/* 右侧内容区 */
+.content-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+/* 内容顶部工具栏 */
+.content-toolbar { display: flex; align-items: center; gap: 12px; padding: 18px 28px 0; flex-shrink: 0; }
+.content-toolbar-title { font-size: 18px; font-weight: 700; color: var(--text); }
+.content-toolbar-count { font-size: 13px; color: var(--text3); font-weight: 400; margin-left: 2px; }
+.content-toolbar-spacer { flex: 1; }
+.content-search { height: 36px; width: 240px; border: 1px solid var(--border); border-radius: 8px; padding: 0 12px 0 34px; font-size: 13px; outline: none; transition: border-color 0.2s; background: var(--white) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23999' stroke-width='2'%3E%3Ccircle cx='11' cy='11' r='8'/%3E%3Cline x1='21' y1='21' x2='16.65' y2='16.65'/%3E%3C/svg%3E") 12px center no-repeat; }
+.content-search:focus { border-color: var(--primary); }
+
+/* 内容滚动区 */
+.content-scroll { flex: 1; overflow-y: auto; padding: 16px 28px 40px; }
+
+/* 空状态 */
+.empty-state { text-align: center; padding: 80px 20px; }
+.empty-state-icon { width: 80px; height: 80px; background: #e8f8ee; border-radius: 20px; display: flex; align-items: center; justify-content: center; margin: 0 auto 20px; }
+.empty-state-icon svg { width: 36px; height: 36px; color: var(--primary); }
+.empty-state h2 { font-size: 18px; font-weight: 600; margin-bottom: 8px; }
+.empty-state p { font-size: 14px; color: var(--text3); line-height: 1.6; }
+
+/* 收藏卡片列表 — 网格卡片布局 */
+.clip-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px; }
+
+.clip-card {
+  background: var(--white);
+  border-radius: 16px;
+  border: none;
+  overflow: visible;
+  transition: all 0.25s ease;
+  display: flex;
+  flex-direction: column;
+  min-height: 200px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06), 0 0 1px rgba(0, 0, 0, 0.04);
+}
+.clip-card:hover {
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.1), 0 0 1px rgba(0, 0, 0, 0.05);
+  transform: translateY(-3px);
+}
+
+.clip-card-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 20px 0;
+}
+.clip-card-favicon {
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  background: #f0f0f0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.clip-card-favicon svg { width: 12px; height: 12px; color: var(--text3); }
+.clip-card-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.clip-card-time {
+  font-size: 11px;
+  color: var(--text3);
+  white-space: nowrap;
+}
+
+.clip-card-body {
+  padding: 10px 20px 8px;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.clip-card-content {
+  font-size: 13px;
+  color: var(--text2);
+  line-height: 1.65;
+  max-height: 140px;
+  overflow: hidden;
+  position: relative;
+  white-space: pre-wrap;
+  word-break: break-word;
+  cursor: pointer;
+  -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 65%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 0%, #000 65%, transparent 100%);
+}
+.clip-card-content.expanded {
+  max-height: none;
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+.clip-card-fade {
+  display: none;
+}
+
+.clip-card-footer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 20px 12px;
+  margin-top: auto;
+  border-top: 1px solid #f0f0f0;
+}
+.clip-card-tag {
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: rgba(7, 193, 96, 0.08);
+  color: var(--primary);
+  flex-shrink: 0;
+}
+.clip-card-footer-spacer {
+  flex: 1;
+}
+.clip-card-actions { position: relative; flex-shrink: 0; }
+.clip-more-btn {
+  width: 26px;
+  height: 26px;
+  border: none;
+  background: transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text3);
+  transition: color 0.15s;
+}
+.clip-more-btn:hover { color: var(--text); background: #f5f5f5; }
+.clip-more-btn svg { width: 18px; height: 18px; }
+.clip-more-menu {
+  position: absolute;
+  bottom: 100%;
+  right: 0;
+  margin-bottom: 4px;
+  background: var(--white);
+  border-radius: 10px;
+  box-shadow: 0 6px 24px rgba(0,0,0,0.15);
+  padding: 4px 0;
+  min-width: 120px;
+  display: none;
+  z-index: 100;
+}
+.clip-more-menu.show { display: block; }
+/* 打开菜单时提升当前卡片层级，避免被相邻卡片遮挡 */
+.clip-card.menu-open {
+  z-index: 60;
+  position: relative;
+}
+.clip-more-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 14px;
+  font-size: 13px;
+  color: var(--text2);
+  cursor: pointer;
+  border: none;
+  background: none;
+  width: 100%;
+  text-align: left;
+  transition: all 0.12s;
+  white-space: nowrap;
+}
+.clip-more-menu-item:hover { background: rgba(7,193,96,0.06); color: var(--primary); }
+.clip-more-menu-item.menu-delete:hover { background: #fff0f0; color: #e44; }
+.clip-more-menu-item svg { width: 14px; height: 14px; flex-shrink: 0; }
+
+/* 编辑态时卡片跨满一行 */
+.clip-card.editing {
+  grid-column: 1 / -1;
+  min-height: auto;
+}
+
+/* === 编辑遮罩（黑色半透明蒙版） === */
+.edit-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 300;
+  display: none;
+  animation: edit-overlay-in 0.25s ease;
+  backdrop-filter: blur(2px);
+}
+.edit-overlay.show { display: block; }
+@keyframes edit-overlay-in { from { opacity: 0; } to { opacity: 1; } }
+
+/* === 编辑浮层卡片 === */
+.clip-card.editing {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 310;
+  width: 92vw;
+  max-width: 1100px;
+  max-height: 90vh;
+  overflow-y: auto;
+  border-radius: 18px;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(255, 255, 255, 0.08);
+  border-color: transparent;
+  animation: edit-card-in 0.3s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+@keyframes edit-card-in {
+  from { opacity: 0; transform: translate(-50%, -46%) scale(0.95); }
+  to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+.clip-card.editing:hover {
+  transform: translate(-50%, -50%);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+
+/* === 选择剪藏卡片 — 截图缩略图 === */
+.clip-screenshot-thumb {
+  width: calc(100% - 28px);
+  margin: 6px 14px 0;
+  border-radius: 12px;
+  display: block;
+  object-fit: cover;
+  max-height: 180px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08), 0 0 1px rgba(0, 0, 0, 0.05);
+}
+.clip-screenshot-thumb:hover {
+  opacity: 0.92;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12), 0 0 1px rgba(0, 0, 0, 0.06);
+}
+
+/* === 选择剪藏编辑态 — 左图右编辑器双栏 === */
+.clip-edit-split {
+  display: flex;
+  gap: 16px;
+  padding: 16px 18px 0;
+}
+.clip-edit-split-left {
+  flex: 0 0 45%;
+  max-width: 45%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.clip-edit-split-left img {
+  width: 100%;
+  border-radius: 12px;
+  border: none;
+  object-fit: contain;
+  max-height: 500px;
+  background: #f8f8f8;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08), 0 0 1px rgba(0, 0, 0, 0.05);
+  transition: box-shadow 0.2s ease;
+}
+.clip-edit-split-left img:hover {
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12), 0 0 1px rgba(0, 0, 0, 0.06);
+}
+.clip-edit-split-left .split-label {
+  font-size: 11px;
+  color: var(--text3);
+  text-align: center;
+}
+.clip-edit-split-right {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.clip-edit-split-right .clip-edit-card {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+.clip-edit-split-right .clip-edit-textarea {
+  flex: 1;
+  min-height: 360px;
+}
+
+/* 速记标签色 */
+.clip-card-tag.tag-markdown { background: rgba(59,125,216,0.1); color: #3b7dd8; }
+.clip-card-tag.tag-image { background: rgba(233,89,80,0.1); color: #e95950; }
+.clip-card-tag.tag-text { background: rgba(134,142,150,0.1); color: #868e96; }
+
+/* 图片分类图标 */
+.sidebar-item .si-icon-image { background: #fef0f0; color: #e95950; }
+.sidebar-item.active .si-icon-image { background: rgba(7, 193, 96, 0.12); color: var(--primary); }
+
+/* Markdown 渲染样式 */
+.md-rendered { white-space: normal; }
+.md-rendered h1 { font-size: 20px; font-weight: 700; margin: 0 0 10px; color: var(--text); border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+.md-rendered h2 { font-size: 17px; font-weight: 700; margin: 14px 0 8px; color: var(--text); }
+.md-rendered h3 { font-size: 15px; font-weight: 600; margin: 12px 0 6px; color: var(--text); }
+.md-rendered h4 { font-size: 14px; font-weight: 600; margin: 10px 0 4px; color: var(--text); }
+.md-rendered p { margin: 6px 0; line-height: 1.7; }
+.md-rendered ul, .md-rendered ol { margin: 6px 0; padding-left: 20px; }
+.md-rendered li { margin: 3px 0; line-height: 1.6; }
+.md-rendered code { font-family: "SF Mono","Fira Code","Menlo",monospace; background: #f3f4f6; padding: 1px 5px; border-radius: 4px; font-size: 12px; color: #d63384; }
+.md-rendered pre { background: #1e1e2e; color: #cdd6f4; border-radius: 8px; padding: 14px 16px; overflow-x: auto; margin: 8px 0; font-size: 12px; line-height: 1.5; }
+.md-rendered pre code { background: none; padding: 0; color: inherit; font-size: inherit; }
+.md-rendered blockquote { border-left: 3px solid var(--primary); padding: 6px 14px; margin: 8px 0; background: #f8faf8; color: var(--text2); font-size: 13px; border-radius: 0 6px 6px 0; }
+.md-rendered hr { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
+.md-rendered a { color: var(--primary); text-decoration: none; }
+.md-rendered a:hover { text-decoration: underline; }
+.md-rendered strong { font-weight: 700; }
+.md-rendered em { font-style: italic; }
+.md-rendered table { width: 100%; border-collapse: collapse; margin: 8px 0; font-size: 13px; }
+.md-rendered th, .md-rendered td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; }
+.md-rendered th { background: #f5f6f7; font-weight: 600; }
+.md-rendered img { max-width: 100%; border-radius: 6px; margin: 6px 0; }
+
+/* 编辑态 */
+.clip-card-edit-area { display: none; padding: 0 18px 14px; }
+.clip-card.editing .clip-card-header { display: none; }
+.clip-card.editing .clip-card-body { display: none; }
+.clip-card.editing .clip-card-footer { display: none; }
+.clip-card.editing .clip-card-edit-area { display: block; }
+/* 有分栏布局时，padding 由分栏自身控制 */
+.clip-card.editing .clip-card-edit-area:has(.clip-edit-split) { padding: 0 0 14px; }
+
+/* 编辑浮层标题栏 */
+.clip-edit-header {
+  display: none;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 20px 8px;
+}
+.clip-card.editing .clip-edit-header { display: flex; }
+.clip-edit-header-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  flex: 1;
+}
+.clip-edit-header-close {
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: #f0f0f0;
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text3);
+  transition: all 0.15s;
+  flex-shrink: 0;
+}
+.clip-edit-header-close:hover { background: #e5e5e5; color: var(--text); }
+.clip-edit-header-close svg { width: 16px; height: 16px; }
+
+.clip-edit-card {
+  background: #f8fcf9;
+  border-radius: 14px;
+  overflow: hidden;
+  border: 1.5px solid #edf8f1;
+}
+.clip-edit-textarea {
+  width: 100%;
+  min-height: 300px;
+  border: none;
+  background: transparent;
+  padding: 14px 16px;
+  font-family: "SF Mono","Fira Code","Menlo","Consolas",monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text);
+  resize: none;
+  outline: none;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.clip-edit-textarea::placeholder { color: #c0c0c0; }
+
+/* 编辑工具栏 */
+.clip-edit-toolbar { display: flex; align-items: center; padding: 2px 8px; gap: 0; border-top: 1px solid #edf8f1; }
+.clip-edit-toolbar-group { display: flex; align-items: center; gap: 0; }
+.clip-edit-toolbar-divider { width: 1px; height: 14px; background: #e0e8e2; margin: 0 6px; flex-shrink: 0; }
+.clip-edit-tool-btn { width: 28px; height: 28px; border: none; background: transparent; border-radius: 6px; cursor: pointer; display: flex; align-items: center; justify-content: center; color: #999; transition: all 0.15s; padding: 0; }
+.clip-edit-tool-btn:hover { background: rgba(7,193,96,0.08); color: #555; }
+.clip-edit-tool-btn:active { background: rgba(7,193,96,0.15); }
+.clip-edit-tool-btn svg { width: 15px; height: 15px; }
+.clip-edit-toolbar-spacer { flex: 1; }
+.clip-edit-actions { display: flex; align-items: center; gap: 6px; }
+.clip-edit-btn {
+  height: 28px;
+  padding: 0 14px;
+  border: none;
+  border-radius: 14px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.clip-edit-btn.cancel {
+  background: #eee;
+  color: var(--text2);
+}
+.clip-edit-btn.cancel:hover { background: #e0e0e0; color: var(--text); }
+.clip-edit-btn.save {
+  background: var(--primary);
+  color: #fff;
+}
+.clip-edit-btn.save:hover { background: var(--primary-dark); box-shadow: 0 2px 8px rgba(7,193,96,0.25); }
+.clip-edit-btn.save:disabled { background: #ddd; box-shadow: none; cursor: not-allowed; }
+.clip-edit-tool-btn.clip-preview-active { background: rgba(7,193,96,0.12); color: var(--primary); }
+
+/* Toast */
+.toast { position: fixed; top: 20px; left: 50%; transform: translateX(-50%) translateY(-80px); background: var(--text); color: #fff; padding: 10px 22px; border-radius: 22px; font-size: 13px; z-index: 200; transition: transform 0.3s ease; pointer-events: none; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
+.toast.show { transform: translateX(-50%) translateY(0); }
+.toast.success { background: var(--primary); }
+
+/* === 图片灯箱 Lightbox === */
+.lightbox-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.85);
+  z-index: 500;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  cursor: zoom-out;
+  animation: lightbox-fadein 0.2s ease;
+}
+.lightbox-overlay.show { display: flex; }
+@keyframes lightbox-fadein { from { opacity: 0; } to { opacity: 1; } }
+.lightbox-img {
+  max-width: 90vw;
+  max-height: 90vh;
+  border-radius: 0;
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.4);
+  cursor: default;
+  object-fit: contain;
+  animation: lightbox-scalein 0.25s ease;
+}
+@keyframes lightbox-scalein { from { transform: scale(0.85); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+.lightbox-close {
+  position: absolute;
+  top: 20px;
+  right: 28px;
+  width: 40px;
+  height: 40px;
+  border: none;
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 20px;
+  transition: background 0.15s;
+}
+.lightbox-close:hover { background: rgba(255, 255, 255, 0.3); }
+.lightbox-close svg { width: 20px; height: 20px; }
+/* 让编辑态截图有可点击放大提示 */
+.clip-edit-split-left img { cursor: zoom-in; }
+</style>
+</head>
+<body>
+
+<div class="top-bar">
+  <div class="top-bar-logo">
+    <div class="top-bar-logo-icon">S</div>
+    <h1>快速笔记 5.0</h1>
+  </div>
+  <div class="top-bar-divider"></div>
+  <span class="top-bar-title">内容收藏</span>
+  <div class="top-bar-spacer"></div>
+  <div class="top-bar-actions">
+    <button class="top-bar-btn" id="btn-refresh">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+      刷新
+    </button>
+    <button class="top-bar-btn" id="btn-clear-all">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+      清空全部
+    </button>
+  </div>
+</div>
+
+<div class="main-layout">
+  <!-- 左侧分类栏 -->
+  <aside class="sidebar">
+    <div class="sidebar-title">分类</div>
+    <ul class="sidebar-list">
+      <li class="sidebar-item active" data-filter="all">
+        <div class="si-icon si-icon-all">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+        </div>
+        <span class="si-label">全部内容</span>
+        <span class="si-count" id="count-all">0</span>
+      </li>
+      <li class="sidebar-item" data-filter="select-clip">
+        <div class="si-icon si-icon-select">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3h5v2H5v3H3V3zm13 0h5v5h-2V5h-3V3zM3 16v5h5v-2H5v-3H3zm18 0v5h-5v-2h3v-3h2z"/></svg>
+        </div>
+        <span class="si-label">截图</span>
+        <span class="si-count" id="count-select">0</span>
+      </li>
+      <li class="sidebar-item" data-filter="smart-clip">
+        <div class="si-icon si-icon-smart">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+        </div>
+        <span class="si-label">智能剪藏</span>
+        <span class="si-count" id="count-smart">0</span>
+      </li>
+      <li class="sidebar-item" data-filter="markdown">
+        <div class="si-icon si-icon-markdown">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+        </div>
+        <span class="si-label">速记</span>
+        <span class="si-count" id="count-markdown">0</span>
+      </li>
+      <li class="sidebar-item" data-filter="image-clip">
+        <div class="si-icon si-icon-image">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+        </div>
+        <span class="si-label">图片收藏</span>
+        <span class="si-count" id="count-image">0</span>
+      </li>
+    </ul>
+  </aside>
+
+  <!-- 右侧内容区 -->
+  <div class="content-area">
+    <div class="content-toolbar">
+      <span class="content-toolbar-title" id="content-title">全部内容</span>
+      <span class="content-toolbar-count">（<strong id="clips-total">0</strong> 条）</span>
+      <div class="content-toolbar-spacer"></div>
+      <input type="text" class="content-search" id="search-input" placeholder="搜索收藏内容...">
+    </div>
+    <div class="content-scroll">
+      <div class="clip-list" id="clip-list">
+        <!-- 动态生成 -->
+      </div>
+      <div class="empty-state" id="empty-state" style="display:none;">
+        <div class="empty-state-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
+        </div>
+        <h2>暂无收藏内容</h2>
+        <p>使用插件的「选择剪藏」或「智能剪藏」功能<br>截取网页内容后会自动保存到这里</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 隐藏的筛选 select（供 JS 兼容使用） -->
+<select id="filter-type" style="display:none;">
+  <option value="all">全部类型</option>
+  <option value="select-clip">截图</option>
+  <option value="smart-clip">智能剪藏</option>
+  <option value="markdown">速记笔记</option>
+  <option value="image-clip">图片收藏</option>
+</select>
+
+<!-- 编辑态背景遮罩 -->
+<div class="edit-overlay" id="edit-overlay"></div>
+
+<div class="toast" id="toast"></div>
+
+<!-- 图片灯箱 -->
+<div class="lightbox-overlay" id="lightbox">
+  <button class="lightbox-close" id="lightbox-close" title="关闭">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+  </button>
+  <img class="lightbox-img" id="lightbox-img" src="" alt="原图预览">
+</div>
+
+<script src="clips.js"></script>
+</body>
+</html>

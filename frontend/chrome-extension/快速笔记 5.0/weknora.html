@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WeKnora - 知识库管理</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+:root { --primary: #07C160; --primary-dark: #06ad54; --bg: #f5f6f7; --white: #fff; --text: #1a1a1a; --text2: #555; --text3: #999; --border: #eaeaea; }
+body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background: var(--white); color: var(--text); height: 100vh; display: flex; overflow: hidden; }
+
+/* === 左侧导航 === */
+.sidebar { width: 220px; background: #fafbfc; border-right: 1px solid var(--border); display: flex; flex-direction: column; flex-shrink: 0; }
+.sidebar-logo { padding: 20px 20px 24px; display: flex; align-items: center; justify-content: space-between; }
+.sidebar-logo h1 { font-size: 18px; font-weight: 700; color: var(--text); letter-spacing: 1px; }
+.sidebar-logo-btn { width: 30px; height: 30px; border: none; background: transparent; border-radius: 8px; cursor: pointer; display: flex; align-items: center; justify-content: center; color: var(--text3); }
+.sidebar-logo-btn:hover { background: #eee; color: var(--text); }
+.sidebar-logo-btn svg { width: 16px; height: 16px; }
+
+.sidebar-nav { flex: 1; padding: 0 12px; }
+.nav-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px; font-size: 14px; color: var(--text2); cursor: pointer; transition: all 0.15s; margin-bottom: 2px; position: relative; }
+.nav-item:hover { background: #f0f0f0; color: var(--text); }
+.nav-item.active { background: var(--primary); color: #fff; }
+.nav-item svg { width: 18px; height: 18px; flex-shrink: 0; }
+.nav-item .nav-plus { position: absolute; right: 10px; width: 18px; height: 18px; color: var(--primary); }
+.nav-item.active .nav-plus { color: rgba(255,255,255,0.7); }
+
+.sidebar-user { padding: 16px; border-top: 1px solid var(--border); display: flex; align-items: center; gap: 10px; }
+.sidebar-avatar { width: 36px; height: 36px; border-radius: 50%; background: var(--primary); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 15px; font-weight: 600; flex-shrink: 0; }
+.sidebar-user-info { flex: 1; min-width: 0; }
+.sidebar-user-name { font-size: 13px; font-weight: 600; color: var(--text); }
+.sidebar-user-email { font-size: 11px; color: var(--text3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidebar-user-arrow { width: 16px; height: 16px; color: var(--text3); }
+
+/* === 中间内容区 === */
+.main-area { flex: 1; display: flex; flex-direction: column; border-right: 1px solid var(--border); min-width: 0; }
+
+/* 内容顶部 tabs */
+.content-top { padding: 20px 24px 0; }
+.content-tabs { display: flex; gap: 16px; margin-bottom: 16px; }
+.content-tab { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 12px; border-radius: 10px; font-size: 11px; color: var(--text3); cursor: pointer; transition: all 0.15s; min-width: 48px; }
+.content-tab:hover { background: #f5f5f5; color: var(--text2); }
+.content-tab.active { background: rgba(7,193,96,0.08); color: var(--primary); }
+.content-tab svg { width: 18px; height: 18px; }
+
+.content-header { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
+.content-header h2 { font-size: 22px; font-weight: 700; }
+.content-header-btn { width: 28px; height: 28px; border: none; background: rgba(7,193,96,0.08); border-radius: 7px; cursor: pointer; display: flex; align-items: center; justify-content: center; color: var(--primary); }
+.content-header-btn svg { width: 15px; height: 15px; }
+.content-desc { font-size: 13px; color: var(--text3); margin-bottom: 20px; }
+
+/* 空状态 */
+.content-body { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 40px; position: relative; }
+.empty-illustration { width: 140px; height: 100px; margin-bottom: 20px; position: relative; }
+.empty-box { width: 120px; height: 50px; background: linear-gradient(180deg, #e8f8ee 0%, #d4f2e0 100%); border-radius: 8px; position: absolute; bottom: 0; left: 10px; display: flex; align-items: center; justify-content: center; gap: 6px; }
+.empty-box-dot { width: 8px; height: 8px; border-radius: 50%; }
+.empty-box-dot:nth-child(1) { background: #2b6bff; }
+.empty-box-dot:nth-child(2) { background: #2b6bff; }
+.empty-box-dot:nth-child(3) { background: #e0e0e0; }
+.empty-arrows { position: absolute; top: 0; left: 50%; transform: translateX(-50%); display: flex; gap: 4px; }
+.empty-arrow { width: 20px; height: 30px; }
+.empty-title { font-size: 15px; font-weight: 600; color: var(--text); margin-bottom: 6px; }
+.empty-desc { font-size: 13px; color: var(--text3); margin-bottom: 20px; text-align: center; }
+.empty-btn { height: 40px; padding: 0 24px; border: none; border-radius: 20px; background: var(--primary); color: #fff; font-size: 14px; font-weight: 500; cursor: pointer; display: flex; align-items: center; gap: 8px; transition: all 0.2s; }
+.empty-btn:hover { background: var(--primary-dark); box-shadow: 0 4px 12px rgba(7,193,96,0.25); }
+.empty-btn svg { width: 16px; height: 16px; }
+
+/* 右下角 FAB */
+.fab-btn { position: absolute; right: 24px; bottom: 24px; width: 44px; height: 44px; border: none; border-radius: 50%; background: var(--primary); color: #fff; cursor: pointer; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 16px rgba(7,193,96,0.3); transition: all 0.2s; }
+.fab-btn:hover { transform: scale(1.08); box-shadow: 0 6px 20px rgba(7,193,96,0.35); }
+.fab-btn svg { width: 22px; height: 22px; }
+
+/* === 右侧对话面板 === */
+.chat-panel { width: 360px; display: flex; flex-direction: column; flex-shrink: 0; background: var(--white); }
+
+/* 对话面板头部 */
+.chat-panel-header { padding: 14px 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px; }
+.chat-panel-icon { font-size: 16px; }
+.chat-panel-title { font-size: 14px; font-weight: 600; flex: 1; }
+.chat-panel-actions { display: flex; gap: 2px; }
+.chat-panel-btn { width: 30px; height: 30px; border: none; background: transparent; border-radius: 8px; cursor: pointer; display: flex; align-items: center; justify-content: center; color: var(--text3); }
+.chat-panel-btn:hover { background: #f5f5f5; color: var(--text); }
+.chat-panel-btn svg { width: 16px; height: 16px; }
+
+/* 对话内容 */
+.chat-panel-brand { padding: 16px; }
+.chat-panel-brand-name { font-size: 15px; font-weight: 700; color: var(--primary); margin-bottom: 20px; }
+.chat-panel-brand-bar { display: flex; gap: 6px; }
+.brand-bar-btn { width: 30px; height: 30px; border: 1px solid var(--border); border-radius: 8px; background: transparent; cursor: pointer; display: flex; align-items: center; justify-content: center; color: var(--text3); }
+.brand-bar-btn:hover { border-color: var(--primary); color: var(--primary); }
+.brand-bar-btn svg { width: 14px; height: 14px; }
+
+.chat-panel-body { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 40px 30px; text-align: center; }
+.chat-panel-body h3 { font-size: 16px; font-weight: 600; margin-bottom: 8px; color: var(--text); }
+.chat-panel-body p { font-size: 13px; color: var(--text3); line-height: 1.5; }
+
+/* 对话输入框 */
+.chat-panel-input { padding: 12px 14px; border-top: 1px solid var(--border); }
+.chat-input-card { background: #f7f8fa; border-radius: 12px; border: 1.5px solid rgba(0,0,0,0.06); transition: border-color 0.2s; }
+.chat-input-card:focus-within { border-color: rgba(7,193,96,0.3); }
+.chat-input-card textarea { width: 100%; min-height: 36px; max-height: 80px; border: none; background: transparent; padding: 10px 14px 4px; font-size: 13px; font-family: inherit; resize: none; outline: none; line-height: 1.5; color: var(--text); }
+.chat-input-card textarea::placeholder { color: #bbb; }
+.chat-input-toolbar { display: flex; align-items: center; padding: 4px 8px 8px; gap: 2px; }
+.chat-tool-btn { height: 26px; padding: 0 8px; border: none; background: transparent; border-radius: 6px; font-size: 11px; color: var(--text3); cursor: pointer; display: flex; align-items: center; gap: 4px; transition: all 0.15s; white-space: nowrap; }
+.chat-tool-btn:hover { background: rgba(7,193,96,0.06); color: var(--primary); }
+.chat-tool-btn svg { width: 12px; height: 12px; }
+.chat-tool-btn.mode-active { color: var(--primary); font-weight: 500; }
+.chat-tool-divider { width: 1px; height: 12px; background: #eee; margin: 0 2px; }
+</style>
+</head>
+<body>
+
+<!-- 左侧导航 -->
+<div class="sidebar">
+  <div class="sidebar-logo">
+    <h1>WEKNORA</h1>
+    <button class="sidebar-logo-btn" title="复制">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+    </button>
+  </div>
+  <div class="sidebar-nav">
+    <div class="nav-item active">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+      知识库
+    </div>
+    <div class="nav-item">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      知识搜索
+    </div>
+    <div class="nav-item">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+      智能体
+    </div>
+    <div class="nav-item">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="12" r="4"/><circle cx="17" cy="12" r="4"/></svg>
+      共享空间
+    </div>
+    <div class="nav-item">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+      对话
+      <svg class="nav-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+    </div>
+    <div class="nav-item" id="nav-clips">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
+      网页内容收藏
+    </div>
+  </div>
+  <div class="sidebar-user">
+    <div class="sidebar-avatar">S</div>
+    <div class="sidebar-user-info">
+      <div class="sidebar-user-name">saras</div>
+      <div class="sidebar-user-email">saraszhang@tencent....</div>
+    </div>
+    <svg class="sidebar-user-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+  </div>
+</div>
+
+<!-- 中间内容区 -->
+<div class="main-area">
+  <div class="content-top">
+    <div class="content-tabs">
+      <div class="content-tab">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+        全部
+      </div>
+      <div class="content-tab active">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+        我的
+      </div>
+      <div class="content-tab">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>
+        协作
+      </div>
+    </div>
+    <div class="content-header">
+      <h2>知识库</h2>
+      <button class="content-header-btn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>
+      </button>
+    </div>
+    <div class="content-desc">管理和组织您的知识库，支持文档类型和问答型知识库</div>
+  </div>
+
+  <div class="content-body">
+    <!-- 空状态插图 -->
+    <div class="empty-illustration">
+      <svg width="140" height="100" viewBox="0 0 140 100">
+        <!-- 箭头 -->
+        <circle cx="50" cy="8" r="5" fill="#c8e6c9"/>
+        <circle cx="70" cy="4" r="4" fill="#e0e0e0"/>
+        <circle cx="90" cy="10" r="6" fill="#a5d6a7"/>
+        <path d="M55 20 L50 30 M70 18 L70 30 M85 22 L82 30" stroke="#07C160" stroke-width="2" fill="none" stroke-linecap="round"/>
+        <polygon points="47,30 53,30 50,36" fill="#07C160"/>
+        <polygon points="67,30 73,30 70,36" fill="#07C160"/>
+        <polygon points="79,30 85,30 82,36" fill="#07C160"/>
+        <!-- 盒子 -->
+        <rect x="15" y="45" width="110" height="50" rx="8" fill="url(#boxGrad)"/>
+        <defs><linearGradient id="boxGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#e8f8ee"/><stop offset="100%" stop-color="#d0f0db"/></linearGradient></defs>
+        <circle cx="50" cy="72" r="5" fill="#2b6bff"/>
+        <circle cx="65" cy="72" r="5" fill="#2b6bff"/>
+        <circle cx="80" cy="72" r="5" fill="#e0e0e0"/>
+      </svg>
+    </div>
+    <div class="empty-title">暂无知识库</div>
+    <div class="empty-desc">点击左侧快捷操作"新建知识库"按钮创建第一个知识库</div>
+    <button class="empty-btn">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>
+      新建知识库
+    </button>
+    <button class="fab-btn">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+    </button>
+  </div>
+</div>
+
+<!-- 右侧对话面板 -->
+<div class="chat-panel">
+  <div class="chat-panel-header">
+    <span class="chat-panel-icon">🐱</span>
+    <span class="chat-panel-title">WeKnora Assistant</span>
+    <div class="chat-panel-actions">
+      <button class="chat-panel-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg></button>
+      <button class="chat-panel-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg></button>
+    </div>
+  </div>
+  <div class="chat-panel-brand">
+    <div class="chat-panel-brand-name">WeKnora</div>
+    <div class="chat-panel-brand-bar">
+      <button class="brand-bar-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>
+      <button class="brand-bar-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+      <button class="brand-bar-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></button>
+    </div>
+  </div>
+  <div class="chat-panel-body">
+    <h3>开始对话</h3>
+    <p>选择知识库后，输入问题开始智能问答</p>
+  </div>
+  <div class="chat-panel-input">
+    <div class="chat-input-card">
+      <textarea placeholder="输入问题..." rows="1"></textarea>
+      <div class="chat-input-toolbar">
+        <button class="chat-tool-btn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          普通
+        </button>
+        <button class="chat-tool-btn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+        </button>
+        <button class="chat-tool-btn mode-active">
+          <svg viewBox="0 0 24 24" fill="currentColor" style="width:8px;height:8px"><circle cx="12" cy="12" r="12"/></svg>
+          知识库
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:10px;height:10px"><polyline points="6 9 12 15 18 9"/></svg>
+        </button>
+        <button class="chat-tool-btn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9"/></svg>
+          yueyue
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="weknora.js"></script>
+</body>
+</html>
