@@ -29,9 +29,10 @@ conversation:
   enable_query_expansion: true
   enable_rerank: true
   rewrite_prompt_system: |
-    You are an intelligent assistant that performs TWO tasks on the user's question:
+    You are an intelligent assistant that performs THREE tasks on the user's question:
     1. Rewrite the question (coreference resolution and ellipsis completion)
     2. Classify whether the question requires knowledge base retrieval
+    3. Analyze attached images (when present)
 
     ## Task 1: Rewriting Goals
     Based on the conversation history, rewrite the current user question:
@@ -44,30 +45,32 @@ conversation:
 
     ## Task 2: Intent Classification
     Determine if the question requires knowledge base retrieval.
-    - If retrieval is NOT needed, prefix your output with [NO_SEARCH]
-    - Otherwise, output the rewritten question directly (no prefix = default to search)
-    - IMPORTANT: This is a knowledge base Q&A system. Default to SEARCH. Only add [NO_SEARCH] when you are very confident the question has nothing to do with the knowledge base.
+    - Output a boolean field `skip_kb_search` instead of any prefix marker.
+    - IMPORTANT: This is a knowledge base Q&A system. Default to search (`skip_kb_search=false`).
+    - Set `skip_kb_search=true` only when you are very confident retrieval is unnecessary.
 
-    When to output [NO_SEARCH]:
+    When to set skip_kb_search=true:
     - Pure greetings, thanks, or farewell with no question ("谢谢", "你好", "再见")
     - Requests to summarize or manipulate the previous conversation itself ("总结一下我们的对话")
     - Pure image understanding with NO intent to search documents: describing, summarizing, translating, or extracting content from the image itself ("这张图片是什么", "描述一下图片内容", "帮我翻译图中文字", "图里的表格数据是什么", "帮我识别一下这张图")
     - Follow-up questions that clearly refer to previous conversation content (especially previously uploaded images) and can be answered from dialogue context directly ("第一张图再详细描述一下", "第二张门上的字是什么意思", "这个再展开讲讲")
 
-    When NOT to output [NO_SEARCH] (common mistakes to avoid):
+    When NOT to set skip_kb_search=true (common mistakes to avoid):
     - User uploads an image and asks to FIND/SEARCH related content in knowledge base → SEARCH (the image content is the search query)
     - User asks how to fix/solve/handle something shown in the image ("这个报错怎么解决") → SEARCH (knowledge base may have solutions)
     - User asks a question that implies comparing image content against documents → SEARCH
 
     ## Task 3: Image Analysis (only when images are attached)
-    If the user's message includes images, after the rewritten question, add a separator "---" on a new line, then provide a concise description of the image content. This description is used as a text fallback for models that cannot process images directly.
-    If the image contains OCR text, also extract the key text information (OCR) from the image and include it in the description.
+    If the user's message includes images, provide a detailed description in `image_description`, including objects, scene, layout, relationships, and any visible key details.
+    If the image contains text, include complete OCR text in `image_description` as fully as possible (do not only output a short summary).
+    If both visual description and OCR exist, include both in `image_description`.
+    If there are no images or truly no useful visual/text information, set `image_description` to an empty string.
 
     ## Output Format
-    - Text only (needs search): rewritten question
-    - Text only (no search): [NO_SEARCH] rewritten question
-    - With images (needs search): rewritten question\n---\nimage description (including extracted OCR if present)
-    - With images (no search): [NO_SEARCH] rewritten question\n---\nimage description (including extracted OCR if present)
+    You MUST output ONLY a single JSON object.
+    Do NOT output markdown, code fences, explanations, or any extra text.
+    JSON schema:
+    {"rewrite_query":"string","skip_kb_search":true|false,"image_description":"string"}
 
   rewrite_prompt_user: |
     ## Conversation History
@@ -76,7 +79,7 @@ conversation:
     ## User Question to Rewrite
     {{query}}
 
-    ## Rewritten Question
+    ## JSON Output
   keywords_extraction_prompt: |
     # Role
     You are a professional keyword extraction assistant. Your task is to extract the most important keywords/phrases from the user's question.

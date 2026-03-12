@@ -35,6 +35,7 @@ type qaRequestContext struct {
 	mentionedItems    types.MentionedItems
 	effectiveTenantID uint64            // when using shared agent, tenant ID for model/KB/MCP resolution; 0 = use context tenant
 	images            []ImageAttachment // Uploaded images with analysis text
+	userMessageID     string            // Created user message ID (populated after createUserMessage)
 }
 
 // parseQARequest parses and validates a QA request, returns the request context
@@ -403,10 +404,12 @@ func (h *Handler) executeNormalModeQA(reqCtx *qaRequestContext, generateTitle bo
 	sessionID := reqCtx.sessionID
 
 	// Create user message
-	if err := h.createUserMessage(ctx, sessionID, reqCtx.query, reqCtx.requestID, reqCtx.mentionedItems, convertImageAttachments(reqCtx.images)); err != nil {
+	userMsg, err := h.createUserMessage(ctx, sessionID, reqCtx.query, reqCtx.requestID, reqCtx.mentionedItems, convertImageAttachments(reqCtx.images))
+	if err != nil {
 		reqCtx.c.Error(errors.NewInternalServerError(err.Error()))
 		return
 	}
+	reqCtx.userMessageID = userMsg.ID
 
 	// Create assistant message
 	if _, err := h.createAssistantMessage(ctx, reqCtx.assistantMessage); err != nil {
@@ -515,7 +518,7 @@ func (h *Handler) executeNormalModeQA(reqCtx *qaRequestContext, generateTitle bo
 			})
 		}
 
-		imageURLs, imageOCRText := extractImageURLsAndOCRText(reqCtx.images)
+		imageURLs, imageDescription := extractImageURLsAndOCRText(reqCtx.images)
 		err := h.sessionService.KnowledgeQA(
 			streamCtx.asyncCtx,
 			reqCtx.session,
@@ -528,7 +531,8 @@ func (h *Handler) executeNormalModeQA(reqCtx *qaRequestContext, generateTitle bo
 			streamCtx.eventBus,
 			reqCtx.customAgent,
 			reqCtx.enableMemory,
-			imageURLs, imageOCRText,
+			imageURLs, imageDescription,
+			reqCtx.userMessageID,
 		)
 		if err != nil {
 			logger.ErrorWithFields(streamCtx.asyncCtx, err, nil)
@@ -571,10 +575,12 @@ func (h *Handler) executeAgentModeQA(reqCtx *qaRequestContext) {
 	}
 
 	// Create user message
-	if err := h.createUserMessage(ctx, sessionID, reqCtx.query, reqCtx.requestID, reqCtx.mentionedItems, convertImageAttachments(reqCtx.images)); err != nil {
+	userMsg, err := h.createUserMessage(ctx, sessionID, reqCtx.query, reqCtx.requestID, reqCtx.mentionedItems, convertImageAttachments(reqCtx.images))
+	if err != nil {
 		reqCtx.c.Error(errors.NewInternalServerError(err.Error()))
 		return
 	}
+	reqCtx.userMessageID = userMsg.ID
 
 	// Create assistant message
 	assistantMessagePtr, err := h.createAssistantMessage(ctx, reqCtx.assistantMessage)
@@ -635,7 +641,7 @@ func (h *Handler) executeAgentModeQA(reqCtx *qaRequestContext) {
 			})
 		}
 
-		imageURLs, imageOCRText := extractImageURLsAndOCRText(reqCtx.images)
+		imageURLs, imageDescription := extractImageURLsAndOCRText(reqCtx.images)
 		err := h.sessionService.AgentQA(
 			streamCtx.asyncCtx,
 			reqCtx.session,
@@ -646,7 +652,8 @@ func (h *Handler) executeAgentModeQA(reqCtx *qaRequestContext) {
 			reqCtx.customAgent,
 			reqCtx.knowledgeBaseIDs,
 			reqCtx.knowledgeIDs,
-			imageURLs, imageOCRText,
+			imageURLs, imageDescription,
+			reqCtx.userMessageID,
 		)
 		if err != nil {
 			logger.ErrorWithFields(streamCtx.asyncCtx, err, nil)

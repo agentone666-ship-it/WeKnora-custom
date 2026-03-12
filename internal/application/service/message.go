@@ -237,6 +237,11 @@ func (s *messageService) UpdateMessage(ctx context.Context, message *types.Messa
 	return nil
 }
 
+// UpdateMessageImages updates only the images JSONB column for a message.
+func (s *messageService) UpdateMessageImages(ctx context.Context, sessionID, messageID string, images types.MessageImages) error {
+	return s.messageRepo.UpdateMessageImages(ctx, sessionID, messageID, images)
+}
+
 // DeleteMessage removes a message from a session, also cleaning up its Knowledge entry in the chat history KB.
 func (s *messageService) DeleteMessage(ctx context.Context, sessionID string, messageID string) error {
 	logger.Info(ctx, "Start deleting message")

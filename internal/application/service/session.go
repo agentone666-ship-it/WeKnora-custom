@@ -523,7 +523,7 @@ func (s *sessionService) KnowledgeQA(
 	eventBus *event.EventBus,
 	customAgent *types.CustomAgent,
 	enableMemory bool,
-	imageURLs []string, imageOCRText string,
+	imageURLs []string, imageDescription string, userMessageID string,
 ) error {
 	logger.Infof(
 		ctx,
@@ -768,8 +768,9 @@ func (s *sessionService) KnowledgeQA(
 		FAQDirectAnswerThreshold: faqDirectAnswerThreshold,
 		FAQScoreBoost:            faqScoreBoost,
 		// Image support
+		UserMessageID:           userMessageID,
 		Images:                  imageURLs,
-		ImageOCRText:            imageOCRText,
+		ImageDescription:        imageDescription,
 		VLMModelID:              vlmModelID,
 		ChatModelSupportsVision: chatModelSupportsVision,
 	}
@@ -783,8 +784,8 @@ func (s *sessionService) KnowledgeQA(
 		// For pure chat, UserContent is the Query (since INTO_CHAT_MESSAGE is skipped)
 		// Only append image text description for non-vision models; vision models see images directly
 		userContent := query
-		if imageOCRText != "" && !chatModelSupportsVision {
-			userContent += "\n\n[用户上传图片内容]\n" + imageOCRText
+		if imageDescription != "" && !chatModelSupportsVision {
+			userContent += "\n\n[用户上传图片内容]\n" + imageDescription
 		}
 		chatManage.UserContent = userContent
 
@@ -1391,8 +1392,9 @@ func (s *sessionService) AgentQA(
 	customAgent *types.CustomAgent,
 	knowledgeBaseIDs []string,
 	knowledgeIDs []string,
-	imageURLs []string, imageOCRText string,
+	imageURLs []string, imageDescription string, userMessageID string,
 ) error {
+	_ = userMessageID // reserved for future use (AgentQA pipeline differs from KnowledgeQA)
 	sessionID := session.ID
 	sessionJSON, err := json.Marshal(session)
 	if err != nil {
@@ -1624,9 +1626,9 @@ func (s *sessionService) AgentQA(
 	if agentModelSupportsVision && len(imageURLs) > 0 {
 		agentImageURLs = imageURLs
 		logger.Infof(ctx, "Agent model supports vision, passing %d image(s) directly", len(agentImageURLs))
-	} else if imageOCRText != "" {
-		agentQuery = query + "\n\n[用户上传图片内容]\n" + imageOCRText
-		logger.Infof(ctx, "Agent model does not support vision, appending image OCR text (%d chars)", len(imageOCRText))
+	} else if imageDescription != "" {
+		agentQuery = query + "\n\n[用户上传图片内容]\n" + imageDescription
+		logger.Infof(ctx, "Agent model does not support vision, appending image description (%d chars)", len(imageDescription))
 	}
 
 	// Execute agent with streaming (asynchronously)
@@ -1762,9 +1764,11 @@ func (s *sessionService) handleModelFallback(ctx context.Context, chatManage *ty
 	}
 
 	// Start streaming response
-	responseChan, err := chatModel.ChatStream(ctx, []chat.Message{
-		{Role: "user", Content: promptContent},
-	}, opt)
+	userMsg := chat.Message{Role: "user", Content: promptContent}
+	if chatManage.ChatModelSupportsVision && len(chatManage.Images) > 0 {
+		userMsg.Images = chatManage.Images
+	}
+	responseChan, err := chatModel.ChatStream(ctx, []chat.Message{userMsg}, opt)
 	if err != nil {
 		logger.Errorf(ctx, "Failed to start streaming fallback response: %v, falling back to fixed response", err)
 		s.handleFixedFallback(ctx, chatManage)
@@ -1781,10 +1785,17 @@ func (s *sessionService) handleModelFallback(ctx context.Context, chatManage *ty
 	go s.consumeFallbackStream(ctx, chatManage, responseChan)
 }
 
-// renderFallbackPrompt renders the fallback prompt template with Query variable
+// renderFallbackPrompt renders the fallback prompt template with query and image context.
 func (s *sessionService) renderFallbackPrompt(ctx context.Context, chatManage *types.ChatManage) (string, error) {
-	// Use simple string replacement instead of Go template
-	result := strings.ReplaceAll(chatManage.FallbackPrompt, "{{query}}", chatManage.Query)
+	query := chatManage.Query
+	if rq := strings.TrimSpace(chatManage.RewriteQuery); rq != "" {
+		query = rq
+	}
+	result := strings.ReplaceAll(chatManage.FallbackPrompt, "{{query}}", query)
+
+	if chatManage.ImageDescription != "" && !chatManage.ChatModelSupportsVision {
+		result += "\n\n[用户上传图片内容]\n" + chatManage.ImageDescription
+	}
 	return result, nil
 }
 
