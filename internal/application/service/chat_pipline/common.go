@@ -78,6 +78,19 @@ func prepareMessagesWithHistory(chatManage *types.ChatManage) []chat.Message {
 	return chatMessages
 }
 
+// extractImageCaptions concatenates non-empty Caption fields from stored
+// message images. Used when loading history so that previous turns' image
+// descriptions are visible to the model.
+func extractImageCaptions(images types.MessageImages) string {
+	var parts []string
+	for _, img := range images {
+		if img.Caption != "" {
+			parts = append(parts, img.Caption)
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
 // renderSystemPromptPlaceholders replaces placeholders in system prompt
 // Supported placeholders:
 //   - {{current_time}} -> current time in RFC3339 format

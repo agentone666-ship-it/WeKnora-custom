@@ -29,6 +29,9 @@ type MessageService interface {
 	// UpdateMessage updates a message
 	UpdateMessage(ctx context.Context, message *types.Message) error
 
+	// UpdateMessageImages updates only the images JSONB column for a message.
+	UpdateMessageImages(ctx context.Context, sessionID, messageID string, images types.MessageImages) error
+
 	// DeleteMessage deletes a message
 	DeleteMessage(ctx context.Context, sessionID string, id string) error
 
@@ -66,6 +69,8 @@ type MessageRepository interface {
 	) ([]*types.Message, error)
 	// UpdateMessage updates a message
 	UpdateMessage(ctx context.Context, message *types.Message) error
+	// UpdateMessageImages updates only the images JSONB column for a message
+	UpdateMessageImages(ctx context.Context, sessionID, messageID string, images types.MessageImages) error
 	// DeleteMessage deletes a message
 	DeleteMessage(ctx context.Context, sessionID string, id string) error
 	// GetFirstMessageOfUser gets the first message of a user

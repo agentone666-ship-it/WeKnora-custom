@@ -90,8 +90,8 @@ func (p *PluginIntoChatMessage) OnEvent(ctx context.Context,
 				})
 			}
 		}
-		if chatManage.ImageOCRText != "" && !chatManage.ChatModelSupportsVision {
-			userContent += "\n\n[用户上传图片内容]\n" + chatManage.ImageOCRText
+		if chatManage.ImageDescription != "" && !chatManage.ChatModelSupportsVision {
+			userContent += "\n\n[用户上传图片内容]\n" + chatManage.ImageDescription
 		}
 		chatManage.UserContent = userContent
 		pipelineInfo(ctx, "IntoChatMessage", "skip_template_no_search", map[string]interface{}{
@@ -148,16 +148,19 @@ func (p *PluginIntoChatMessage) OnEvent(ctx context.Context,
 
 	// Append image description as text fallback only when the chat model cannot
 	// process images directly. Vision-capable models see images via MultiContent.
-	if chatManage.ImageOCRText != "" && !chatManage.ChatModelSupportsVision {
-		userContent += "\n\n[用户上传图片内容]\n" + chatManage.ImageOCRText
+	if chatManage.ImageDescription != "" && !chatManage.ChatModelSupportsVision {
+		userContent += "\n\n[用户上传图片内容]\n" + chatManage.ImageDescription
 	}
 
 	// Set formatted content back to chat management
 	chatManage.UserContent = userContent
 	pipelineInfo(ctx, "IntoChatMessage", "output", map[string]interface{}{
-		"session_id":       chatManage.SessionID,
-		"user_content_len": len(chatManage.UserContent),
-		"faq_priority":     chatManage.FAQPriorityEnabled,
+		"session_id":                 chatManage.SessionID,
+		"user_content_len":           len(chatManage.UserContent),
+		"faq_priority":               chatManage.FAQPriorityEnabled,
+		"skip_kb_search":             chatManage.SkipKBSearch,
+		"image_description":          chatManage.ImageDescription,
+		"chat_model_supports_vision": chatManage.ChatModelSupportsVision,
 	})
 	return next()
 }

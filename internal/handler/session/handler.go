@@ -260,11 +260,19 @@ func (h *Handler) UpdateSession(c *gin.Context) {
 		return
 	}
 
+	// Reload session from database to return complete timestamps and stored fields
+	updatedSession, err := h.sessionService.GetSession(ctx, id)
+	if err != nil {
+		logger.ErrorWithFields(ctx, err, nil)
+		c.Error(errors.NewInternalServerError(err.Error()))
+		return
+	}
+
 	// Return updated session
 	logger.Infof(ctx, "Session updated successfully, ID: %s", id)
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"data":    session,
+		"data":    updatedSession,
 	})
 }
 

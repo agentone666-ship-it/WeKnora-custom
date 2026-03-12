@@ -43,7 +43,7 @@ func (r *sessionRepository) Get(ctx context.Context, tenantID uint64, id string)
 // GetByTenantID retrieves all sessions for a tenant
 func (r *sessionRepository) GetByTenantID(ctx context.Context, tenantID uint64) ([]*types.Session, error) {
 	var sessions []*types.Session
-	err := r.db.WithContext(ctx).Where("tenant_id = ?", tenantID).Order("created_at DESC").Find(&sessions).Error
+	err := r.db.WithContext(ctx).Where("tenant_id = ?", tenantID).Order("updated_at DESC").Find(&sessions).Error
 	if err != nil {
 		return nil, err
 	}
@@ -66,7 +66,7 @@ func (r *sessionRepository) GetPagedByTenantID(
 	// Then query the paginated data
 	err = r.db.WithContext(ctx).
 		Where("tenant_id = ?", tenantID).
-		Order("created_at DESC").
+		Order("updated_at DESC").
 		Offset(page.Offset()).
 		Limit(page.Limit()).
 		Find(&sessions).Error
@@ -80,7 +80,14 @@ func (r *sessionRepository) GetPagedByTenantID(
 // Update updates a session
 func (r *sessionRepository) Update(ctx context.Context, session *types.Session) error {
 	session.UpdatedAt = time.Now()
-	return r.db.WithContext(ctx).Where("tenant_id = ?", session.TenantID).Save(session).Error
+	return r.db.WithContext(ctx).
+		Model(&types.Session{}).
+		Where("tenant_id = ? AND id = ?", session.TenantID, session.ID).
+		Updates(map[string]interface{}{
+			"title":       session.Title,
+			"description": session.Description,
+			"updated_at":  session.UpdatedAt,
+		}).Error
 }
 
 // Delete deletes a session
