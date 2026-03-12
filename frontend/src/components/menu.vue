@@ -77,7 +77,7 @@
                                     {{ subitem.title }}
                                 </span>
                                 <t-dropdown v-if="!batchMode"
-                                    :options="[{ content: t('upload.deleteRecord'), value: 'delete' }, { content: t('menu.batchManage'), value: 'batchManage' }]"
+                                    :options="[{ content: t('menu.clearMessages'), value: 'clearMessages' }, { content: t('upload.deleteRecord'), value: 'delete' }, { content: t('menu.batchManage'), value: 'batchManage' }]"
                                     @click="handleSessionMenuClick($event, subitem.originalIndex, subitem)"
                                     placement="bottom-right"
                                     trigger="click">
@@ -126,7 +126,7 @@
 import { storeToRefs } from 'pinia';
 import { onMounted, watch, computed, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { getSessionsList, delSession, batchDelSessions, deleteAllSessions } from "@/api/chat/index";
+import { getSessionsList, delSession, batchDelSessions, deleteAllSessions, clearSessionMessages } from "@/api/chat/index";
 import { getKnowledgeBaseById } from '@/api/knowledge-base';
 import { logout as logoutApi } from '@/api/auth';
 import { useMenuStore } from '@/stores/menu';
@@ -423,9 +423,26 @@ const handleInlineBatchDelete = () => {
 const handleSessionMenuClick = (data: { value: string }, index: number, item: any) => {
     if (data?.value === 'delete') {
         delCard(index, item);
+    } else if (data?.value === 'clearMessages') {
+        clearMessages(item);
     } else if (data?.value === 'batchManage') {
         enterBatchMode()
     }
+};
+
+const clearMessages = (item: any) => {
+    clearSessionMessages(item.id).then((res: any) => {
+        if (res && res.success) {
+            MessagePlugin.success(t('menu.clearMessagesSuccess'));
+            if (item.id === route.params.chatid) {
+                window.dispatchEvent(new CustomEvent('session-messages-cleared', { detail: { sessionId: item.id } }));
+            }
+        } else {
+            MessagePlugin.error(t('menu.clearMessagesFailed'));
+        }
+    }).catch(() => {
+        MessagePlugin.error(t('menu.clearMessagesFailed'));
+    });
 };
 
 const delCard = (index: number, item: any) => {

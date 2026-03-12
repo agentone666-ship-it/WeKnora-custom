@@ -35,6 +35,9 @@ type MessageService interface {
 	// DeleteMessage deletes a message
 	DeleteMessage(ctx context.Context, sessionID string, id string) error
 
+	// ClearSessionMessages deletes all messages in a session, along with their chat history KB entries
+	ClearSessionMessages(ctx context.Context, sessionID string) error
+
 	// SearchMessages searches messages by keyword and/or vector similarity across all sessions of the current tenant.
 	// Uses the chat history knowledge base for vector search instead of in-memory computation.
 	SearchMessages(ctx context.Context, params *types.MessageSearchParams) (*types.MessageSearchResult, error)
@@ -73,6 +76,8 @@ type MessageRepository interface {
 	UpdateMessageImages(ctx context.Context, sessionID, messageID string, images types.MessageImages) error
 	// DeleteMessage deletes a message
 	DeleteMessage(ctx context.Context, sessionID string, id string) error
+	// DeleteMessagesBySessionID deletes all messages belonging to a session
+	DeleteMessagesBySessionID(ctx context.Context, sessionID string) error
 	// GetFirstMessageOfUser gets the first message of a user
 	GetFirstMessageOfUser(ctx context.Context, sessionID string) (*types.Message, error)
 	// SearchMessagesByKeyword searches messages by keyword (ILIKE) across sessions for a tenant
