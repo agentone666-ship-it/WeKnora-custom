@@ -245,6 +245,11 @@ func (r *messageRepository) UpdateMessageImages(ctx context.Context, sessionID, 
 		Update("images", images).Error
 }
 
+// DeleteMessagesBySessionID deletes all messages belonging to a session (soft delete)
+func (r *messageRepository) DeleteMessagesBySessionID(ctx context.Context, sessionID string) error {
+	return r.db.WithContext(ctx).Where("session_id = ?", sessionID).Delete(&types.Message{}).Error
+}
+
 // UpdateMessageKnowledgeID updates the knowledge_id field for a message
 func (r *messageRepository) UpdateMessageKnowledgeID(
 	ctx context.Context, messageID string, knowledgeID string,

@@ -955,7 +955,15 @@ const updateAssistantSession = (payload) => {
     }
     scrollToBottom();
 }
+const handleSessionCleared = (e) => {
+    if (e.detail?.sessionId === session_id.value) {
+        messagesList.splice(0);
+        created_at.value = '';
+    }
+};
+
 onMounted(async () => {
+    window.addEventListener('session-messages-cleared', handleSessionCleared);
     messagesList.splice(0);
     
     // 若从智能体列表点击共享智能体进入，URL 带 agent_id 与 source_tenant_id，同步到 store
@@ -1001,6 +1009,9 @@ const clearData = () => {
     userquery.value = '';
 
 }
+onUnmounted(() => {
+    window.removeEventListener('session-messages-cleared', handleSessionCleared);
+});
 onBeforeRouteLeave((to, from, next) => {
     clearData()
     next()

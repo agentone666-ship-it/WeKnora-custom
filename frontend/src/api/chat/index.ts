@@ -59,3 +59,7 @@ export async function getSession(session_id: string) {
 export async function stopSession(session_id: string, message_id: string) {
   return post(`/api/v1/sessions/${session_id}/stop`, { message_id });
 }
+
+export async function clearSessionMessages(session_id: string) {
+  return del(`/api/v1/sessions/${session_id}/messages`);
+}

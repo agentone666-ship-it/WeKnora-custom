@@ -307,6 +307,7 @@ func RegisterSessionRoutes(r *gin.RouterGroup, handler *session.Handler) {
 		sessions.GET("", handler.GetSessionsByTenant)
 		sessions.PUT("/:id", handler.UpdateSession)
 		sessions.DELETE("/:id", handler.DeleteSession)
+		sessions.DELETE("/:id/messages", handler.ClearSessionMessages)
 		sessions.POST("/:session_id/generate_title", handler.GenerateTitle)
 		sessions.POST("/:session_id/stop", handler.StopSession)
 		// 继续接收活跃流

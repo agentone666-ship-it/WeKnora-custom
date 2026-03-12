@@ -284,6 +284,29 @@ func (s *messageService) DeleteMessage(ctx context.Context, sessionID string, me
 	return nil
 }
 
+// ClearSessionMessages deletes all messages in a session, along with their chat history KB entries.
+func (s *messageService) ClearSessionMessages(ctx context.Context, sessionID string) error {
+	logger.Infof(ctx, "Start clearing all messages for session: %s", sessionID)
+
+	tenantID := types.MustTenantIDFromContext(ctx)
+	if _, err := s.sessionRepo.Get(ctx, tenantID, sessionID); err != nil {
+		logger.Errorf(ctx, "Failed to get session: %v", err)
+		return err
+	}
+
+	// Async cleanup: delete associated Knowledge entries from the chat history KB
+	bgCtx := context.WithoutCancel(ctx)
+	go s.DeleteSessionKnowledge(bgCtx, sessionID)
+
+	if err := s.messageRepo.DeleteMessagesBySessionID(ctx, sessionID); err != nil {
+		logger.Errorf(ctx, "Failed to delete messages for session %s: %v", sessionID, err)
+		return err
+	}
+
+	logger.Infof(ctx, "All messages cleared for session: %s", sessionID)
+	return nil
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Chat History Knowledge Base — Configuration-driven (via Tenant.ChatHistoryConfig)
 // ─────────────────────────────────────────────────────────────────────────────
