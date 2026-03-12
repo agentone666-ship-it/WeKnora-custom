@@ -2434,6 +2434,9 @@ func (s *knowledgeService) UpdateKnowledge(ctx context.Context, knowledge *types
 	if knowledge.Title != "" {
 		record.Title = knowledge.Title
 	}
+	if knowledge.Description != "" {
+		record.Description = knowledge.Description
+	}
 
 	// Update knowledge record in the repository
 	if err := s.repo.UpdateKnowledge(ctx, record); err != nil {
