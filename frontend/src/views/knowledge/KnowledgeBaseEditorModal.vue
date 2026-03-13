@@ -343,7 +343,7 @@ const initFormData = (type: 'document' | 'faq' = 'document') => {
       chunkOverlap: 100,
       separators: ['\n\n', '\n', '。', '！', '？', ';', '；'],
       parserEngineRules: undefined as any,
-      enableParentChild: false,
+      enableParentChild: true,
       parentChunkSize: 4096,
       childChunkSize: 384
     },
@@ -367,7 +367,7 @@ const initFormData = (type: 'document' | 'faq' = 'document') => {
       }>
     },
     questionGenerationConfig: {
-      enabled: false,
+      enabled: true,
       questionCount: 3
     },
   }
