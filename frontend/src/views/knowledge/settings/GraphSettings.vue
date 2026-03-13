@@ -321,6 +321,12 @@ const emit = defineEmits<{
   'update:graphExtract': [value: GraphExtractConfig]
 }>()
 
+const modelStatus = computed(() => ({
+  llm: {
+    available: !!props.modelId
+  }
+}))
+
 // 本地状态
 const localGraphExtract = ref<GraphExtractConfig>({
   ...props.graphExtract,
