@@ -150,6 +150,7 @@
                   <GraphSettings
                     v-if="formData"
                     :graph-extract="formData.nodeExtractConfig"
+                    :model-id="formData.modelConfig.llmModelId"
                     :all-models="allModels"
                     @update:graphExtract="handleNodeExtractUpdate"
                   />

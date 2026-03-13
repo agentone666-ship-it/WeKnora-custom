@@ -296,8 +296,7 @@
 import { ref, watch, onMounted, computed } from 'vue'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { useI18n } from 'vue-i18n'
-import { extractTextRelations, fabriText, fabriTag, type Node, type Relation, type LLMConfig } from '@/api/initialization'
-import { listModels } from '@/api/model'
+import { extractTextRelations, fabriText, fabriTag, type Node, type Relation } from '@/api/initialization'
 import { getSystemInfo } from '@/api/system'
 
 const { t } = useI18n()
@@ -312,6 +311,7 @@ interface GraphExtractConfig {
 
 interface Props {
   graphExtract: GraphExtractConfig
+  modelId: string
   allModels?: any[]
 }
 
@@ -332,14 +332,6 @@ const localGraphExtract = ref<GraphExtractConfig>({
 const tagFabring = ref(false)
 const textFabring = ref(false)
 const extracting = ref(false)
-
-// 模型状态
-const modelStatus = ref({
-  llm: {
-    available: false,
-    config: null as LLMConfig | null
-  }
-})
 
 // 系统信息
 const systemInfo = ref<any>(null)
@@ -438,16 +430,9 @@ const removeRelation = (index: number) => {
 
 // 生成随机标签
 const handleFabriTag = async () => {
-  if (!modelStatus.value.llm.available || !modelStatus.value.llm.config) {
-    MessagePlugin.warning(t('graphSettings.completeModelConfig'))
-    return
-  }
-  
   tagFabring.value = true
   try {
-    const response = await fabriTag({
-      llm_config: modelStatus.value.llm.config
-    })
+    const response = await fabriTag({})
     localGraphExtract.value.tags = response.tags || []
     handleTagsChange()
     MessagePlugin.success(t('graphSettings.tagsGenerated'))
@@ -461,7 +446,7 @@ const handleFabriTag = async () => {
 
 // 生成随机文本
 const handleFabriText = async () => {
-  if (!modelStatus.value.llm.available || !modelStatus.value.llm.config) {
+  if (!props.modelId) {
     MessagePlugin.warning(t('graphSettings.completeModelConfig'))
     return
   }
@@ -470,7 +455,7 @@ const handleFabriText = async () => {
   try {
     const response = await fabriText({
       tags: localGraphExtract.value.tags,
-      llm_config: modelStatus.value.llm.config
+      model_id: props.modelId
     })
     localGraphExtract.value.text = response.text || ''
     handleTextChange()
@@ -485,7 +470,7 @@ const handleFabriText = async () => {
 
 // 提取实体关系
 const handleExtract = async () => {
-  if (!modelStatus.value.llm.available || !modelStatus.value.llm.config) {
+  if (!props.modelId) {
     MessagePlugin.warning(t('graphSettings.completeModelConfig'))
     return
   }
@@ -500,7 +485,7 @@ const handleExtract = async () => {
     const response = await extractTextRelations({
       text: localGraphExtract.value.text,
       tags: localGraphExtract.value.tags,
-      llm_config: modelStatus.value.llm.config
+      model_id: props.modelId
     })
     localGraphExtract.value.nodes = response.nodes || []
     localGraphExtract.value.relations = response.relations || []
@@ -543,28 +528,6 @@ const clearExtractExample = () => {
   MessagePlugin.success(t('graphSettings.exampleCleared'))
 }
 
-// 加载模型状态
-const loadModelStatus = async () => {
-  try {
-    const models = await listModels()
-    
-    // 查找可用的KnowledgeQA模型（对话模型）
-    const llmModels = models.filter((m: any) => m.type === 'KnowledgeQA')
-    if (llmModels.length > 0) {
-      const llmModel = llmModels[0]
-      modelStatus.value.llm.available = true
-      modelStatus.value.llm.config = {
-        source: llmModel.source,
-        model_name: llmModel.name,
-        base_url: llmModel.parameters?.base_url || '',
-        api_key: llmModel.parameters?.api_key || ''
-      }
-    }
-  } catch (error: any) {
-    console.error('Failed to load model status:', error)
-  }
-}
-
 // 加载系统信息
 const loadSystemInfo = async () => {
   try {
@@ -586,10 +549,7 @@ const handleOpenGraphGuide = () => {
 
 // 初始化
 onMounted(async () => {
-  await Promise.all([
-    loadModelStatus(),
-    loadSystemInfo()
-  ])
+  await loadSystemInfo()
 })
 </script>
 
