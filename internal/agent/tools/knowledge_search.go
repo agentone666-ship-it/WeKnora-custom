@@ -430,8 +430,9 @@ func (t *KnowledgeSearchTool) getKnowledgeBaseTypes(ctx context.Context, kbIDs [
 	return kbTypeMap
 }
 
-// concurrentSearchByTargets executes hybrid search using pre-computed search targets
-// This avoids duplicate searches when a knowledge file is already covered by its KB's full search
+// concurrentSearchByTargets executes hybrid search using pre-computed search targets.
+// Targets sharing the same embedding model are grouped so the query embedding is
+// computed only once per (model, query) pair, reducing redundant API calls.
 func (t *KnowledgeSearchTool) concurrentSearchByTargets(
 	ctx context.Context,
 	queries []string,
@@ -440,50 +441,132 @@ func (t *KnowledgeSearchTool) concurrentSearchByTargets(
 	vectorThreshold, keywordThreshold float64,
 	kbTypeMap map[string]string,
 ) []*searchResultWithMeta {
+	// Batch-fetch KB records for embedding model grouping
+	kbIDs := searchTargets.GetAllKnowledgeBaseIDs()
+	kbMap := make(map[string]*types.KnowledgeBase)
+	if kbs, err := t.knowledgeBaseService.GetKnowledgeBasesByIDsOnly(ctx, kbIDs); err == nil {
+		for _, kb := range kbs {
+			if kb != nil {
+				kbMap[kb.ID] = kb
+			}
+		}
+	}
+
+	type embGroupKey struct {
+		ModelID  string
+		TenantID uint64
+	}
+	groups := make(map[embGroupKey][]*types.SearchTarget)
+	for _, st := range searchTargets {
+		var key embGroupKey
+		if kb, ok := kbMap[st.KnowledgeBaseID]; ok {
+			key = embGroupKey{ModelID: kb.EmbeddingModelID, TenantID: kb.TenantID}
+		}
+		groups[key] = append(groups[key], st)
+	}
+
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	allResults := make([]*searchResultWithMeta, 0)
 
 	for _, query := range queries {
 		q := query
-		for _, target := range searchTargets {
-			st := target
+		for gk, targets := range groups {
 			wg.Add(1)
-			go func() {
+			go func(q string, gk embGroupKey, targets []*types.SearchTarget) {
 				defer wg.Done()
 
-				searchParams := types.SearchParams{
-					QueryText:        q,
-					MatchCount:       topK,
-					VectorThreshold:  vectorThreshold,
-					KeywordThreshold: keywordThreshold,
+				// Compute embedding once for this (model, query) pair
+				var queryEmbedding []float32
+				if gk.ModelID != "" {
+					emb, err := t.knowledgeBaseService.GetQueryEmbedding(ctx, targets[0].KnowledgeBaseID, q)
+					if err != nil {
+						logger.Warnf(ctx, "[Tool][KnowledgeSearch] Failed to pre-compute embedding for model %s: %v", gk.ModelID, err)
+					} else {
+						queryEmbedding = emb
+					}
 				}
 
-				// If target has specific knowledge IDs, add them to search params
-				if st.Type == types.SearchTargetTypeKnowledge {
-					searchParams.KnowledgeIDs = st.KnowledgeIDs
+				// Separate full-KB targets (combinable) from specific-knowledge targets
+				var fullKBIDs []string
+				var knowledgeTargets []*types.SearchTarget
+				for _, st := range targets {
+					if st.Type == types.SearchTargetTypeKnowledgeBase {
+						fullKBIDs = append(fullKBIDs, st.KnowledgeBaseID)
+					} else {
+						knowledgeTargets = append(knowledgeTargets, st)
+					}
 				}
 
-				kbResults, err := t.knowledgeBaseService.HybridSearch(ctx, st.KnowledgeBaseID, searchParams)
-				if err != nil {
-					logger.Warnf(ctx, "[Tool][KnowledgeSearch] Failed to search KB %s: %v", st.KnowledgeBaseID, err)
-					return
+				var innerWg sync.WaitGroup
+
+				// Combined retrieval for all full-KB targets in this group
+				if len(fullKBIDs) > 0 {
+					innerWg.Add(1)
+					go func() {
+						defer innerWg.Done()
+						searchParams := types.SearchParams{
+							QueryText:        q,
+							QueryEmbedding:   queryEmbedding,
+							KnowledgeBaseIDs: fullKBIDs,
+							MatchCount:       topK,
+							VectorThreshold:  vectorThreshold,
+							KeywordThreshold: keywordThreshold,
+						}
+						kbResults, err := t.knowledgeBaseService.HybridSearch(ctx, fullKBIDs[0], searchParams)
+						if err != nil {
+							logger.Warnf(ctx, "[Tool][KnowledgeSearch] Combined search failed for KBs %v: %v", fullKBIDs, err)
+							return
+						}
+						mu.Lock()
+						for _, r := range kbResults {
+							allResults = append(allResults, &searchResultWithMeta{
+								SearchResult:      r,
+								SourceQuery:       q,
+								QueryType:         "hybrid",
+								KnowledgeBaseID:   r.KnowledgeBaseID,
+								KnowledgeBaseType: kbTypeMap[r.KnowledgeBaseID],
+							})
+						}
+						mu.Unlock()
+					}()
 				}
 
-				// Wrap results with metadata and write back KB ID
-				mu.Lock()
-				for _, r := range kbResults {
-					r.KnowledgeBaseID = st.KnowledgeBaseID
-					allResults = append(allResults, &searchResultWithMeta{
-						SearchResult:      r,
-						SourceQuery:       q,
-						QueryType:         "hybrid",
-						KnowledgeBaseID:   st.KnowledgeBaseID,
-						KnowledgeBaseType: kbTypeMap[st.KnowledgeBaseID],
-					})
+				// Individual retrieval for specific-knowledge targets
+				for _, target := range knowledgeTargets {
+					st := target
+					innerWg.Add(1)
+					go func() {
+						defer innerWg.Done()
+						searchParams := types.SearchParams{
+							QueryText:        q,
+							QueryEmbedding:   queryEmbedding,
+							MatchCount:       topK,
+							VectorThreshold:  vectorThreshold,
+							KeywordThreshold: keywordThreshold,
+							KnowledgeIDs:     st.KnowledgeIDs,
+						}
+						kbResults, err := t.knowledgeBaseService.HybridSearch(ctx, st.KnowledgeBaseID, searchParams)
+						if err != nil {
+							logger.Warnf(ctx, "[Tool][KnowledgeSearch] Failed to search KB %s: %v", st.KnowledgeBaseID, err)
+							return
+						}
+						mu.Lock()
+						for _, r := range kbResults {
+							allResults = append(allResults, &searchResultWithMeta{
+								SearchResult:      r,
+								SourceQuery:       q,
+								QueryType:         "hybrid",
+								KnowledgeBaseID:   r.KnowledgeBaseID,
+								KnowledgeBaseType: kbTypeMap[r.KnowledgeBaseID],
+							})
+						}
+						mu.Unlock()
+					}()
 				}
-				mu.Unlock()
-			}()
+
+				innerWg.Wait()
+			}(q, gk, targets)
 		}
 	}
 	wg.Wait()
