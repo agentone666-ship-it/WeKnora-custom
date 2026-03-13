@@ -605,12 +605,46 @@ func (s *knowledgeBaseService) CopyKnowledgeBase(ctx context.Context,
 	return sourceKB, targetKB, nil
 }
 
-// HybridSearch performs hybrid search, including vector retrieval and keyword retrieval
+// GetQueryEmbedding computes the query embedding using the embedding model
+// associated with the given knowledge base. Callers can pre-compute and reuse
+// the result across multiple KBs that share the same embedding model to avoid
+// redundant embedding API calls.
+func (s *knowledgeBaseService) GetQueryEmbedding(ctx context.Context, kbID string, queryText string) ([]float32, error) {
+	kb, err := s.repo.GetKnowledgeBaseByID(ctx, kbID)
+	if err != nil {
+		return nil, err
+	}
+
+	currentTenantID := types.MustTenantIDFromContext(ctx)
+	var embeddingModel embedding.Embedder
+
+	if kb.TenantID != currentTenantID {
+		embeddingModel, err = s.modelService.GetEmbeddingModelForTenant(ctx, kb.EmbeddingModelID, kb.TenantID)
+	} else {
+		embeddingModel, err = s.modelService.GetEmbeddingModel(ctx, kb.EmbeddingModelID)
+	}
+	if err != nil {
+		logger.Errorf(ctx, "GetQueryEmbedding: failed to get embedding model %s: %v", kb.EmbeddingModelID, err)
+		return nil, err
+	}
+
+	return embeddingModel.Embed(ctx, queryText)
+}
+
+// HybridSearch performs hybrid search, including vector retrieval and keyword retrieval.
+// When params.KnowledgeBaseIDs is set, those IDs are used for retrieval instead of `id`,
+// allowing a single call to span multiple KBs that share the same embedding model.
 func (s *knowledgeBaseService) HybridSearch(ctx context.Context,
 	id string,
 	params types.SearchParams,
 ) ([]*types.SearchResult, error) {
-	logger.Infof(ctx, "Hybrid search parameters, knowledge base ID: %s, query text: %s", id, params.QueryText)
+	// Determine the set of KB IDs to search
+	searchKBIDs := params.KnowledgeBaseIDs
+	if len(searchKBIDs) == 0 {
+		searchKBIDs = []string{id}
+	}
+
+	logger.Infof(ctx, "Hybrid search parameters, knowledge base IDs: %v, query text: %s", searchKBIDs, params.QueryText)
 
 	tenantInfo, _ := types.TenantInfoFromContext(ctx)
 	currentTenantID := types.MustTenantIDFromContext(ctx)
@@ -635,43 +669,48 @@ func (s *knowledgeBaseService) HybridSearch(ctx context.Context,
 	}
 
 	// Use 5x over-retrieval to ensure sufficient candidates for RRF fusion and reranking.
-	// Minimum 50 to handle large knowledge bases with diverse content.
-	matchCount := max(params.MatchCount*5, 50)
+	// Scale proportionally when searching multiple KBs to maintain per-KB recall quality.
+	matchCount := max(params.MatchCount*5, 50) * len(searchKBIDs)
+	if matchCount > 1000 {
+		matchCount = 1000
+	}
 
 	// Add vector retrieval params if supported
 	if retrieveEngine.SupportRetriever(types.VectorRetrieverType) && !params.DisableVectorMatch {
 		logger.Info(ctx, "Vector retrieval supported, preparing vector retrieval parameters")
 
-		logger.Infof(ctx, "Getting embedding model, model ID: %s", kb.EmbeddingModelID)
+		var queryEmbedding []float32
 
-		// Check if this is a cross-tenant shared knowledge base
-		// For shared KB, we must use the source tenant's embedding model to ensure vector compatibility
-		if kb.TenantID != currentTenantID {
-			logger.Infof(ctx, "Cross-tenant knowledge base detected, using source tenant's embedding model. KB tenant: %d, current tenant: %d", kb.TenantID, currentTenantID)
-			embeddingModel, err = s.modelService.GetEmbeddingModelForTenant(ctx, kb.EmbeddingModelID, kb.TenantID)
+		if len(params.QueryEmbedding) > 0 {
+			queryEmbedding = params.QueryEmbedding
+			logger.Infof(ctx, "Using pre-computed query embedding, vector length: %d", len(queryEmbedding))
 		} else {
-			embeddingModel, err = s.modelService.GetEmbeddingModel(ctx, kb.EmbeddingModelID)
-		}
+			// Check if this is a cross-tenant shared knowledge base
+			// For shared KB, we must use the source tenant's embedding model to ensure vector compatibility
+			if kb.TenantID != currentTenantID {
+				logger.Infof(ctx, "Cross-tenant knowledge base detected, using source tenant's embedding model. KB tenant: %d, current tenant: %d", kb.TenantID, currentTenantID)
+				embeddingModel, err = s.modelService.GetEmbeddingModelForTenant(ctx, kb.EmbeddingModelID, kb.TenantID)
+			} else {
+				embeddingModel, err = s.modelService.GetEmbeddingModel(ctx, kb.EmbeddingModelID)
+			}
 
-		if err != nil {
-			logger.Errorf(ctx, "Failed to get embedding model, model ID: %s, error: %v", kb.EmbeddingModelID, err)
-			return nil, err
+			if err != nil {
+				logger.Errorf(ctx, "Failed to get embedding model, model ID: %s, error: %v", kb.EmbeddingModelID, err)
+				return nil, err
+			}
+			logger.Infof(ctx, "Embedding model retrieved: %v", embeddingModel)
+			queryEmbedding, err = embeddingModel.Embed(context.WithValue(ctx, types.EmbedQueryContextKey, true), params.QueryText)
+			if err != nil {
+				logger.Errorf(ctx, "Failed to embed query text, query text: %s, error: %v", params.QueryText, err)
+				return nil, err
+			}
+			logger.Infof(ctx, "Query embedding generated successfully, embedding vector length: %d", len(queryEmbedding))
 		}
-		logger.Infof(ctx, "Embedding model retrieved: %v", embeddingModel)
-
-		// Generate embedding vector for the query text
-		logger.Info(ctx, "Starting to generate query embedding")
-		queryEmbedding, err := embeddingModel.Embed(context.WithValue(ctx, types.EmbedQueryContextKey, true), params.QueryText)
-		if err != nil {
-			logger.Errorf(ctx, "Failed to embed query text, query text: %s, error: %v", params.QueryText, err)
-			return nil, err
-		}
-		logger.Infof(ctx, "Query embedding generated successfully, embedding vector length: %d", len(queryEmbedding))
 
 		vectorParams := types.RetrieveParams{
 			Query:            params.QueryText,
 			Embedding:        queryEmbedding,
-			KnowledgeBaseIDs: []string{id},
+			KnowledgeBaseIDs: searchKBIDs,
 			TopK:             matchCount,
 			Threshold:        params.VectorThreshold,
 			RetrieverType:    types.VectorRetrieverType,
@@ -694,7 +733,7 @@ func (s *knowledgeBaseService) HybridSearch(ctx context.Context,
 		logger.Info(ctx, "Keyword retrieval supported, preparing keyword retrieval parameters")
 		retrieveParams = append(retrieveParams, types.RetrieveParams{
 			Query:            params.QueryText,
-			KnowledgeBaseIDs: []string{id},
+			KnowledgeBaseIDs: searchKBIDs,
 			TopK:             matchCount,
 			Threshold:        params.KeywordThreshold,
 			RetrieverType:    types.KeywordsRetrieverType,
@@ -714,8 +753,8 @@ func (s *knowledgeBaseService) HybridSearch(ctx context.Context,
 	retrieveResults, err := retrieveEngine.Retrieve(ctx, retrieveParams)
 	if err != nil {
 		logger.ErrorWithFields(ctx, err, map[string]interface{}{
-			"knowledge_base_id": id,
-			"query_text":        params.QueryText,
+			"knowledge_base_ids": searchKBIDs,
+			"query_text":         params.QueryText,
 		})
 		return nil, err
 	}
@@ -1344,6 +1383,7 @@ func (s *knowledgeBaseService) buildSearchResult(chunk *types.Chunk,
 		KnowledgeSource:   knowledge.Source,
 		ChunkMetadata:     chunk.Metadata,
 		MatchedContent:    matchedContent,
+		KnowledgeBaseID:   knowledge.KnowledgeBaseID,
 	}
 }
 

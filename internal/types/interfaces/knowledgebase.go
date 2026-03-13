@@ -93,6 +93,11 @@ type KnowledgeBaseService interface {
 	//   - Possible errors such as not existing, insufficient permissions, search engine errors, etc.
 	HybridSearch(ctx context.Context, id string, params types.SearchParams) ([]*types.SearchResult, error)
 
+	// GetQueryEmbedding computes the query embedding using the embedding model
+	// associated with the given knowledge base. This allows callers to pre-compute
+	// and reuse embeddings across multiple KBs that share the same model.
+	GetQueryEmbedding(ctx context.Context, kbID string, queryText string) ([]float32, error)
+
 	// CopyKnowledgeBase copies a knowledge base
 	// Parameters:
 	//   - ctx: Context information

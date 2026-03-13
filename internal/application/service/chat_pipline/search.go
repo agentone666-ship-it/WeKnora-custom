@@ -209,8 +209,18 @@ func logSearchScoreSample(ctx context.Context, action string, results []*types.S
 	}
 }
 
-// searchByTargets performs KB searches using pre-computed SearchTargets
-// This is the main search method that uses the unified search targets
+// embeddingGroupKey groups search targets that share the same embedding model
+// so we only compute the query embedding once per distinct model.
+type embeddingGroupKey struct {
+	ModelID  string
+	TenantID uint64
+}
+
+// searchByTargets performs KB searches using pre-computed SearchTargets.
+// Targets sharing the same embedding model are grouped so the query embedding
+// is computed only once per model AND all full-KB targets in a group are
+// combined into a single retrieval call, reducing both embedding API calls and
+// database round-trips.
 func (p *PluginSearch) searchByTargets(
 	ctx context.Context,
 	chatManage *types.ChatManage,
@@ -219,86 +229,131 @@ func (p *PluginSearch) searchByTargets(
 		return nil
 	}
 
+	queryText := strings.TrimSpace(chatManage.RewriteQuery)
+
+	// Batch-fetch KB records to determine embedding model grouping.
+	// On failure, all targets fall into a zero-key group and HybridSearch
+	// computes the embedding per-KB (graceful degradation).
+	kbIDs := make([]string, 0, len(chatManage.SearchTargets))
+	for _, t := range chatManage.SearchTargets {
+		kbIDs = append(kbIDs, t.KnowledgeBaseID)
+	}
+	kbMap := make(map[string]*types.KnowledgeBase)
+	if kbs, err := p.knowledgeBaseService.GetKnowledgeBasesByIDsOnly(ctx, kbIDs); err == nil {
+		for _, kb := range kbs {
+			if kb != nil {
+				kbMap[kb.ID] = kb
+			}
+		}
+	} else {
+		pipelineWarn(ctx, "Search", "batch_kb_fetch_error", map[string]interface{}{
+			"error": err.Error(),
+		})
+	}
+
+	groups := make(map[embeddingGroupKey][]*types.SearchTarget)
+	for _, t := range chatManage.SearchTargets {
+		var key embeddingGroupKey
+		if kb, ok := kbMap[t.KnowledgeBaseID]; ok {
+			key = embeddingGroupKey{ModelID: kb.EmbeddingModelID, TenantID: kb.TenantID}
+		}
+		groups[key] = append(groups[key], t)
+	}
+
+	pipelineInfo(ctx, "Search", "embedding_groups", map[string]interface{}{
+		"total_targets": len(chatManage.SearchTargets),
+		"unique_models": len(groups),
+	})
+
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	var results []*types.SearchResult
 
-	// Search each target concurrently
-	for _, target := range chatManage.SearchTargets {
+	for gk, targets := range groups {
 		wg.Add(1)
-		go func(t *types.SearchTarget) {
+		go func(gk embeddingGroupKey, targets []*types.SearchTarget) {
 			defer wg.Done()
 
-			// List of knowledge IDs to perform vector search on
-			// Default to all IDs in the target
-			searchKnowledgeIDs := t.KnowledgeIDs
+			// Compute embedding once for this model group.
+			var queryEmbedding []float32
+			if gk.ModelID != "" {
+				emb, err := p.knowledgeBaseService.GetQueryEmbedding(ctx, targets[0].KnowledgeBaseID, queryText)
+				if err != nil {
+					pipelineWarn(ctx, "Search", "group_embed_error", map[string]interface{}{
+						"model_id": gk.ModelID,
+						"kb_id":    targets[0].KnowledgeBaseID,
+						"error":    err.Error(),
+					})
+				} else {
+					queryEmbedding = emb
+				}
+			}
 
-			// Try direct loading for specific knowledge targets
-			if t.Type == types.SearchTargetTypeKnowledge {
-				directResults, skippedIDs := p.tryDirectChunkLoading(ctx, chatManage.TenantID, t.KnowledgeIDs)
+			// Separate full-KB targets (can be combined into one retrieval)
+			// from specific-knowledge targets (need per-target direct loading).
+			var fullKBIDs []string
+			var knowledgeTargets []*types.SearchTarget
+			for _, t := range targets {
+				if t.Type == types.SearchTargetTypeKnowledgeBase {
+					fullKBIDs = append(fullKBIDs, t.KnowledgeBaseID)
+				} else {
+					knowledgeTargets = append(knowledgeTargets, t)
+				}
+			}
 
-				if len(directResults) > 0 {
-					for _, r := range directResults {
-						r.KnowledgeBaseID = t.KnowledgeBaseID
+			pipelineInfo(ctx, "Search", "group_plan", map[string]interface{}{
+				"model_id":           gk.ModelID,
+				"combined_kb_count":  len(fullKBIDs),
+				"individual_targets": len(knowledgeTargets),
+				"vector_len":         len(queryEmbedding),
+			})
+
+			var innerWg sync.WaitGroup
+
+			// Combined search: one HybridSearch call spanning all full-KB targets
+			if len(fullKBIDs) > 0 {
+				innerWg.Add(1)
+				go func() {
+					defer innerWg.Done()
+
+					params := types.SearchParams{
+						QueryText:             queryText,
+						QueryEmbedding:        queryEmbedding,
+						KnowledgeBaseIDs:      fullKBIDs,
+						VectorThreshold:       chatManage.VectorThreshold,
+						KeywordThreshold:      chatManage.KeywordThreshold,
+						MatchCount:            chatManage.EmbeddingTopK,
+						SkipContextEnrichment: true,
 					}
-					pipelineInfo(ctx, "Search", "direct_load", map[string]interface{}{
-						"kb_id":        t.KnowledgeBaseID,
-						"loaded_count": len(directResults),
-						"skipped_ids":  len(skippedIDs),
+					res, err := p.knowledgeBaseService.HybridSearch(ctx, fullKBIDs[0], params)
+					if err != nil {
+						pipelineWarn(ctx, "Search", "combined_kb_search_error", map[string]interface{}{
+							"kb_ids": fullKBIDs,
+							"error":  err.Error(),
+						})
+						return
+					}
+					pipelineInfo(ctx, "Search", "combined_kb_result", map[string]interface{}{
+						"kb_ids":    fullKBIDs,
+						"hit_count": len(res),
 					})
 					mu.Lock()
-					results = append(results, directResults...)
+					results = append(results, res...)
 					mu.Unlock()
-				}
-
-				// If all files were loaded directly, we don't need to search anything
-				if len(skippedIDs) == 0 && len(t.KnowledgeIDs) > 0 {
-					return
-				}
-
-				// Otherwise, only search the files that were skipped (too large)
-				searchKnowledgeIDs = skippedIDs
+				}()
 			}
 
-			// If no IDs left to search (and we are in Knowledge mode), we are done
-			if t.Type == types.SearchTargetTypeKnowledge && len(searchKnowledgeIDs) == 0 {
-				return
+			// Individual search: per-target handling for specific-knowledge targets
+			for _, target := range knowledgeTargets {
+				innerWg.Add(1)
+				go func(t *types.SearchTarget) {
+					defer innerWg.Done()
+					p.searchSingleTarget(ctx, chatManage, t, queryText, queryEmbedding, &mu, &results)
+				}(target)
 			}
 
-			// Build params for rewrite query
-			params := types.SearchParams{
-				QueryText:             strings.TrimSpace(chatManage.RewriteQuery),
-				VectorThreshold:       chatManage.VectorThreshold,
-				KeywordThreshold:      chatManage.KeywordThreshold,
-				MatchCount:            chatManage.EmbeddingTopK,
-				SkipContextEnrichment: true, // Pipeline handles context assembly in merge stage
-			}
-			// Apply knowledge ID filter if this is a partial KB search
-			if t.Type == types.SearchTargetTypeKnowledge {
-				params.KnowledgeIDs = searchKnowledgeIDs
-			}
-			res, err := p.knowledgeBaseService.HybridSearch(ctx, t.KnowledgeBaseID, params)
-			if err != nil {
-				pipelineWarn(ctx, "Search", "kb_search_error", map[string]interface{}{
-					"kb_id":       t.KnowledgeBaseID,
-					"target_type": t.Type,
-					"query":       params.QueryText,
-					"error":       err.Error(),
-				})
-				return
-			}
-			for _, r := range res {
-				r.KnowledgeBaseID = t.KnowledgeBaseID
-			}
-			pipelineInfo(ctx, "Search", "kb_result", map[string]interface{}{
-				"kb_id":       t.KnowledgeBaseID,
-				"target_type": t.Type,
-				"hit_count":   len(res),
-			})
-			mu.Lock()
-			results = append(results, res...)
-			mu.Unlock()
-		}(target)
+			innerWg.Wait()
+		}(gk, targets)
 	}
 
 	wg.Wait()
@@ -307,6 +362,77 @@ func (p *PluginSearch) searchByTargets(
 		"total_hits": len(results),
 	})
 	return results
+}
+
+// searchSingleTarget handles the search logic for a single SearchTarget
+// with specific knowledge IDs, including direct chunk loading and HybridSearch.
+func (p *PluginSearch) searchSingleTarget(
+	ctx context.Context,
+	chatManage *types.ChatManage,
+	t *types.SearchTarget,
+	queryText string,
+	queryEmbedding []float32,
+	mu *sync.Mutex,
+	results *[]*types.SearchResult,
+) {
+	searchKnowledgeIDs := t.KnowledgeIDs
+
+	if t.Type == types.SearchTargetTypeKnowledge {
+		directResults, skippedIDs := p.tryDirectChunkLoading(ctx, chatManage.TenantID, t.KnowledgeIDs)
+
+		if len(directResults) > 0 {
+			for _, r := range directResults {
+				r.KnowledgeBaseID = t.KnowledgeBaseID
+			}
+			pipelineInfo(ctx, "Search", "direct_load", map[string]interface{}{
+				"kb_id":        t.KnowledgeBaseID,
+				"loaded_count": len(directResults),
+				"skipped_ids":  len(skippedIDs),
+			})
+			mu.Lock()
+			*results = append(*results, directResults...)
+			mu.Unlock()
+		}
+
+		if len(skippedIDs) == 0 && len(t.KnowledgeIDs) > 0 {
+			return
+		}
+		searchKnowledgeIDs = skippedIDs
+	}
+
+	if t.Type == types.SearchTargetTypeKnowledge && len(searchKnowledgeIDs) == 0 {
+		return
+	}
+
+	params := types.SearchParams{
+		QueryText:             queryText,
+		QueryEmbedding:        queryEmbedding,
+		VectorThreshold:       chatManage.VectorThreshold,
+		KeywordThreshold:      chatManage.KeywordThreshold,
+		MatchCount:            chatManage.EmbeddingTopK,
+		SkipContextEnrichment: true,
+	}
+	if t.Type == types.SearchTargetTypeKnowledge {
+		params.KnowledgeIDs = searchKnowledgeIDs
+	}
+	res, err := p.knowledgeBaseService.HybridSearch(ctx, t.KnowledgeBaseID, params)
+	if err != nil {
+		pipelineWarn(ctx, "Search", "kb_search_error", map[string]interface{}{
+			"kb_id":       t.KnowledgeBaseID,
+			"target_type": t.Type,
+			"query":       params.QueryText,
+			"error":       err.Error(),
+		})
+		return
+	}
+	pipelineInfo(ctx, "Search", "kb_result", map[string]interface{}{
+		"kb_id":       t.KnowledgeBaseID,
+		"target_type": t.Type,
+		"hit_count":   len(res),
+	})
+	mu.Lock()
+	*results = append(*results, res...)
+	mu.Unlock()
 }
 
 // tryDirectChunkLoading attempts to load chunks for given knowledge IDs directly
