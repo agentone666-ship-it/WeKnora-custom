@@ -412,7 +412,7 @@ export function testMultimodalFunction(testData: {
 export interface TextRelationExtractionRequest {
     text: string;
     tags: string[];
-    llm_config: LLMConfig;
+    model_id: string;
 }
 
 export interface Node {
@@ -424,13 +424,6 @@ export interface Relation {
     node1: string;
     node2: string;
     type: string;
-}
-
-export interface LLMConfig {
-    source: 'local' | 'remote';
-    model_name: string;
-    base_url: string;
-    api_key: string;
 }
 
 export interface TextRelationExtractionResponse {
@@ -454,7 +447,7 @@ export function extractTextRelations(request: TextRelationExtractionRequest): Pr
 
 export interface FabriTextRequest {
     tags: string[];
-    llm_config: LLMConfig;
+    model_id: string;
 }
 
 export interface FabriTextResponse {
@@ -476,7 +469,6 @@ export function fabriText(request: FabriTextRequest): Promise<FabriTextResponse>
 }
 
 export interface FabriTagRequest {
-    llm_config: LLMConfig;
 }
 
 export interface FabriTagResponse {

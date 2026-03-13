@@ -1952,16 +1952,9 @@ func (h *InitializationHandler) testMultimodalWithDocReader(
 
 // TextRelationExtractionRequest 文本关系提取请求结构
 type TextRelationExtractionRequest struct {
-	Text      string    `json:"text"      binding:"required"`
-	Tags      []string  `json:"tags"      binding:"required"`
-	LLMConfig LLMConfig `json:"llm_config"`
-}
-
-type LLMConfig struct {
-	Source    string `json:"source"`
-	ModelName string `json:"model_name"`
-	BaseUrl   string `json:"base_url"`
-	ApiKey    string `json:"api_key"`
+	Text    string   `json:"text"     binding:"required"`
+	Tags    []string `json:"tags"     binding:"required"`
+	ModelID string   `json:"model_id" binding:"required"`
 }
 
 // TextRelationExtractionResponse 文本关系提取响应结构
@@ -2009,8 +2002,16 @@ func (h *InitializationHandler) ExtractTextRelations(c *gin.Context) {
 		return
 	}
 
+	// 根据模型ID获取chat模型
+	chatModel, err := h.modelService.GetChatModel(ctx, req.ModelID)
+	if err != nil {
+		logger.Error(ctx, "获取模型失败", err)
+		c.Error(errors.NewBadRequestError("获取模型失败: " + err.Error()))
+		return
+	}
+
 	// 调用模型服务进行文本关系提取
-	result, err := h.extractRelationsFromText(ctx, req.Text, req.Tags, req.LLMConfig)
+	result, err := h.extractRelationsFromText(ctx, req.Text, req.Tags, chatModel)
 	if err != nil {
 		logger.Error(ctx, "文本关系提取失败", err)
 		c.Error(errors.NewInternalServerError("文本关系提取失败: " + err.Error()))
@@ -2028,20 +2029,8 @@ func (h *InitializationHandler) extractRelationsFromText(
 	ctx context.Context,
 	text string,
 	tags []string,
-	llm LLMConfig,
+	chatModel chat.Chat,
 ) (*TextRelationExtractionResponse, error) {
-	chatModel, err := chat.NewChat(&chat.ChatConfig{
-		ModelID:   "initialization",
-		APIKey:    llm.ApiKey,
-		BaseURL:   llm.BaseUrl,
-		ModelName: llm.ModelName,
-		Source:    types.ModelSource(llm.Source),
-	}, h.ollamaService)
-	if err != nil {
-		logger.Error(ctx, "初始化模型服务失败", err)
-		return nil, err
-	}
-
 	template := &types.PromptTemplateStructured{
 		Description: h.config.ExtractManager.ExtractGraph.Description,
 		Tags:        tags,
@@ -2066,8 +2055,8 @@ func (h *InitializationHandler) extractRelationsFromText(
 
 // FabriTextRequest is a request for generating example text
 type FabriTextRequest struct {
-	Tags      []string  `json:"tags"`
-	LLMConfig LLMConfig `json:"llm_config"`
+	Tags    []string `json:"tags"`
+	ModelID string   `json:"model_id" binding:"required"`
 }
 
 // FabriTextResponse is a response for generating example text
@@ -2097,7 +2086,14 @@ func (h *InitializationHandler) FabriText(c *gin.Context) {
 		return
 	}
 
-	result, err := h.fabriText(ctx, req.Tags, req.LLMConfig)
+	chatModel, err := h.modelService.GetChatModel(ctx, req.ModelID)
+	if err != nil {
+		logger.Error(ctx, "获取模型失败", err)
+		c.Error(errors.NewBadRequestError("获取模型失败: " + err.Error()))
+		return
+	}
+
+	result, err := h.fabriText(ctx, req.Tags, chatModel)
 	if err != nil {
 		logger.Error(ctx, "failed to generate fabri text", err)
 		c.Error(errors.NewInternalServerError("failed to generate fabri text: " + err.Error()))
@@ -2111,19 +2107,7 @@ func (h *InitializationHandler) FabriText(c *gin.Context) {
 }
 
 // fabriText generates example text
-func (h *InitializationHandler) fabriText(ctx context.Context, tags []string, llm LLMConfig) (string, error) {
-	chatModel, err := chat.NewChat(&chat.ChatConfig{
-		ModelID:   "initialization",
-		APIKey:    llm.ApiKey,
-		BaseURL:   llm.BaseUrl,
-		ModelName: llm.ModelName,
-		Source:    types.ModelSource(llm.Source),
-	}, h.ollamaService)
-	if err != nil {
-		logger.Error(ctx, "初始化模型服务失败", err)
-		return "", err
-	}
-
+func (h *InitializationHandler) fabriText(ctx context.Context, tags []string, chatModel chat.Chat) (string, error) {
 	content := h.config.ExtractManager.FabriText.WithNoTag
 	if len(tags) > 0 {
 		tagStr, _ := json.Marshal(tags)
@@ -2146,9 +2130,7 @@ func (h *InitializationHandler) fabriText(ctx context.Context, tags []string, ll
 }
 
 // FabriTagRequest is a request for generating tags
-type FabriTagRequest struct {
-	LLMConfig LLMConfig `json:"llm_config"`
-}
+type FabriTagRequest struct{}
 
 // FabriTagResponse is a response for generating tags
 type FabriTagResponse struct {
