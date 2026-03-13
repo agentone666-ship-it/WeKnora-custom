@@ -106,6 +106,123 @@ body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
 .chat-tool-btn svg { width: 12px; height: 12px; }
 .chat-tool-btn.mode-active { color: var(--primary); font-weight: 500; }
 .chat-tool-divider { width: 1px; height: 12px; background: #eee; margin: 0 2px; }
+
+/* 图片上传按钮 */
+.wk-image-upload-btn {
+  display: flex; align-items: center; justify-content: center;
+  border: none; background: none; color: #999; cursor: pointer;
+  width: 26px; height: 26px; padding: 0; border-radius: 6px; transition: all 0.15s;
+}
+.wk-image-upload-btn:hover { color: var(--primary); background: rgba(7,193,96,0.06); }
+.wk-image-upload-btn svg { width: 14px; height: 14px; }
+
+/* 图片预览条 */
+.wk-image-previews {
+  display: flex; gap: 6px; padding: 6px 12px; overflow-x: auto; flex-shrink: 0;
+}
+.wk-img-item { position: relative; flex-shrink: 0; }
+.wk-img-thumb { width: 44px; height: 44px; border-radius: 6px; object-fit: cover; border: 1px solid #e8e8e8; }
+.wk-img-remove {
+  position: absolute; top: -4px; right: -4px;
+  width: 16px; height: 16px; border-radius: 50%; background: rgba(0,0,0,0.5); color: #fff;
+  font-size: 12px; line-height: 16px; text-align: center; cursor: pointer; border: none; padding: 0;
+}
+.wk-img-remove:hover { background: #e44; }
+
+/* === Markdown 渲染样式 === */
+.md-pre { background: #1e1e2e; color: #cdd6f4; border-radius: 8px; padding: 10px 12px; overflow-x: auto; font-size: 12px; margin: 6px 0; line-height: 1.5; }
+.md-pre code { font-family: "SF Mono", "Fira Code", "Consolas", monospace; white-space: pre; }
+.md-code { background: #f3f4f6; padding: 1px 5px; border-radius: 4px; font-size: 12px; font-family: "SF Mono", "Fira Code", "Consolas", monospace; }
+.md-h { margin: 8px 0 4px; line-height: 1.4; }
+h1.md-h { font-size: 18px; font-weight: 700; }
+h2.md-h { font-size: 16px; font-weight: 700; }
+h3.md-h { font-size: 14px; font-weight: 600; }
+h4.md-h, h5.md-h, h6.md-h { font-size: 13px; font-weight: 600; }
+.md-bq { border-left: 3px solid var(--primary); padding: 4px 12px; margin: 6px 0; background: #f8faf8; color: #666; border-radius: 0 4px 4px 0; font-size: 13px; }
+.md-list { margin: 4px 0; padding-left: 20px; font-size: 13px; line-height: 1.6; }
+.md-list li { margin: 2px 0; }
+.md-list .md-list { margin: 2px 0 2px 0; }
+.md-p { margin: 4px 0; line-height: 1.6; font-size: 13px; }
+.md-p a, .md-list a, .md-bq a { color: var(--primary); text-decoration: none; }
+.md-p a:hover, .md-list a:hover { text-decoration: underline; }
+.md-table { border-collapse: collapse; margin: 6px 0; font-size: 12px; width: 100%; }
+.md-table th { border: 1px solid #e5e5e5; padding: 4px 8px; background: #f7f8fa; font-weight: 600; text-align: left; }
+.md-table td { border: 1px solid #e5e5e5; padding: 4px 8px; }
+.md-table tr:hover td { background: rgba(7,193,96,0.02); }
+.md-img { max-width: 100%; max-height: 200px; border-radius: 6px; margin: 6px 0; display: block; object-fit: contain; cursor: pointer; }
+
+/* === Agent 流式显示 === */
+.agent-stream { display: flex; flex-direction: column; gap: 0; max-width: 90%; margin-bottom: 6px; }
+.agent-tree-root {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 6px 12px; font-size: 12px; font-weight: 500; cursor: pointer;
+  border-radius: 8px; background: #fff; border: 0.5px solid #e0e0e0;
+  box-shadow: 0 2px 4px rgba(7,192,95,0.08); color: var(--text);
+  transition: all 0.25s; margin-bottom: 8px; user-select: none;
+}
+.agent-tree-root:hover { background: rgba(7,192,95,0.04); }
+.agent-tree-root-title { display: flex; align-items: center; gap: 6px; }
+.agent-tree-root-title svg { width: 16px; height: 16px; color: var(--primary); flex-shrink: 0; }
+.agent-tree-root-toggle { font-size: 12px; color: var(--primary); transition: transform 0.2s; }
+.agent-tree-root.expanded .agent-tree-root-toggle { transform: rotate(180deg); }
+.agent-tree-children { display: none; padding-left: 12px; margin-top: -4px; margin-bottom: 8px; }
+.agent-tree-root.expanded + .agent-tree-children { display: block; }
+.agent-tree-child { position: relative; padding-left: 20px; margin-bottom: 6px; }
+.agent-tree-child::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; border-left: 1px dashed #e0e0e0; }
+.agent-tree-child:last-child::before { bottom: auto; height: 15px; }
+.agent-tree-branch { position: absolute; left: 0; top: 15px; width: 16px; border-top: 1px dashed #e0e0e0; }
+.agent-card {
+  background: #fff; border-radius: 5px; border: 1px solid #e8e8e8;
+  overflow: hidden; transition: all 0.2s; box-shadow: 0 1px 2px rgba(0,0,0,0.02);
+  animation: agentFadeIn 0.25s ease-out; margin-bottom: 8px; position: relative;
+}
+.agent-card:hover { border-color: var(--primary); box-shadow: 0 1px 4px rgba(7,192,95,0.08); }
+.agent-card.pending { border-color: rgba(7,192,95,0.15); }
+.agent-card.pending::after {
+  content: ''; position: absolute; inset: 0;
+  background: linear-gradient(120deg, transparent 0%, rgba(7,192,95,0.06) 40%, rgba(7,192,95,0.08) 55%, transparent 85%);
+  transform: translateX(-100%); animation: agentShimmer 2.8s ease-in-out infinite; pointer-events: none;
+}
+.agent-card.error { border-left: 2px solid #e44; }
+.agent-card-header { display: flex; justify-content: space-between; align-items: center; padding: 5px 10px; cursor: pointer; user-select: none; transition: background-color 0.15s; }
+.agent-card-header:hover { background: rgba(7,192,95,0.03); }
+.agent-card-header.no-expand { cursor: default; }
+.agent-card-header.no-expand:hover { background: transparent; }
+.agent-card-title { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; }
+.agent-card-title svg { width: 14px; height: 14px; color: var(--primary); flex-shrink: 0; }
+.agent-card-name { font-size: 12px; font-weight: 500; white-space: nowrap; color: var(--text); overflow: hidden; text-overflow: ellipsis; }
+.agent-card-summary { color: #999; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex-shrink: 1; margin-left: 4px; }
+.agent-card-toggle { font-size: 12px; color: #999; transition: transform 0.2s; padding: 0 2px; flex-shrink: 0; }
+.agent-card.expanded .agent-card-toggle { transform: rotate(180deg); }
+.agent-card-detail { display: none; padding: 6px 12px; border-top: 1px solid #f0f0f0; font-size: 12px; color: #555; line-height: 1.6; max-height: 200px; overflow-y: auto; background: #fafbfc; white-space: pre-wrap; word-break: break-word; }
+.agent-card.expanded .agent-card-detail { display: block; }
+.agent-card-info { padding: 5px 10px; border-top: 1px solid #f0f0f0; font-size: 11px; font-weight: 500; color: var(--text); }
+.agent-card-info strong { color: var(--primary); font-weight: 600; }
+.agent-answer { animation: agentFadeIn 0.25s ease-out; }
+.agent-answer-content { font-size: 13px; color: #333; line-height: 1.6; background: #f7f8fa; padding: 10px 14px; border-radius: 12px; border-bottom-left-radius: 4px; }
+.agent-answer-toolbar { display: flex; gap: 6px; margin-top: 6px; }
+.agent-answer-toolbar button { display: flex; align-items: center; justify-content: center; width: 26px; height: 26px; border: 1px solid #e8e8e8; border-radius: 50%; background: #fff; cursor: pointer; color: #999; transition: all 0.2s; }
+.agent-answer-toolbar button:hover { border-color: var(--primary); color: var(--primary); }
+.agent-answer-toolbar button svg { width: 13px; height: 13px; }
+.agent-refs { background: #fff; border: 1px solid #e8e8e8; border-radius: 10px; margin-top: 8px; overflow: hidden; font-size: 12px; }
+.agent-refs-header { display: flex; align-items: center; gap: 6px; padding: 8px 12px; cursor: pointer; color: #555; font-weight: 500; user-select: none; }
+.agent-refs-header:hover { background: rgba(7,193,96,0.04); }
+.agent-refs-header svg:first-child { color: var(--primary); flex-shrink: 0; }
+.agent-refs-arrow { margin-left: auto; transition: transform 0.2s; color: #999; }
+.agent-refs.expanded .agent-refs-arrow { transform: rotate(180deg); }
+.agent-refs-list { display: none; border-top: 1px solid #f0f0f0; padding: 6px 12px 8px; max-height: 200px; overflow-y: auto; }
+.agent-refs.expanded .agent-refs-list { display: block; }
+.agent-ref-group { margin-bottom: 6px; }
+.agent-ref-group-title { display: flex; align-items: center; gap: 4px; font-weight: 500; color: var(--text); padding: 2px 0; font-size: 12px; }
+.agent-ref-group-title svg { color: var(--primary); flex-shrink: 0; }
+.agent-ref-count { color: #999; font-weight: 400; font-size: 11px; }
+.agent-ref-chunk { color: #999; padding: 2px 0 2px 18px; line-height: 1.5; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: default; font-size: 11px; }
+.agent-ref-chunk:hover { color: var(--primary); background: rgba(7,193,96,0.04); border-radius: 4px; }
+.agent-ref-idx { color: var(--primary); font-weight: 500; font-size: 10px; }
+@keyframes agentFadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes agentShimmer { 0% { transform: translateX(-90%); } 50% { transform: translateX(-5%); } 100% { transform: translateX(90%); } }
+@keyframes agentSpin { to { transform: rotate(360deg); } }
+.agent-spinner { width: 12px; height: 12px; border: 2px solid #e0e0e0; border-top-color: var(--primary); border-radius: 50%; animation: agentSpin 0.8s linear infinite; display: inline-block; }
 </style>
 </head>
 <body>
@@ -146,10 +263,10 @@ body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
     </div>
   </div>
   <div class="sidebar-user">
-    <div class="sidebar-avatar">S</div>
+    <div class="sidebar-avatar" id="wk-user-letter">U</div>
     <div class="sidebar-user-info">
-      <div class="sidebar-user-name">saras</div>
-      <div class="sidebar-user-email">saraszhang@tencent....</div>
+      <div class="sidebar-user-name" id="wk-user-name">加载中...</div>
+      <div class="sidebar-user-email" id="wk-user-email"></div>
     </div>
     <svg class="sidebar-user-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
   </div>
@@ -236,9 +353,13 @@ body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
     <p>选择知识库后，输入问题开始智能问答</p>
   </div>
   <div class="chat-panel-input">
+    <div class="wk-image-previews" id="wk-image-previews" style="display:none;"></div>
     <div class="chat-input-card">
       <textarea placeholder="输入问题..." rows="1"></textarea>
       <div class="chat-input-toolbar">
+        <button class="wk-image-upload-btn" id="wk-image-btn" style="display:none;" title="上传图片">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+        </button>
         <button class="chat-tool-btn">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
           普通
@@ -258,6 +379,7 @@ body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
       </div>
     </div>
   </div>
+  <input type="file" id="wk-image-input" accept="image/jpeg,image/png,image/gif,image/webp" multiple style="display:none;">
 </div>
 
 <script src="weknora.js"></script>

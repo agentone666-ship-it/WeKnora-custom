@@ -3,6 +3,8 @@
 
   // === State ===
   var currentUser = null; // { type: 'ka'|'wk', name, avatar, badge }
+  var clipKbId = '';      // 剪藏目标知识库 ID
+  var clipKbName = '';    // 剪藏目标知识库名称
 
   // === DOM Helpers ===
   function $(id) { return document.getElementById(id); }
@@ -167,8 +169,14 @@
     msg.textContent = '正在验证…';
     msg.className = 'ka-test-msg';
 
-    setTimeout(function () {
-      sendMsg({ type: 'SET_CONFIG', payload: { baseUrl: url, apiKey: key } }).then(function () {
+    // 先保存配置
+    sendMsg({ type: 'SET_CONFIG', payload: { baseUrl: url, apiKey: key } }).then(function () {
+      // 通过调用知识库列表来验证 API Key 和服务地址是否有效
+      return sendMsg({ type: 'VALIDATE_CONFIG' });
+    }).then(function (resp) {
+      // VALIDATE_CONFIG 现在实际调用 GET /knowledge-bases，成功说明连通且认证有效
+      if (resp && resp.success) {
+        // API Key 认证成功，不需要调用 /auth/me（那个需要 Bearer token）
         sendMsg({ type: 'SET_AUTH', payload: { type: 'ka', name: '快速笔记用户', avatar: kaAvatarUrl } });
         msg.textContent = '验证通过';
         msg.className = 'ka-test-msg ok';
@@ -176,8 +184,11 @@
           enterMain('ka', '快速笔记用户', kaAvatarUrl, '快速笔记 5.0');
           toast('登录成功', 'success');
         }, 500);
-      });
-    }, 800);
+      } else {
+        msg.textContent = '验证未通过，请检查服务地址和 API Key';
+        msg.className = 'ka-test-msg err';
+      }
+    });
   });
 
   // WeKnora 配置页
@@ -215,27 +226,58 @@
     $('wk-test-msg').className = 'wk-test-result';
     // 保存配置
     sendMsg({ type: 'SET_CONFIG', payload: { baseUrl: url, apiKey: key } }).then(function () {
-      sendMsg({ type: 'SET_AUTH', payload: { type: 'wk', name: 'WeKnora 用户', avatar: '' } });
-      $('wk-test-msg').textContent = '配置已保存';
-      $('wk-test-msg').className = 'wk-test-result ok';
-      setTimeout(function () {
-        enterMain('wk', 'WeKnora 用户', '', 'WeKnora');
-      }, 500);
+      // 验证连接
+      return sendMsg({ type: 'VALIDATE_CONFIG' });
+    }).then(function (resp) {
+      if (resp && resp.success) {
+        // API Key 验证成功
+        sendMsg({ type: 'SET_AUTH', payload: { type: 'wk', name: 'WeKnora 用户', avatar: '' } });
+        $('wk-test-msg').textContent = '验证通过，配置已保存';
+        $('wk-test-msg').className = 'wk-test-result ok';
+        setTimeout(function () {
+          enterMain('wk', 'WeKnora 用户', '', 'WeKnora');
+        }, 500);
+      } else {
+        $('wk-test-msg').textContent = '验证未通过，请检查服务地址和 API Key';
+        $('wk-test-msg').className = 'wk-test-result err';
+      }
     });
   });
+
+  // === 更新用户信息显示 ===
+  function updateUserDisplay(type, name, avatarUrl, badge) {
+    if (avatarUrl) {
+      $('main-avatar-img').src = avatarUrl;
+      $('main-avatar-img').style.display = 'block';
+      $('main-letter').style.display = 'none';
+    } else {
+      $('main-avatar-img').style.display = 'none';
+      $('main-letter').style.display = 'flex';
+      $('main-letter').textContent = (name || 'U').charAt(0).toUpperCase();
+      $('main-letter').style.background = '#07C160';
+    }
+    $('main-name').textContent = name;
+    $('main-badge').textContent = badge;
+    $('main-badge').className = 'main-badge ' + (type === 'ka' ? 'badge-ka' : 'badge-wk');
+  }
 
   // === 进入主界面 ===
   function enterMain(type, name, avatarUrl, badge) {
     currentUser = { type: type, name: name, avatar: avatarUrl, badge: badge };
-    // 统一使用字母头像：圆形绿色底 + 字母 S
-    $('main-avatar-img').style.display = 'none';
-    $('main-letter').style.display = 'flex';
-    $('main-letter').textContent = 'S';
-    $('main-letter').style.background = '#07C160';
-    // 设置名称和标签
-    $('main-name').textContent = name;
-    $('main-badge').textContent = badge;
-    $('main-badge').className = 'main-badge ' + (type === 'ka' ? 'badge-ka' : 'badge-wk');
+    updateUserDisplay(type, name, avatarUrl, badge);
+    // 从 API 获取真实用户信息
+    sendMsg({ type: 'GET_USER_INFO' }).then(function (resp) {
+      if (resp && resp.success && resp.data) {
+        var user = resp.data.user || resp.data;
+        var realName = user.username || user.name || name;
+        var realAvatar = user.avatar || avatarUrl;
+        currentUser.name = realName;
+        currentUser.avatar = realAvatar;
+        // 同步更新 auth 存储
+        sendMsg({ type: 'SET_AUTH', payload: { type: type, name: realName, avatar: realAvatar } });
+        updateUserDisplay(type, realName, realAvatar, badge);
+      }
+    });
     // 设置面板数据
     $('set-type').textContent = badge;
     $('set-name').textContent = name;
@@ -264,6 +306,166 @@
     }
     goPage('pg-main');
     loadLatestClip();
+    loadAgentsForDropdown();
+  }
+
+  // === 从 API 加载知识库列表到下拉菜单 ===
+  function loadKnowledgeBasesForDropdown() {
+    sendMsg({ type: 'LIST_KNOWLEDGE_BASES' }).then(function (resp) {
+      if (resp && resp.success && resp.data) {
+        var kbList = Array.isArray(resp.data) ? resp.data : (resp.data.items || []);
+        popupAllKbs = kbList;
+        filterAndRenderPopupKbs();
+        // 检查剪藏知识库选择
+        checkClipKbSelection(kbList);
+      }
+    });
+  }
+
+  var popupAllKbs = [];
+  var popupAgents = [];
+
+  // === 根据当前选中智能体配置过滤知识库 ===
+  function filterAndRenderPopupKbs() {
+    var filtered = popupAllKbs;
+    var agent = null;
+    for (var i = 0; i < popupAgents.length; i++) {
+      if (popupAgents[i].id === popupAgentId) { agent = popupAgents[i]; break; }
+    }
+    if (agent && agent.config) {
+      var mode = agent.config.kb_selection_mode || 'all';
+      if (mode === 'none') {
+        filtered = [];
+      } else if (mode === 'selected' && agent.config.knowledge_bases) {
+        var allowedIds = agent.config.knowledge_bases;
+        filtered = popupAllKbs.filter(function (kb) {
+          return allowedIds.indexOf(kb.id) !== -1;
+        });
+      }
+    }
+    renderKbDropdownItems(filtered);
+  }
+
+  // === 从 API 加载智能体列表到模式下拉 ===
+  function loadAgentsForDropdown() {
+    sendMsg({ type: 'LIST_AGENTS' }).then(function (resp) {
+      if (resp && resp.success && resp.data) {
+        popupAgents = Array.isArray(resp.data) ? resp.data : (resp.data.data || []);
+        if (popupAgents.length > 0) {
+          // 恢复持久化的模式选择
+          chrome.storage.local.get('ka_selected_agent', function (stored) {
+            if (!popupAgentId && stored && stored.ka_selected_agent && stored.ka_selected_agent.agentId) {
+              var saved = stored.ka_selected_agent;
+              for (var i = 0; i < popupAgents.length; i++) {
+                if (popupAgents[i].id === saved.agentId) {
+                  popupAgentId = saved.agentId;
+                  popupAgentEnabled = !!saved.agentEnabled;
+                  break;
+                }
+              }
+            }
+            if (!popupAgentId) {
+              popupAgentId = popupAgents[0].id;
+              var isQA = popupAgents[0].id === 'builtin-quick-answer' || (popupAgents[0].config && popupAgents[0].config.agent_mode === 'quick-answer');
+              popupAgentEnabled = !isQA;
+            }
+            // 设置当前选中智能体的图片上传能力
+            for (var j = 0; j < popupAgents.length; j++) {
+              if (popupAgents[j].id === popupAgentId) {
+                popupAgentImageUpload = !!(popupAgents[j].config && popupAgents[j].config.image_upload_enabled);
+                break;
+              }
+            }
+            popupUpdateImageUI();
+            renderAgentModeItems(popupAgents);
+            // 加载全部知识库（前端根据智能体配置过滤）
+            loadKnowledgeBasesForDropdown();
+          });
+        } else {
+          loadKnowledgeBasesForDropdown();
+        }
+      } else {
+        loadKnowledgeBasesForDropdown();
+      }
+    });
+  }
+
+  function renderAgentModeItems(agentList) {
+    var modeMenu = $('popup-mode-menu');
+    if (!modeMenu) return;
+    // 移除旧的模式选项
+    var oldItems = modeMenu.querySelectorAll('.kb-mode-item');
+    oldItems.forEach(function (item) { item.remove(); });
+
+    agentList.forEach(function (agent, idx) {
+      var item = document.createElement('div');
+      var isQA = agent.id === 'builtin-quick-answer' || (agent.config && agent.config.agent_mode === 'quick-answer');
+      var isSelected = popupAgentId ? (agent.id === popupAgentId) : (idx === 0);
+      item.className = 'kb-mode-item' + (isSelected ? ' selected' : '');
+      item.setAttribute('data-agent-id', agent.id);
+      item.innerHTML = '<span class="kb-radio"></span> ' + (function (s) {
+        var d = document.createElement('div'); d.textContent = s; return d.innerHTML;
+      })(agent.name);
+      if (isSelected) {
+        $('mode-name').textContent = agent.name;
+      }
+      item.addEventListener('click', function (e) {
+        e.stopPropagation();
+        popupAgentId = agent.id;
+        popupAgentEnabled = !isQA;
+        modeMenu.querySelectorAll('.kb-mode-item').forEach(function (i) { i.classList.remove('selected'); });
+        item.classList.add('selected');
+        $('mode-name').textContent = agent.name;
+        modeMenu.classList.remove('show');
+        // 持久化模式选择，同步给 sidepanel / weknora
+        chrome.storage.local.set({ ka_selected_agent: { agentId: agent.id, agentEnabled: !isQA } });
+        // 更新图片上传按钮可见性
+        popupAgentImageUpload = !!(agent.config && agent.config.image_upload_enabled);
+        popupUpdateImageUI();
+        if (!popupAgentImageUpload && popupPendingImages.length > 0) popupClearImages();
+        // 切换智能体后根据配置过滤知识库
+        filterAndRenderPopupKbs();
+      });
+      modeMenu.appendChild(item);
+    });
+  }
+
+  function renderKbDropdownItems(kbList) {
+    var kbMenu = $('kb-menu');
+    if (!kbMenu) return;
+    // 移除旧的知识库选项（保留分隔线、模式等）
+    var oldItems = kbMenu.querySelectorAll('.kb-dropdown-item');
+    oldItems.forEach(function (item) { item.remove(); });
+    // 在第一个分隔线之前插入新选项
+    var firstDivider = kbMenu.querySelector('.kb-dropdown-divider');
+    // 插入 "全部" 选项
+    var allItem = createKbDropdownItem('all', '全部知识库', true);
+    kbMenu.insertBefore(allItem, firstDivider);
+    // 插入真实知识库
+    kbList.forEach(function (kb) {
+      var item = createKbDropdownItem(kb.id, kb.name, false);
+      kbMenu.insertBefore(item, firstDivider);
+    });
+  }
+
+  function createKbDropdownItem(kbId, name, isSelected) {
+    var div = document.createElement('div');
+    div.className = 'kb-dropdown-item' + (isSelected ? ' selected' : '');
+    div.setAttribute('data-kb', kbId);
+    div.innerHTML = '<span class="kb-radio"></span> ' + (function (s) {
+      var d = document.createElement('div');
+      d.textContent = s;
+      return d.innerHTML;
+    })(name);
+    div.addEventListener('click', function (e) {
+      e.stopPropagation();
+      selectedKb = kbId;
+      $('kb-name').textContent = name.length > 4 ? name.substring(0, 4) : name;
+      $('kb-menu').querySelectorAll('.kb-dropdown-item').forEach(function (i) { i.classList.remove('selected'); });
+      div.classList.add('selected');
+      $('kb-menu').classList.remove('show');
+    });
+    return div;
   }
 
   // === 加载并显示最新一条内容 ===
@@ -356,10 +558,114 @@
   var chatInput = $('chat-input');
   var sendBtn = $('btn-chat-send');
   var selectedKb = 'all';
-  var selectedMode = 'fast';
+  var popupAgentId = '';
+  var popupAgentEnabled = false;
+  var popupAgentImageUpload = false;
+
+  // 图片上传
+  var popupPendingImages = [];
+  var POPUP_MAX_IMAGES = 5;
+  var POPUP_ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+  var POPUP_MAX_IMAGE_SIZE = 10 * 1024 * 1024;
+  var popupImageInput = $('popup-image-input');
+  var popupImageBtn = $('popup-image-btn');
+  var popupImagePreviews = $('popup-image-previews');
+
+  function popupAddImages(files) {
+    if (!popupAgentImageUpload) return;
+    for (var i = 0; i < files.length; i++) {
+      if (popupPendingImages.length >= POPUP_MAX_IMAGES) { break; }
+      var f = files[i];
+      if (POPUP_ALLOWED_TYPES.indexOf(f.type) === -1 || f.size > POPUP_MAX_IMAGE_SIZE) continue;
+      popupPendingImages.push({ file: f, preview: URL.createObjectURL(f) });
+    }
+    popupRenderPreviews();
+  }
+
+  function popupRemoveImage(idx) {
+    if (idx >= 0 && idx < popupPendingImages.length) {
+      URL.revokeObjectURL(popupPendingImages[idx].preview);
+      popupPendingImages.splice(idx, 1);
+    }
+    popupRenderPreviews();
+  }
+
+  function popupClearImages() {
+    popupPendingImages.forEach(function (img) { URL.revokeObjectURL(img.preview); });
+    popupPendingImages = [];
+    popupRenderPreviews();
+  }
+
+  function popupRenderPreviews() {
+    if (!popupImagePreviews) return;
+    if (popupPendingImages.length === 0) {
+      popupImagePreviews.style.display = 'none';
+      popupImagePreviews.innerHTML = '';
+      return;
+    }
+    popupImagePreviews.style.display = 'flex';
+    var html = '';
+    for (var i = 0; i < popupPendingImages.length; i++) {
+      html += '<div class="popup-img-item" data-idx="' + i + '">'
+        + '<img class="popup-img-thumb" src="' + popupPendingImages[i].preview + '">'
+        + '<span class="popup-img-remove">&times;</span></div>';
+    }
+    popupImagePreviews.innerHTML = html;
+    popupImagePreviews.querySelectorAll('.popup-img-remove').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        popupRemoveImage(parseInt(btn.parentElement.getAttribute('data-idx')));
+      });
+    });
+  }
+
+  function popupUpdateImageUI() {
+    if (popupImageBtn) popupImageBtn.style.display = popupAgentImageUpload ? '' : 'none';
+    if (!popupAgentImageUpload && popupPendingImages.length > 0) popupClearImages();
+  }
+
+  function popupFileToBase64(file) {
+    return new Promise(function (resolve, reject) {
+      var reader = new FileReader();
+      reader.onload = function () { resolve(reader.result); };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+
+  if (popupImageInput) {
+    popupImageInput.addEventListener('change', function () {
+      if (popupImageInput.files) popupAddImages(Array.from(popupImageInput.files));
+      popupImageInput.value = '';
+    });
+  }
+  if (popupImageBtn) {
+    popupImageBtn.addEventListener('click', function () {
+      if (popupImageInput) popupImageInput.click();
+    });
+  }
+
+  chatInput.addEventListener('paste', function (e) {
+    if (!popupAgentImageUpload) return;
+    var items = e.clipboardData && e.clipboardData.items;
+    if (!items) return;
+    var imageFiles = [];
+    for (var i = 0; i < items.length; i++) {
+      if (items[i].type.indexOf('image/') === 0) {
+        var f = items[i].getAsFile();
+        if (f) imageFiles.push(f);
+      }
+    }
+    if (imageFiles.length > 0) {
+      e.preventDefault();
+      popupAddImages(imageFiles);
+    }
+  });
 
   chatInput.addEventListener('input', function () {
     sendBtn.classList.toggle('active', chatInput.value.trim().length > 0);
+    // 自动调整高度
+    chatInput.style.height = 'auto';
+    chatInput.style.height = Math.min(chatInput.scrollHeight, 100) + 'px';
   });
 
   chatInput.addEventListener('keydown', function (e) {
@@ -367,6 +673,7 @@
       e.preventDefault();
       sendChat();
     }
+    // Shift+Enter 默认行为即换行，无需额外处理
   });
 
   sendBtn.addEventListener('click', sendChat);
@@ -374,32 +681,48 @@
   function sendChat() {
     var text = chatInput.value.trim();
     if (!text) return;
-    var queryData = { query: text, user: currentUser, kb: selectedKb, mode: selectedMode, ts: Date.now() };
+    var queryData = { query: text, user: currentUser, kb: selectedKb, ts: Date.now(), agentId: popupAgentId, agentEnabled: popupAgentEnabled };
+    // 如果选中了具体知识库，传递知识库 ID
+    if (selectedKb && selectedKb !== 'all') {
+      queryData.knowledgeBaseIds = [selectedKb];
+    }
 
-    if (chrome && chrome.storage) {
-      chrome.storage.local.set({ ka_pending_query: queryData });
+    function doPopupSend(data) {
+      if (chrome && chrome.storage) {
+        chrome.storage.local.set({ ka_pending_query: data });
+      }
+      if (chrome && chrome.runtime && chrome.runtime.sendMessage) {
+        chrome.runtime.sendMessage({ type: 'CHAT_QUERY', payload: data }).catch(function () {});
+      }
+      if (chrome && chrome.tabs) {
+        chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
+          if (tabs && tabs[0]) {
+            chrome.sidePanel.open({ tabId: tabs[0].id }).catch(function () {});
+          }
+          window.close();
+        });
+      }
     }
-    if (chrome && chrome.runtime && chrome.runtime.sendMessage) {
-      chrome.runtime.sendMessage({ type: 'CHAT_QUERY', payload: queryData }).catch(function () {});
-    }
-    if (chrome && chrome.tabs) {
-      chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
-        if (tabs && tabs[0]) {
-          chrome.sidePanel.open({ tabId: tabs[0].id }).catch(function () {});
-        }
-        window.close();
+
+    if (popupPendingImages.length > 0) {
+      var promises = popupPendingImages.map(function (img) { return popupFileToBase64(img.file); });
+      Promise.all(promises).then(function (dataURIs) {
+        queryData.images = dataURIs.map(function (d) { return { data: d }; });
+        popupClearImages();
+        doPopupSend(queryData);
       });
+    } else {
+      doPopupSend(queryData);
     }
   }
 
-  // === 知识库下拉（合并模式选项） ===
+  // === 知识库下拉 ===
   var kbMenu = $('kb-menu');
   var kbBtn = $('btn-kb-select');
 
   function positionKbMenu() {
     var rect = kbBtn.getBoundingClientRect();
     var menuH = kbMenu.offsetHeight;
-    // 优先向上弹出；空间不足则向下
     var top = rect.top - menuH - 6;
     if (top < 4) top = rect.bottom + 6;
     kbMenu.style.left = rect.left + 'px';
@@ -408,10 +731,10 @@
 
   kbBtn.addEventListener('click', function (e) {
     e.stopPropagation();
+    popupModeMenu.classList.remove('show');
     var willShow = !kbMenu.classList.contains('show');
     kbMenu.classList.toggle('show');
     if (willShow) {
-      // 先显示再计算高度
       requestAnimationFrame(positionKbMenu);
     }
   });
@@ -427,20 +750,38 @@
       kbMenu.classList.remove('show');
     });
   });
-  // 模式选择（合并在知识库菜单内）
-  kbMenu.querySelectorAll('.kb-mode-item').forEach(function (item) {
-    item.addEventListener('click', function (e) {
-      e.stopPropagation();
-      selectedMode = item.getAttribute('data-mode');
-      kbMenu.querySelectorAll('.kb-mode-item').forEach(function (i) { i.classList.remove('selected'); });
-      item.classList.add('selected');
-      kbMenu.classList.remove('show');
-    });
+
+  // === 模式下拉（独立） ===
+  var popupModeMenu = $('popup-mode-menu');
+  var modeBtn = $('btn-mode-select');
+
+  function positionModeMenu() {
+    var rect = modeBtn.getBoundingClientRect();
+    var menuH = popupModeMenu.offsetHeight;
+    var top = rect.top - menuH - 6;
+    if (top < 4) top = rect.bottom + 6;
+    popupModeMenu.style.left = rect.left + 'px';
+    popupModeMenu.style.top = top + 'px';
+  }
+
+  modeBtn.addEventListener('click', function (e) {
+    e.stopPropagation();
+    kbMenu.classList.remove('show');
+    var willShow = !popupModeMenu.classList.contains('show');
+    popupModeMenu.classList.toggle('show');
+    if (willShow) {
+      requestAnimationFrame(positionModeMenu);
+    }
+  });
+
+  popupModeMenu.addEventListener('click', function (e) {
+    e.stopPropagation();
   });
 
   // 点击其他地方关闭下拉
   document.addEventListener('click', function () {
     kbMenu.classList.remove('show');
+    popupModeMenu.classList.remove('show');
     if (moreMenu) moreMenu.classList.remove('show');
   });
 
@@ -586,61 +927,186 @@
 
   function renderMarkdown(text) {
     if (!text) return '';
-    var html = text;
-    html = html.replace(/```(\w*)\n([\s\S]*?)```/g, function (_, lang, code) {
-      return '<pre><code>' + escapeHtml(code.replace(/\n$/, '')) + '</code></pre>';
+
+    // 1. 提取代码块，替换为占位符
+    var codeBlocks = [];
+    var processed = text.replace(/```(\w*)\n([\s\S]*?)```/g, function (_, lang, code) {
+      var idx = codeBlocks.length;
+      codeBlocks.push('<pre class="md-pre"><code>' + escapeHtml(code.replace(/\n$/, '')) + '</code></pre>');
+      return '\x00CODEBLOCK' + idx + '\x00';
     });
-    html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
-    html = html.replace(/((?:\|.+\|\n)+)/g, function (tableBlock) {
+
+    // 2. 提取行内代码
+    var inlineCodes = [];
+    processed = processed.replace(/`([^`]+)`/g, function (_, code) {
+      var idx = inlineCodes.length;
+      inlineCodes.push('<code class="md-code">' + escapeHtml(code) + '</code>');
+      return '\x00INLINE' + idx + '\x00';
+    });
+
+    // 3. 表格处理 — 提取为占位符
+    var tables = [];
+    processed = processed.replace(/((?:\|.+\|\n)+)/g, function (tableBlock) {
       var rows = tableBlock.trim().split('\n');
       if (rows.length < 2) return tableBlock;
-      var out = '<table>';
+      var out = '<table class="md-table">';
       rows.forEach(function (row, i) {
         if (/^\|[\s\-:|]+\|$/.test(row)) return;
         var tag = i === 0 ? 'th' : 'td';
         var cells = row.split('|').filter(function (c, ci, arr) { return ci > 0 && ci < arr.length - 1; });
         out += '<tr>';
-        cells.forEach(function (cell) { out += '<' + tag + '>' + cell.trim() + '</' + tag + '>'; });
+        cells.forEach(function (cell) {
+          out += '<' + tag + '>' + cell.trim() + '</' + tag + '>';
+        });
         out += '</tr>';
       });
       out += '</table>';
-      return out;
+      var idx = tables.length;
+      tables.push(out);
+      return '\n\x00TABLE' + idx + '\x00\n';
     });
-    var lines = html.split('\n');
-    var result = [];
-    var inList = false;
-    var listType = '';
-    for (var i = 0; i < lines.length; i++) {
+
+    // 4. 逐行解析为块元素
+    var lines = processed.split('\n');
+    var html = '';
+    var i = 0;
+
+    while (i < lines.length) {
       var line = lines[i];
-      if (line.indexOf('<pre>') !== -1 || line.indexOf('<table>') !== -1) {
-        if (inList) { result.push('</' + listType + '>'); inList = false; }
-        result.push(line); continue;
+
+      // 代码块占位符
+      var cbMatch = line.match(/^\x00CODEBLOCK(\d+)\x00$/);
+      if (cbMatch) {
+        html += codeBlocks[parseInt(cbMatch[1])];
+        i++; continue;
       }
-      if (/^####\s+(.+)/.test(line)) { if (inList) { result.push('</' + listType + '>'); inList = false; } result.push('<h4>' + RegExp.$1 + '</h4>'); continue; }
-      if (/^###\s+(.+)/.test(line)) { if (inList) { result.push('</' + listType + '>'); inList = false; } result.push('<h3>' + RegExp.$1 + '</h3>'); continue; }
-      if (/^##\s+(.+)/.test(line)) { if (inList) { result.push('</' + listType + '>'); inList = false; } result.push('<h2>' + RegExp.$1 + '</h2>'); continue; }
-      if (/^#\s+(.+)/.test(line)) { if (inList) { result.push('</' + listType + '>'); inList = false; } result.push('<h1>' + RegExp.$1 + '</h1>'); continue; }
-      if (/^---+$/.test(line.trim())) { if (inList) { result.push('</' + listType + '>'); inList = false; } result.push('<hr>'); continue; }
-      if (/^>\s*(.*)/.test(line)) { if (inList) { result.push('</' + listType + '>'); inList = false; } result.push('<blockquote>' + RegExp.$1 + '</blockquote>'); continue; }
-      if (/^[\-\*]\s+(.+)/.test(line)) {
-        if (!inList || listType !== 'ul') { if (inList) result.push('</' + listType + '>'); result.push('<ul>'); inList = true; listType = 'ul'; }
-        result.push('<li>' + RegExp.$1 + '</li>'); continue;
+
+      // 表格占位符
+      var tbMatch = line.match(/^\x00TABLE(\d+)\x00$/);
+      if (tbMatch) {
+        html += tables[parseInt(tbMatch[1])];
+        i++; continue;
       }
-      if (/^\d+\.\s+(.+)/.test(line)) {
-        if (!inList || listType !== 'ol') { if (inList) result.push('</' + listType + '>'); result.push('<ol>'); inList = true; listType = 'ol'; }
-        result.push('<li>' + RegExp.$1 + '</li>'); continue;
+
+      // 标题
+      if (/^(#{1,6})\s+(.+)/.test(line)) {
+        var level = RegExp.$1.length;
+        html += '<h' + level + ' class="md-h">' + inlineFormat(RegExp.$2) + '</h' + level + '>';
+        i++; continue;
       }
-      if (inList) { result.push('</' + listType + '>'); inList = false; }
-      if (line.trim() === '') continue;
-      result.push('<p>' + line + '</p>');
+
+      // 引用块
+      if (/^>\s*(.*)/.test(line)) {
+        var bqLines = [];
+        while (i < lines.length && /^>\s*(.*)/.test(lines[i])) {
+          bqLines.push(RegExp.$1);
+          i++;
+        }
+        html += '<blockquote class="md-bq">' + inlineFormat(bqLines.join('<br>')) + '</blockquote>';
+        continue;
+      }
+
+      // 无序列表
+      if (/^(\s*)[*\-]\s+(.+)/.test(line)) {
+        html += parseList(lines, i, 'ul');
+        while (i < lines.length && /^(\s*)[*\-]\s+/.test(lines[i])) i++;
+        continue;
+      }
+
+      // 有序列表
+      if (/^(\s*)\d+\.\s+(.+)/.test(line)) {
+        html += parseList(lines, i, 'ol');
+        while (i < lines.length && /^(\s*)\d+\.\s+/.test(lines[i])) i++;
+        continue;
+      }
+
+      // 水平线
+      if (/^[-*_]{3,}\s*$/.test(line.trim())) {
+        html += '<hr>';
+        i++; continue;
+      }
+
+      // 空行
+      if (line.trim() === '') {
+        i++; continue;
+      }
+
+      // 普通段落
+      var pLines = [];
+      while (i < lines.length) {
+        var pl = lines[i];
+        if (pl.trim() === '' || /^#{1,6}\s/.test(pl) || /^>\s/.test(pl) ||
+            /^(\s*)[*\-]\s+/.test(pl) || /^(\s*)\d+\.\s+/.test(pl) ||
+            /^\x00CODEBLOCK/.test(pl) || /^\x00TABLE/.test(pl) ||
+            /^[-*_]{3,}\s*$/.test(pl.trim())) break;
+        pLines.push(pl);
+        i++;
+      }
+      html += '<p class="md-p">' + inlineFormat(pLines.join('<br>')) + '</p>';
     }
-    if (inList) result.push('</' + listType + '>');
-    html = result.join('\n');
-    html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-    html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
-    html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1">');
-    html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
+
+    // 5. 恢复行内代码占位符
+    html = html.replace(/\x00INLINE(\d+)\x00/g, function (_, idx) {
+      return inlineCodes[parseInt(idx)];
+    });
+
     return html;
+
+    // --- 列表解析（支持嵌套）---
+    function parseList(allLines, startIdx, defaultType) {
+      var items = [];
+      var j = startIdx;
+      var baseIndent = -1;
+      var listTag = defaultType;
+      var re = listTag === 'ul' ? /^(\s*)[*\-]\s+(.+)/ : /^(\s*)\d+\.\s+(.+)/;
+
+      while (j < allLines.length) {
+        var m = allLines[j].match(re);
+        if (!m) break;
+        var indent = m[1].length;
+        if (baseIndent < 0) baseIndent = indent;
+        if (indent > baseIndent) {
+          var subStart = j;
+          while (j < allLines.length) {
+            var sm = allLines[j].match(re);
+            if (!sm || sm[1].length < indent) break;
+            j++;
+          }
+          var subHtml = parseList(allLines, subStart, listTag);
+          if (items.length > 0) {
+            items[items.length - 1] += subHtml;
+          }
+          continue;
+        }
+        if (indent < baseIndent) break;
+        items.push(inlineFormat(m[2]));
+        j++;
+      }
+
+      var out = '<' + listTag + ' class="md-list">';
+      for (var k = 0; k < items.length; k++) {
+        out += '<li>' + items[k] + '</li>';
+      }
+      out += '</' + listTag + '>';
+      return out;
+    }
+
+    // --- 行内格式化 ---
+    function inlineFormat(s) {
+      if (!s) return '';
+      // 图片（必须在链接之前）
+      s = s.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" style="max-width:100%;border-radius:6px;margin:4px 0;">');
+      // 链接
+      s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+      s = s.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>');
+      s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+      s = s.replace(/(?<!\*)\*([^\s*][^*]*?)\*(?!\*)/g, '<em>$1</em>');
+      s = s.replace(/~~(.+?)~~/g, '<del>$1</del>');
+      s = s.replace(/\x00INLINE(\d+)\x00/g, function (_, idx) {
+        return inlineCodes[parseInt(idx)];
+      });
+      return s;
+    }
   }
 
   // === Markdown 速记 ===
@@ -795,31 +1261,160 @@
     }
   });
 
-  // === 主页按钮 ===
-  $('btn-home').addEventListener('click', function () {
-    moreMenu.classList.remove('show');
-    // 打开 WeKnora 管理页面，弹窗保留
-    if (chrome && chrome.tabs) {
-      chrome.tabs.create({ url: chrome.runtime.getURL('weknora.html') });
+  $('btn-settings-close').addEventListener('click', function () {
+    $('settings-overlay').classList.remove('show');
+  });
+
+  // === 剪藏知识库选择 ===
+  var clipKbOverlay = $('clip-kb-overlay');
+
+  // 检查是否需要引导用户选择剪藏知识库
+  function checkClipKbSelection(kbList) {
+    chrome.storage.local.get(['clipKbId', 'clipKbName'], function (data) {
+      clipKbId = data.clipKbId || '';
+      clipKbName = data.clipKbName || '';
+
+      // 验证保存的 KB 是否仍存在
+      if (clipKbId) {
+        var found = kbList.some(function (kb) { return kb.id === clipKbId; });
+        if (!found) {
+          clipKbId = '';
+          clipKbName = '';
+          chrome.storage.local.remove(['clipKbId', 'clipKbName']);
+        }
+      }
+
+      // 更新设置面板显示
+      updateClipKbDisplay();
+
+      // 首次使用 — 引导选择
+      if (!clipKbId) {
+        showClipKbSelector(kbList);
+      }
+    });
+  }
+
+  function updateClipKbDisplay() {
+    var el = $('set-clip-kb');
+    if (el) {
+      el.textContent = clipKbName ? (clipKbName + ' ›') : '未选择 ›';
+    }
+  }
+
+  function showClipKbSelector(kbList) {
+    var list = kbList || popupAllKbs;
+    var listEl = $('clip-kb-list');
+    var emptyEl = $('clip-kb-empty');
+
+    if (!list || list.length === 0) {
+      listEl.style.display = 'none';
+      emptyEl.style.display = 'block';
     } else {
-      goPage('pg-login');
+      listEl.style.display = 'block';
+      emptyEl.style.display = 'none';
+      var html = '';
+      for (var i = 0; i < list.length; i++) {
+        var kb = list[i];
+        var selected = kb.id === clipKbId ? ' selected' : '';
+        html += '<div class="clip-kb-card' + selected + '" data-kb-id="' + kb.id + '" data-kb-name="' + escapeHtml(kb.name) + '">'
+          + '<div class="clip-kb-card-name">' + escapeHtml(kb.name) + '</div>'
+          + '<div class="clip-kb-card-desc">' + escapeHtml(kb.description || '暂无描述') + '</div>'
+          + '<div class="clip-kb-card-meta">' + (kb.document_count || 0) + ' 文档 · ' + (kb.chunk_count || 0) + ' 分段</div>'
+          + '</div>';
+      }
+      listEl.innerHTML = html;
+
+      // 点击选择
+      listEl.querySelectorAll('.clip-kb-card').forEach(function (card) {
+        card.addEventListener('click', function () {
+          clipKbId = card.getAttribute('data-kb-id');
+          clipKbName = card.getAttribute('data-kb-name');
+          chrome.storage.local.set({ clipKbId: clipKbId, clipKbName: clipKbName });
+          updateClipKbDisplay();
+          clipKbOverlay.classList.remove('show');
+          toast('已选择知识库: ' + clipKbName, 'success');
+        });
+      });
+    }
+
+    clipKbOverlay.classList.add('show');
+  }
+
+  // 设置面板中点击"剪藏知识库"
+  $('set-clip-kb-row').addEventListener('click', function () {
+    $('settings-overlay').classList.remove('show');
+    showClipKbSelector();
+  });
+
+  // 关闭按钮
+  $('clip-kb-close').addEventListener('click', function () {
+    clipKbOverlay.classList.remove('show');
+  });
+
+  // 背景点击关闭
+  clipKbOverlay.addEventListener('click', function (e) {
+    if (e.target === clipKbOverlay) {
+      clipKbOverlay.classList.remove('show');
     }
   });
 
-  // === 查看收藏按钮 ===
-  $('btn-clips').addEventListener('click', function () {
+  // "前往创建"按钮 — 打开 WeKnora 主站
+  $('clip-kb-goto').addEventListener('click', function () {
+    clipKbOverlay.classList.remove('show');
+    sendMsg({ type: 'GET_CONFIG' }).then(function (resp) {
+      if (resp && resp.success && resp.data && resp.data.baseUrl) {
+        var baseUrl = resp.data.baseUrl.replace(/\/api\/v1\/?$/, '');
+        if (chrome && chrome.tabs) {
+          chrome.tabs.create({ url: baseUrl });
+        }
+      } else {
+        toast('请先配置服务地址', 'error');
+      }
+    });
+  });
+
+  // === 打开对话面板（sidebar）===
+  $('btn-sidebar').addEventListener('click', function () {
     moreMenu.classList.remove('show');
     if (chrome && chrome.tabs) {
-      chrome.tabs.create({ url: chrome.runtime.getURL('clips.html') });
+      chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
+        if (tabs && tabs[0]) {
+          chrome.sidePanel.open({ tabId: tabs[0].id }).catch(function () {});
+        }
+        window.close();
+      });
     }
+  });
+
+  // === 打开笔记/知识库页面 ===
+  function openNotesPage() {
+    if (!currentUser || !chrome || !chrome.tabs) return;
+    if (currentUser.type === 'wk') {
+      // 自部署 WeKnora — 用配置的 baseUrl
+      sendMsg({ type: 'GET_CONFIG' }).then(function (resp) {
+        if (resp && resp.success && resp.data && resp.data.baseUrl) {
+          var url = resp.data.baseUrl.replace(/\/api\/v1\/?$/, '');
+          chrome.tabs.create({ url: url });
+        } else {
+          toast('请先配置服务地址', 'error');
+        }
+      });
+    } else {
+      // 知识助手官网用户
+      chrome.tabs.create({ url: 'https://weknora.weixin.qq.com' });
+    }
+  }
+
+  // === 查看笔记按钮 ===
+  $('btn-clips').addEventListener('click', function () {
+    moreMenu.classList.remove('show');
+    openNotesPage();
   });
 
   // === 最新内容卡片 — 查看全部 ===
   $('btn-latest-more').addEventListener('click', function (e) {
     e.stopPropagation();
-    if (chrome && chrome.tabs) {
-      chrome.tabs.create({ url: chrome.runtime.getURL('clips.html') });
-    }
+    openNotesPage();
   });
 
   // 点击最新内容卡片本身也打开列表页；双击翻转进入速记编辑
@@ -837,9 +1432,7 @@
         // 单击：延迟执行，等看有没有双击
         clickTimer = setTimeout(function () {
           clickTimer = null;
-          if (chrome && chrome.tabs) {
-            chrome.tabs.create({ url: chrome.runtime.getURL('clips.html') });
-          }
+          openNotesPage();
         }, 250);
       }
     });

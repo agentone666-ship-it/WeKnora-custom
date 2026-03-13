@@ -1,5 +1,94 @@
 // background.js — Service Worker
-// 存储管理 + 消息路由 + 右键菜单
+// 存储管理 + 消息路由 + 右键菜单 + API 通信
+
+// === WeKnora API Helper ===
+// 构建请求头：API Key 使用 X-API-Key header，Bearer token 使用 Authorization header
+async function buildHeaders(config) {
+  var headers = {
+    'Content-Type': 'application/json',
+    'X-Request-ID': Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
+  };
+  if (config.apiKey) {
+    // API Key (sk- 开头) 使用 X-API-Key header 进行租户级认证
+    headers['X-API-Key'] = config.apiKey;
+  }
+  if (config.bearerToken) {
+    // Bearer token (通过用户名密码登录获取) 使用 Authorization header
+    headers['Authorization'] = 'Bearer ' + config.bearerToken;
+  }
+  return headers;
+}
+
+async function apiRequest(method, path, body, options) {
+  var config = await getConfigData();
+  if (!config || !config.baseUrl) {
+    return { success: false, error: '未配置服务地址，请先在设置中配置' };
+  }
+  var baseUrl = config.baseUrl.replace(/\/+$/, '');
+  var url = baseUrl + path;
+  var headers = await buildHeaders(config);
+  try {
+    var fetchOpts = { method: method, headers: headers };
+    if (body && method !== 'GET') {
+      fetchOpts.body = JSON.stringify(body);
+    }
+    if (options && options.signal) {
+      fetchOpts.signal = options.signal;
+    }
+    var resp = await fetch(url, fetchOpts);
+    if (!resp.ok) {
+      var errText = '';
+      try { var errJson = await resp.json(); errText = errJson.error?.message || errJson.message || resp.statusText; } catch (e) { errText = resp.statusText; }
+      return { success: false, error: errText, status: resp.status };
+    }
+    var data = await resp.json();
+    return data;
+  } catch (err) {
+    return { success: false, error: err.message || '网络请求失败' };
+  }
+}
+
+// SSE streaming chat request — returns ReadableStream
+async function apiChatStream(path, body) {
+  var config = await getConfigData();
+  if (!config || !config.baseUrl) {
+    return { success: false, error: '未配置服务地址' };
+  }
+  var baseUrl = config.baseUrl.replace(/\/+$/, '');
+  var url = baseUrl + path;
+  var headers = await buildHeaders(config);
+  headers['Accept'] = 'text/event-stream';
+  try {
+    var resp = await fetch(url, {
+      method: 'POST',
+      headers: headers,
+      body: JSON.stringify(body),
+      cache: 'no-store'  // 避免浏览器缓存导致 SSE 流被缓冲
+    });
+    if (!resp.ok) {
+      var errText = '';
+      try { var errJson = await resp.json(); errText = errJson.error?.message || errJson.message || resp.statusText; } catch (e) { errText = resp.statusText; }
+      return { success: false, error: errText };
+    }
+    return { success: true, response: resp };
+  } catch (err) {
+    return { success: false, error: err.message || '网络请求失败' };
+  }
+}
+
+// 流式推送消息到 sidepanel / popup 等前端页面
+function notifyStream(msg) {
+  chrome.runtime.sendMessage(msg).catch(function () {});
+}
+
+// Helper to get raw config data
+async function getConfigData() {
+  var data = await chrome.storage.local.get('ka_config');
+  return data.ka_config || null;
+}
+
+// Session cache per tab for sidepanel chat
+var chatSessions = {};
 
 // === 右键菜单 ===
 // 防止并发注册
@@ -58,9 +147,9 @@ async function updateContextMenuTitle() {
   } else if (auth && auth.type === 'ka') {
     askTitle = '使用知识助理提问';
   }
-  try {
-    chrome.contextMenus.update('ka-ask-selection', { title: askTitle });
-  } catch (e) { /* 菜单还未创建时忽略 */ }
+  chrome.contextMenus.update('ka-ask-selection', { title: askTitle }, function () {
+    void chrome.runtime.lastError; // 菜单还未创建时静默忽略
+  });
 }
 
 chrome.contextMenus.onClicked.addListener(function (info, tab) {
@@ -182,6 +271,255 @@ async function handleMessage(msg, sender) {
       } catch (err) {
         return { success: false, error: err.message || '截图失败' };
       }
+
+    // === WeKnora API 相关 ===
+    case 'VALIDATE_CONFIG':
+      // API Key 没有专门的验证端点，通过调用知识库列表接口来验证连通性和认证
+      return apiRequest('GET', '/knowledge-bases');
+
+    case 'LOGIN': {
+      // 用户名密码登录，获取 Bearer token
+      var loginPayload = msg.payload || {};
+      var loginResp = await apiRequest('POST', '/auth/login', {
+        email: loginPayload.email,
+        password: loginPayload.password
+      });
+      // 如果登录成功，将 token 存入 config
+      if (loginResp && loginResp.success && loginResp.token) {
+        var curConfig = await getConfigData() || {};
+        curConfig.bearerToken = loginResp.token;
+        curConfig.refreshToken = loginResp.refresh_token;
+        await chrome.storage.local.set({ ka_config: curConfig });
+      }
+      return loginResp;
+    }
+
+    case 'LIST_KNOWLEDGE_BASES':
+      // agent_id 参数仅用于共享智能体（跨租户），本地/内置智能体不传
+      var agentFilter = (msg.payload && msg.payload.sharedAgentId) ? '?agent_id=' + msg.payload.sharedAgentId : '';
+      return apiRequest('GET', '/knowledge-bases' + agentFilter);
+
+    case 'LIST_AGENTS':
+      return apiRequest('GET', '/agents');
+
+    case 'CREATE_KNOWLEDGE_BASE':
+      return apiRequest('POST', '/knowledge-bases', msg.payload);
+
+    case 'CREATE_SESSION':
+      return apiRequest('POST', '/sessions', msg.payload || {});
+
+    case 'LIST_SESSIONS':
+      var p = msg.payload || {};
+      return apiRequest('GET', '/sessions?page=' + (p.page || 1) + '&page_size=' + (p.page_size || 20));
+
+    case 'CLEAR_SESSION_MESSAGES': {
+      var sid = (msg.payload || {}).sessionId;
+      if (!sid) return { success: false, error: '缺少 sessionId' };
+      return apiRequest('DELETE', '/sessions/' + sid + '/messages');
+    }
+
+    case 'CHAT_QUERY': {
+      // 真正的知识库问答 — 使用 SSE 流式输出
+      var payload = msg.payload || {};
+      var query = payload.query;
+      if (!query) return { success: false, error: '请输入问题' };
+
+      // 获取或创建会话
+      var sessionId = payload.sessionId;
+      if (!sessionId) {
+        var sessionResp = await apiRequest('POST', '/sessions', {});
+        if (sessionResp && sessionResp.success && sessionResp.data) {
+          sessionId = sessionResp.data.id;
+        } else if (sessionResp && sessionResp.id) {
+          sessionId = sessionResp.id;
+        }
+        if (!sessionId) {
+          return { success: false, error: '创建会话失败: ' + (sessionResp.error || '未知错误') };
+        }
+        await chrome.storage.local.set({ ka_current_session: sessionId });
+      }
+
+      // 确定使用知识库问答还是智能体问答
+      var kbIds = payload.knowledgeBaseIds || [];
+      var agentId = payload.agentId || '';
+      var useAgent = payload.agentEnabled || false;
+      var chatPath = useAgent
+        ? '/agent-chat/' + sessionId
+        : '/knowledge-chat/' + sessionId;
+
+      // 构建完整请求体，参考 CreateKnowledgeQARequest
+      var chatBody = { query: query };
+      if (kbIds.length > 0) {
+        chatBody.knowledge_base_ids = kbIds;
+      }
+      if (agentId) {
+        chatBody.agent_id = agentId;
+      }
+      if (useAgent) {
+        chatBody.agent_enabled = true;
+      }
+      if (payload.webSearchEnabled) {
+        chatBody.web_search_enabled = true;
+      }
+      if (payload.mentionedItems) {
+        chatBody.mentioned_items = payload.mentionedItems;
+      }
+      if (payload.images && payload.images.length > 0) {
+        chatBody.images = payload.images;
+      }
+
+      // 使用请求 ID 区分不同来源的流式推送
+      var chatRequestId = payload._requestId || (Date.now().toString(36) + Math.random().toString(36).slice(2, 6));
+
+      // SSE 流式请求
+      var streamResult = await apiChatStream(chatPath, chatBody);
+      if (!streamResult.success) {
+        return { success: false, error: streamResult.error };
+      }
+
+      // 读取 SSE 流，逐块推送到前端
+      try {
+        var reader = streamResult.response.body.getReader();
+        var decoder = new TextDecoder();
+        var fullText = '';
+        var buffer = '';
+
+        while (true) {
+          var readResult = await reader.read();
+          if (readResult.done) break;
+          buffer += decoder.decode(readResult.value, { stream: true });
+
+          // SSE 格式: "event: message\ndata: {json}\n\n"
+          // 按双换行分割完整事件块
+          var eventBlocks = buffer.split('\n\n');
+          buffer = eventBlocks.pop() || '';
+
+          for (var bi = 0; bi < eventBlocks.length; bi++) {
+            var block = eventBlocks[bi].trim();
+            if (!block) continue;
+
+            // 从事件块中提取 data 行
+            var dataLine = '';
+            var blockLines = block.split('\n');
+            for (var li = 0; li < blockLines.length; li++) {
+              var bline = blockLines[li];
+              if (bline.startsWith('data:')) {
+                dataLine = bline.substring(5).trim();
+              }
+            }
+            if (!dataLine || dataLine === '[DONE]') continue;
+
+            try {
+              var evt = JSON.parse(dataLine);
+              var responseType = evt.response_type || '';
+
+              // 根据 response_type 处理不同事件
+              if (responseType === 'answer') {
+                var chunk = evt.content || '';
+                if (chunk) {
+                  fullText += chunk;
+                  notifyStream({
+                    type: 'CHAT_STREAM_CHUNK',
+                    payload: { requestId: chatRequestId, sessionId: sessionId, responseType: 'answer', content: chunk, done: !!evt.done }
+                  });
+                }
+              } else if (responseType === 'thinking') {
+                notifyStream({
+                  type: 'CHAT_STREAM_CHUNK',
+                  payload: { requestId: chatRequestId, sessionId: sessionId, responseType: 'thinking', content: evt.content || '', eventId: evt.data && evt.data.event_id }
+                });
+              } else if (responseType === 'tool_call') {
+                notifyStream({
+                  type: 'CHAT_STREAM_CHUNK',
+                  payload: { requestId: chatRequestId, sessionId: sessionId, responseType: 'tool_call', content: evt.content || '', toolName: evt.data && evt.data.tool_name, eventId: evt.data && (evt.data.event_id || evt.data.tool_call_id) }
+                });
+              } else if (responseType === 'tool_result') {
+                notifyStream({
+                  type: 'CHAT_STREAM_CHUNK',
+                  payload: { requestId: chatRequestId, sessionId: sessionId, responseType: 'tool_result', content: evt.content || '', toolName: evt.data && evt.data.tool_name, eventId: evt.data && (evt.data.event_id || evt.data.tool_call_id), success: evt.data && evt.data.success }
+                });
+              } else if (responseType === 'references') {
+                var kRefs = evt.knowledge_references;
+                if (Array.isArray(kRefs) && kRefs.length > 0) {
+                  notifyStream({
+                    type: 'CHAT_STREAM_CHUNK',
+                    payload: { requestId: chatRequestId, sessionId: sessionId, responseType: 'references', references: kRefs }
+                  });
+                }
+              } else if (responseType === 'error') {
+                notifyStream({
+                  type: 'CHAT_STREAM_CHUNK',
+                  payload: { requestId: chatRequestId, sessionId: sessionId, responseType: 'error', content: evt.content || '请求出错' }
+                });
+              } else if (responseType === 'complete') {
+                notifyStream({
+                  type: 'CHAT_STREAM_CHUNK',
+                  payload: { requestId: chatRequestId, sessionId: sessionId, responseType: 'complete', done: true }
+                });
+              }
+              if (responseType === 'session_title') {
+                notifyStream({
+                  type: 'CHAT_STREAM_CHUNK',
+                  payload: { requestId: chatRequestId, sessionId: sessionId, responseType: 'session_title', content: evt.content || '' }
+                });
+              }
+              // agent_query 等事件静默忽略
+            } catch (e) {
+              // 非 JSON data 行，忽略
+            }
+          }
+        }
+
+        return { success: true, data: fullText || '未获取到回复内容', sessionId: sessionId, requestId: chatRequestId };
+      } catch (streamErr) {
+        return { success: false, error: '读取回复流失败: ' + streamErr.message };
+      }
+    }
+
+    case 'SAVE_CLIP_TO_KB': {
+      // 保存剪藏内容到知识库（作为手动知识条目）
+      var pl = msg.payload || {};
+      if (!pl.kbId || !pl.content) return { success: false, error: '缺少知识库 ID 或内容' };
+      var contentWithMeta = pl.content;
+      if (pl.url) {
+        contentWithMeta = '> 来源: ' + pl.url + '\n\n' + pl.content;
+      }
+      return apiRequest('POST', '/knowledge-bases/' + pl.kbId + '/knowledge/manual', {
+        title: pl.title || '快速笔记剪藏',
+        content: contentWithMeta,
+        status: 'publish'
+      });
+    }
+
+    case 'FETCH_FILE': {
+      // 通过 background 代理带认证头请求文件（图片等），返回 data URL
+      var filePath = (msg.payload || {}).filePath;
+      if (!filePath) return { success: false, error: '缺少 filePath' };
+      var cfg = await getConfigData();
+      if (!cfg || !cfg.baseUrl) return { success: false, error: '未配置服务地址' };
+      var fileBaseUrl = cfg.baseUrl.replace(/\/+$/, '').replace(/\/api\/v\d+$/, '');
+      var fileUrl = fileBaseUrl + '/files?file_path=' + encodeURIComponent(filePath);
+      var fileHeaders = await buildHeaders(cfg);
+      try {
+        var fileResp = await fetch(fileUrl, { method: 'GET', headers: fileHeaders });
+        if (!fileResp.ok) return { success: false, error: 'HTTP ' + fileResp.status };
+        var blob = await fileResp.blob();
+        // 转为 data URL 以便跨上下文传递
+        var reader2 = new FileReader();
+        var dataUrl = await new Promise(function (resolve, reject) {
+          reader2.onload = function () { resolve(reader2.result); };
+          reader2.onerror = function () { reject(new Error('FileReader error')); };
+          reader2.readAsDataURL(blob);
+        });
+        return { success: true, dataUrl: dataUrl };
+      } catch (err) {
+        return { success: false, error: err.message || '文件请求失败' };
+      }
+    }
+
+    case 'GET_USER_INFO':
+      return apiRequest('GET', '/auth/me');
+
     default:
       return { success: false, error: '未知消息类型' };
   }
