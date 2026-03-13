@@ -431,8 +431,9 @@ func (t *KnowledgeSearchTool) getKnowledgeBaseTypes(ctx context.Context, kbIDs [
 }
 
 // concurrentSearchByTargets executes hybrid search using pre-computed search targets.
-// Targets sharing the same embedding model are grouped so the query embedding is
-// computed only once per (model, query) pair, reducing redundant API calls.
+// Targets sharing the same underlying embedding model (identified by model name + endpoint)
+// are grouped so the query embedding is computed once per (model, query) pair, and all
+// full-KB targets in a group are combined into a single retrieval call.
 func (t *KnowledgeSearchTool) concurrentSearchByTargets(
 	ctx context.Context,
 	queries []string,
@@ -443,25 +444,17 @@ func (t *KnowledgeSearchTool) concurrentSearchByTargets(
 ) []*searchResultWithMeta {
 	// Batch-fetch KB records for embedding model grouping
 	kbIDs := searchTargets.GetAllKnowledgeBaseIDs()
-	kbMap := make(map[string]*types.KnowledgeBase)
+	var kbList []*types.KnowledgeBase
 	if kbs, err := t.knowledgeBaseService.GetKnowledgeBasesByIDsOnly(ctx, kbIDs); err == nil {
-		for _, kb := range kbs {
-			if kb != nil {
-				kbMap[kb.ID] = kb
-			}
-		}
+		kbList = kbs
 	}
 
-	type embGroupKey struct {
-		ModelID  string
-		TenantID uint64
-	}
-	groups := make(map[embGroupKey][]*types.SearchTarget)
+	// Resolve actual model identities (name + endpoint) for cross-tenant grouping
+	modelKeyMap := t.knowledgeBaseService.ResolveEmbeddingModelKeys(ctx, kbList)
+
+	groups := make(map[string][]*types.SearchTarget)
 	for _, st := range searchTargets {
-		var key embGroupKey
-		if kb, ok := kbMap[st.KnowledgeBaseID]; ok {
-			key = embGroupKey{ModelID: kb.EmbeddingModelID, TenantID: kb.TenantID}
-		}
+		key := modelKeyMap[st.KnowledgeBaseID]
 		groups[key] = append(groups[key], st)
 	}
 
@@ -471,17 +464,17 @@ func (t *KnowledgeSearchTool) concurrentSearchByTargets(
 
 	for _, query := range queries {
 		q := query
-		for gk, targets := range groups {
+		for modelKey, targets := range groups {
 			wg.Add(1)
-			go func(q string, gk embGroupKey, targets []*types.SearchTarget) {
+			go func(q string, modelKey string, targets []*types.SearchTarget) {
 				defer wg.Done()
 
 				// Compute embedding once for this (model, query) pair
 				var queryEmbedding []float32
-				if gk.ModelID != "" {
+				if modelKey != "" {
 					emb, err := t.knowledgeBaseService.GetQueryEmbedding(ctx, targets[0].KnowledgeBaseID, q)
 					if err != nil {
-						logger.Warnf(ctx, "[Tool][KnowledgeSearch] Failed to pre-compute embedding for model %s: %v", gk.ModelID, err)
+						logger.Warnf(ctx, "[Tool][KnowledgeSearch] Failed to pre-compute embedding for model %s: %v", modelKey, err)
 					} else {
 						queryEmbedding = emb
 					}
@@ -566,7 +559,7 @@ func (t *KnowledgeSearchTool) concurrentSearchByTargets(
 				}
 
 				innerWg.Wait()
-			}(q, gk, targets)
+			}(q, modelKey, targets)
 		}
 	}
 	wg.Wait()
