@@ -209,18 +209,11 @@ func logSearchScoreSample(ctx context.Context, action string, results []*types.S
 	}
 }
 
-// embeddingGroupKey groups search targets that share the same embedding model
-// so we only compute the query embedding once per distinct model.
-type embeddingGroupKey struct {
-	ModelID  string
-	TenantID uint64
-}
-
 // searchByTargets performs KB searches using pre-computed SearchTargets.
-// Targets sharing the same embedding model are grouped so the query embedding
-// is computed only once per model AND all full-KB targets in a group are
-// combined into a single retrieval call, reducing both embedding API calls and
-// database round-trips.
+// Targets sharing the same underlying embedding model (identified by model
+// name + endpoint, not just model ID) are grouped so the query embedding is
+// computed once per model AND all full-KB targets in a group are combined into
+// a single retrieval call, reducing both embedding API calls and DB round-trips.
 func (p *PluginSearch) searchByTargets(
 	ctx context.Context,
 	chatManage *types.ChatManage,
@@ -232,14 +225,16 @@ func (p *PluginSearch) searchByTargets(
 	queryText := strings.TrimSpace(chatManage.RewriteQuery)
 
 	// Batch-fetch KB records to determine embedding model grouping.
-	// On failure, all targets fall into a zero-key group and HybridSearch
+	// On failure, all targets fall into an empty-key group and HybridSearch
 	// computes the embedding per-KB (graceful degradation).
 	kbIDs := make([]string, 0, len(chatManage.SearchTargets))
 	for _, t := range chatManage.SearchTargets {
 		kbIDs = append(kbIDs, t.KnowledgeBaseID)
 	}
+	var kbList []*types.KnowledgeBase
 	kbMap := make(map[string]*types.KnowledgeBase)
 	if kbs, err := p.knowledgeBaseService.GetKnowledgeBasesByIDsOnly(ctx, kbIDs); err == nil {
+		kbList = kbs
 		for _, kb := range kbs {
 			if kb != nil {
 				kbMap[kb.ID] = kb
@@ -251,12 +246,13 @@ func (p *PluginSearch) searchByTargets(
 		})
 	}
 
-	groups := make(map[embeddingGroupKey][]*types.SearchTarget)
+	// Resolve actual model identities (name + endpoint) so that cross-tenant
+	// KBs backed by the same physical model share one embedding computation.
+	modelKeyMap := p.knowledgeBaseService.ResolveEmbeddingModelKeys(ctx, kbList)
+
+	groups := make(map[string][]*types.SearchTarget)
 	for _, t := range chatManage.SearchTargets {
-		var key embeddingGroupKey
-		if kb, ok := kbMap[t.KnowledgeBaseID]; ok {
-			key = embeddingGroupKey{ModelID: kb.EmbeddingModelID, TenantID: kb.TenantID}
-		}
+		key := modelKeyMap[t.KnowledgeBaseID] // empty string if unresolved
 		groups[key] = append(groups[key], t)
 	}
 
@@ -269,20 +265,20 @@ func (p *PluginSearch) searchByTargets(
 	var mu sync.Mutex
 	var results []*types.SearchResult
 
-	for gk, targets := range groups {
+	for modelKey, targets := range groups {
 		wg.Add(1)
-		go func(gk embeddingGroupKey, targets []*types.SearchTarget) {
+		go func(modelKey string, targets []*types.SearchTarget) {
 			defer wg.Done()
 
 			// Compute embedding once for this model group.
 			var queryEmbedding []float32
-			if gk.ModelID != "" {
+			if modelKey != "" {
 				emb, err := p.knowledgeBaseService.GetQueryEmbedding(ctx, targets[0].KnowledgeBaseID, queryText)
 				if err != nil {
 					pipelineWarn(ctx, "Search", "group_embed_error", map[string]interface{}{
-						"model_id": gk.ModelID,
-						"kb_id":    targets[0].KnowledgeBaseID,
-						"error":    err.Error(),
+						"model_key": modelKey,
+						"kb_id":     targets[0].KnowledgeBaseID,
+						"error":     err.Error(),
 					})
 				} else {
 					queryEmbedding = emb
@@ -302,7 +298,7 @@ func (p *PluginSearch) searchByTargets(
 			}
 
 			pipelineInfo(ctx, "Search", "group_plan", map[string]interface{}{
-				"model_id":           gk.ModelID,
+				"model_key":          modelKey,
 				"combined_kb_count":  len(fullKBIDs),
 				"individual_targets": len(knowledgeTargets),
 				"vector_len":         len(queryEmbedding),
@@ -353,7 +349,7 @@ func (p *PluginSearch) searchByTargets(
 			}
 
 			innerWg.Wait()
-		}(gk, targets)
+		}(modelKey, targets)
 	}
 
 	wg.Wait()

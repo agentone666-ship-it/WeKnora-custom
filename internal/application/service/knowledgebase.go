@@ -631,6 +631,44 @@ func (s *knowledgeBaseService) GetQueryEmbedding(ctx context.Context, kbID strin
 	return embeddingModel.Embed(ctx, queryText)
 }
 
+// ResolveEmbeddingModelKeys resolves embedding model IDs to their actual model
+// identity key (name + endpoint). KBs using the same underlying model across
+// different tenants will share the same key, enabling optimal grouping.
+func (s *knowledgeBaseService) ResolveEmbeddingModelKeys(ctx context.Context, kbs []*types.KnowledgeBase) map[string]string {
+	type modelRef struct {
+		ModelID  string
+		TenantID uint64
+	}
+
+	// Deduplicate model references
+	uniqueRefs := make(map[modelRef]struct{})
+	kbRefs := make(map[string]modelRef, len(kbs))
+	for _, kb := range kbs {
+		ref := modelRef{ModelID: kb.EmbeddingModelID, TenantID: kb.TenantID}
+		uniqueRefs[ref] = struct{}{}
+		kbRefs[kb.ID] = ref
+	}
+
+	// Resolve each unique (modelID, tenantID) to a model identity key
+	resolvedKeys := make(map[modelRef]string, len(uniqueRefs))
+	for ref := range uniqueRefs {
+		tenantCtx := context.WithValue(ctx, types.TenantIDContextKey, ref.TenantID)
+		model, err := s.modelService.GetModelByID(tenantCtx, ref.ModelID)
+		if err != nil || model == nil {
+			logger.Warnf(ctx, "ResolveEmbeddingModelKeys: cannot resolve model %s for tenant %d: %v", ref.ModelID, ref.TenantID, err)
+			resolvedKeys[ref] = ref.ModelID
+			continue
+		}
+		resolvedKeys[ref] = model.Name + "|" + model.Parameters.BaseURL
+	}
+
+	result := make(map[string]string, len(kbs))
+	for _, kb := range kbs {
+		result[kb.ID] = resolvedKeys[kbRefs[kb.ID]]
+	}
+	return result
+}
+
 // HybridSearch performs hybrid search, including vector retrieval and keyword retrieval.
 // When params.KnowledgeBaseIDs is set, those IDs are used for retrieval instead of `id`,
 // allowing a single call to span multiple KBs that share the same embedding model.

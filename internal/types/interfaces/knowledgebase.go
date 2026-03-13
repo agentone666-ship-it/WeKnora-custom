@@ -98,6 +98,12 @@ type KnowledgeBaseService interface {
 	// and reuse embeddings across multiple KBs that share the same model.
 	GetQueryEmbedding(ctx context.Context, kbID string, queryText string) ([]float32, error)
 
+	// ResolveEmbeddingModelKeys resolves embedding model IDs to their actual
+	// model identity key (name + endpoint). KBs using the same underlying model
+	// across different tenants will share the same key, enabling optimal grouping.
+	// Returns a map from KB ID to model identity key string.
+	ResolveEmbeddingModelKeys(ctx context.Context, kbs []*types.KnowledgeBase) map[string]string
+
 	// CopyKnowledgeBase copies a knowledge base
 	// Parameters:
 	//   - ctx: Context information
