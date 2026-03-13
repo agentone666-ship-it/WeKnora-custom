@@ -3,6 +3,7 @@ package middleware
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"slices"
@@ -190,16 +191,25 @@ func Auth(
 				types.TenantInfoContextKey, t,
 			)
 
-			// 通过 TenantID 关联查询用户
+			// 通过 TenantID 关联查询用户；找不到时构造系统虚拟用户，
+			// 确保所有依赖 UserContextKey 的下游 handler 正常工作。
 			user, err := userService.GetUserByTenantID(c.Request.Context(), tenantID)
-			if err == nil && user != nil {
-				c.Set(types.UserContextKey.String(), user)
-				c.Set(types.UserIDContextKey.String(), user.ID)
-				ctx = context.WithValue(
-					context.WithValue(ctx, types.UserContextKey, user),
-					types.UserIDContextKey, user.ID,
-				)
+			if err != nil || user == nil {
+				user = &types.User{
+					ID:       fmt.Sprintf("system-%d", tenantID),
+					Username: fmt.Sprintf("system-%d", tenantID),
+					Email:    fmt.Sprintf("system-%d@api-key.local", tenantID),
+					TenantID: tenantID,
+					IsActive: true,
+				}
+				log.Printf("No user found for tenant %d via API key, using synthetic system user %s", tenantID, user.ID)
 			}
+			c.Set(types.UserContextKey.String(), user)
+			c.Set(types.UserIDContextKey.String(), user.ID)
+			ctx = context.WithValue(
+				context.WithValue(ctx, types.UserContextKey, user),
+				types.UserIDContextKey, user.ID,
+			)
 
 			c.Request = c.Request.WithContext(ctx)
 			c.Next()
