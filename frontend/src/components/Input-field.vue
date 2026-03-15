@@ -2721,6 +2721,18 @@ const getImgSrc = (url: string) => {
     background: var(--td-brand-color);
     border-radius: 50%;
     display: block;
+    animation: stopBtnPulse 1.5s ease-in-out infinite;
+  }
+}
+
+@keyframes stopBtnPulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(0.75);
+    opacity: 0.6;
   }
 }
 

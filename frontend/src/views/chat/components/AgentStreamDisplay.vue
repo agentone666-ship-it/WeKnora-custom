@@ -298,24 +298,14 @@
       </div>
       </div>
     </template>
-    </div>
-
-    <!-- Loading Indicator -->
+    <!-- Loading Indicator (inside container so it scrolls into view) -->
     <div v-if="!isConversationDone && eventStream.length > 0" class="loading-indicator">
-      <!-- 方案1: 三个跳动的圆点 -->
-      <!-- <div class="loading-dots">
-        <span></span>
-        <span></span>
-        <span></span>
-      </div> -->
-      
-      <!-- 方案4: 打字机效果（注释掉，可替换使用） -->
       <div class="loading-typing">
         <span></span>
         <span></span>
         <span></span>
       </div>
-      
+    </div>
     </div>
   </div>
   <!-- 全局浮层：统一承载 Web/KB 的 hover 内容 -->
