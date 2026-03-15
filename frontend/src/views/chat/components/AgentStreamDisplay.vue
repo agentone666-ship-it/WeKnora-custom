@@ -145,6 +145,7 @@
     </div>
 
     <!-- Event Stream (non-tree mode: before answer starts, or answer events) -->
+    <div ref="streamingStepsContainer" class="streaming-steps-container" :class="{ 'streaming-steps-constrained': !hasAnswerStarted && !isConversationDone }">
     <template v-for="(event, index) in displayEvents" :key="getEventKey(event, index)">
       <div v-if="event && event.type" class="event-item" :class="{ 'event-answer': event.type === 'answer' }">
 
@@ -297,6 +298,7 @@
       </div>
       </div>
     </template>
+    </div>
 
     <!-- Loading Indicator -->
     <div v-if="!isConversationDone && eventStream.length > 0" class="loading-indicator">
@@ -472,6 +474,7 @@ const sanitizeForDisplay = (text: string): string => {
 
 // 根元素引用
 const rootElement = ref<HTMLElement | null>(null);
+const streamingStepsContainer = ref<HTMLElement | null>(null);
 
 // 图片预览状态
 const imagePreviewVisible = ref(false);
@@ -643,6 +646,13 @@ watch(eventStream, (stream) => {
           htmlEl.scrollTop = htmlEl.scrollHeight;
         }
       });
+    }
+    // Auto-scroll streaming steps container to bottom during streaming
+    if (!hasAnswerStarted.value && streamingStepsContainer.value) {
+      const el = streamingStepsContainer.value;
+      if (el.scrollHeight > el.clientHeight) {
+        el.scrollTop = el.scrollHeight;
+      }
     }
   });
 }, { immediate: true, deep: true });
@@ -1864,6 +1874,31 @@ const handleAddToKnowledge = (answerEvent: any) => {
   position: relative;
 }
 
+// Streaming steps container
+.streaming-steps-container {
+  &.streaming-steps-constrained {
+    max-height: 400px;
+    overflow-y: auto;
+
+    &::-webkit-scrollbar {
+      width: 4px;
+    }
+
+    &::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    &::-webkit-scrollbar-thumb {
+      background: var(--td-bg-color-component-disabled);
+      border-radius: 2px;
+
+      &:hover {
+        background: var(--td-text-color-placeholder);
+      }
+    }
+  }
+}
+
 // Event items (flat, no timeline)
 .event-item {
   position: relative;
@@ -1933,6 +1968,25 @@ const handleAddToKnowledge = (answerEvent: any) => {
   position: relative;
   padding-left: 12px; // indent for branch lines
   margin-top: 6px; // gap from root
+  max-height: 400px;
+  overflow-y: auto;
+
+  &::-webkit-scrollbar {
+    width: 4px;
+  }
+
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background: var(--td-bg-color-component-disabled);
+    border-radius: 2px;
+
+    &:hover {
+      background: var(--td-text-color-placeholder);
+    }
+  }
 }
 
 .tree-child {
@@ -1942,12 +1996,13 @@ const handleAddToKnowledge = (answerEvent: any) => {
   margin-bottom: 6px; // gap between children
 
   // vertical trunk line (continues for non-last children)
+  // bottom: -6px extends the line through the margin-bottom gap between siblings
   &::before {
     content: '';
     position: absolute;
     left: 0;
     top: 0;
-    bottom: 0;
+    bottom: -6px;
     width: 0;
     border-left: 1px dashed var(--td-component-stroke);
   }
