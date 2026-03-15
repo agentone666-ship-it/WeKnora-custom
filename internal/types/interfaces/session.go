@@ -67,6 +67,7 @@ type SessionService interface {
 		knowledgeBaseIDs []string,
 		knowledgeIDs []string,
 		imageURLs []string, imageDescription string, userMessageID string,
+		webSearchEnabled bool,
 	) error
 	// ClearContext clears the LLM context for a session
 	ClearContext(ctx context.Context, sessionID string) error

@@ -1371,6 +1371,7 @@ func (s *sessionService) AgentQA(
 	knowledgeBaseIDs []string,
 	knowledgeIDs []string,
 	imageURLs []string, imageDescription string, userMessageID string,
+	webSearchEnabled bool,
 ) error {
 	_ = userMessageID // reserved for future use (AgentQA pipeline differs from KnowledgeQA)
 	sessionID := session.ID
@@ -1421,7 +1422,7 @@ func (s *sessionService) AgentQA(
 		MaxIterations:               customAgent.Config.MaxIterations,
 		ReflectionEnabled:           customAgent.Config.ReflectionEnabled,
 		Temperature:                 customAgent.Config.Temperature,
-		WebSearchEnabled:            customAgent.Config.WebSearchEnabled,
+		WebSearchEnabled:            customAgent.Config.WebSearchEnabled && webSearchEnabled,
 		WebSearchMaxResults:         customAgent.Config.WebSearchMaxResults,
 		MultiTurnEnabled:            customAgent.Config.MultiTurnEnabled,
 		HistoryTurns:                customAgent.Config.HistoryTurns,

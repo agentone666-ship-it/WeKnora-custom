@@ -654,6 +654,7 @@ func (h *Handler) executeAgentModeQA(reqCtx *qaRequestContext) {
 			reqCtx.knowledgeIDs,
 			imageURLs, imageDescription,
 			reqCtx.userMessageID,
+			reqCtx.webSearchEnabled,
 		)
 		if err != nil {
 			logger.ErrorWithFields(streamCtx.asyncCtx, err, nil)
