@@ -175,3 +175,39 @@ export interface PlaceholdersResponse {
 export function getPlaceholders() {
   return get<{ data: PlaceholdersResponse }>('/api/v1/agents/placeholders');
 }
+
+// ===== IM渠道 =====
+
+export interface IMChannel {
+  id: string;
+  tenant_id?: number;
+  agent_id: string;
+  platform: 'wecom' | 'feishu';
+  name: string;
+  enabled: boolean;
+  mode: 'webhook' | 'websocket';
+  output_mode: 'stream' | 'full';
+  credentials: Record<string, any>;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export function listIMChannels(agentId: string) {
+  return get<{ data: IMChannel[] }>(`/api/v1/agents/${agentId}/im-channels`);
+}
+
+export function createIMChannel(agentId: string, data: Partial<IMChannel>) {
+  return post<{ data: IMChannel }>(`/api/v1/agents/${agentId}/im-channels`, data);
+}
+
+export function updateIMChannel(id: string, data: Partial<IMChannel>) {
+  return put<{ data: IMChannel }>(`/api/v1/im-channels/${id}`, data);
+}
+
+export function deleteIMChannel(id: string) {
+  return del<{ success: boolean }>(`/api/v1/im-channels/${id}`);
+}
+
+export function toggleIMChannel(id: string) {
+  return post<{ data: IMChannel }>(`/api/v1/im-channels/${id}/toggle`);
+}

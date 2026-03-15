@@ -138,6 +138,7 @@ func NewRouter(params RouterParams) *gin.Engine {
 		RegisterCustomAgentRoutes(v1, params.CustomAgentHandler)
 		RegisterSkillRoutes(v1, params.SkillHandler)
 		RegisterOrganizationRoutes(v1, params.OrganizationHandler)
+		RegisterIMChannelRoutes(v1, params.IMHandler)
 	}
 
 	return r
@@ -586,11 +587,26 @@ func RegisterOrganizationRoutes(r *gin.RouterGroup, orgHandler *handler.Organiza
 func RegisterIMRoutes(r *gin.Engine, imHandler *handler.IMHandler) {
 	im := r.Group("/api/v1/im")
 	{
-		// WeCom callback (supports both GET for URL verification and POST for message events)
-		im.GET("/callback/wecom", imHandler.WeComCallback)
-		im.POST("/callback/wecom", imHandler.WeComCallback)
-		// Feishu callback (POST for both URL verification challenge and message events)
-		im.POST("/callback/feishu", imHandler.FeishuCallback)
+		im.GET("/callback/:channel_id", imHandler.IMCallback)
+		im.POST("/callback/:channel_id", imHandler.IMCallback)
+	}
+}
+
+// RegisterIMChannelRoutes registers IM channel CRUD routes (requires authentication).
+func RegisterIMChannelRoutes(r *gin.RouterGroup, imHandler *handler.IMHandler) {
+	// Channel CRUD under agents
+	agentChannels := r.Group("/agents/:id/im-channels")
+	{
+		agentChannels.POST("", imHandler.CreateIMChannel)
+		agentChannels.GET("", imHandler.ListIMChannels)
+	}
+
+	// Channel operations by channel ID
+	channels := r.Group("/im-channels")
+	{
+		channels.PUT("/:id", imHandler.UpdateIMChannel)
+		channels.DELETE("/:id", imHandler.DeleteIMChannel)
+		channels.POST("/:id/toggle", imHandler.ToggleIMChannel)
 	}
 }
 
