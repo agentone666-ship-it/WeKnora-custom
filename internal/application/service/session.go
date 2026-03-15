@@ -513,18 +513,22 @@ func (s *sessionService) GenerateTitleAsync(
 // customAgent is optional - if provided, uses custom agent configuration for multiTurnEnabled and historyTurns
 func (s *sessionService) KnowledgeQA(
 	ctx context.Context,
-	session *types.Session,
-	query string,
-	knowledgeBaseIDs []string,
-	knowledgeIDs []string,
-	assistantMessageID string,
-	summaryModelID string,
-	webSearchEnabled bool,
+	req *types.QARequest,
 	eventBus *event.EventBus,
-	customAgent *types.CustomAgent,
-	enableMemory bool,
-	imageURLs []string, imageDescription string, userMessageID string,
 ) error {
+	// Unpack request fields for readability
+	session := req.Session
+	query := req.Query
+	knowledgeBaseIDs := req.KnowledgeBaseIDs
+	knowledgeIDs := req.KnowledgeIDs
+	assistantMessageID := req.AssistantMessageID
+	webSearchEnabled := req.WebSearchEnabled
+	customAgent := req.CustomAgent
+	enableMemory := req.EnableMemory
+	imageURLs := req.ImageURLs
+	imageDescription := req.ImageDescription
+	userMessageID := req.UserMessageID
+
 	logger.Infof(
 		ctx,
 		"Knowledge base question answering parameters, session ID: %s, query: %s, webSearchEnabled: %v, enableMemory: %v",
@@ -534,66 +538,16 @@ func (s *sessionService) KnowledgeQA(
 		enableMemory,
 	)
 
-	// Use custom agent's knowledge bases only if request didn't specify any
-	// When user explicitly @mentions a knowledge base or document, only search those
-	// If RetrieveKBOnlyWhenMentioned is enabled and no @ mentions, don't use KB at all
-	hasExplicitMention := len(knowledgeBaseIDs) > 0 || len(knowledgeIDs) > 0
-	if customAgent != nil {
-		logger.Infof(ctx, "KB resolution (quick-answer): hasExplicitMention=%v, RetrieveKBOnlyWhenMentioned=%v, KBSelectionMode=%s",
-			hasExplicitMention, customAgent.Config.RetrieveKBOnlyWhenMentioned, customAgent.Config.KBSelectionMode)
-	}
-	if hasExplicitMention {
-		logger.Infof(ctx, "Using request-specified targets (ignoring agent config): kbs=%v, docs=%v", knowledgeBaseIDs, knowledgeIDs)
-	} else if customAgent != nil && customAgent.Config.RetrieveKBOnlyWhenMentioned {
-		// User didn't mention any KB/file, and the setting requires explicit mention
-		knowledgeBaseIDs = nil
-		knowledgeIDs = nil
-		logger.Infof(ctx, "RetrieveKBOnlyWhenMentioned is enabled and no @ mention found, KB retrieval disabled for this request")
-	} else {
-		knowledgeBaseIDs = s.resolveKnowledgeBasesFromAgent(ctx, customAgent, session.TenantID)
+	// Resolve knowledge bases using shared helper
+	knowledgeBaseIDs, knowledgeIDs = s.resolveKnowledgeBases(ctx, req)
+
+	// Resolve chat model ID using shared helper
+	chatModelID, err := s.resolveChatModelID(ctx, req, knowledgeBaseIDs, knowledgeIDs)
+	if err != nil {
+		return err
 	}
 
-	// Determine chat model ID priority:
-	// 1. Request's summaryModelID (explicit override)
-	// 2. Custom agent's ModelID (agent configuration)
-	// 3. KB / session / system default model (legacy fallback)
-	var chatModelID string
-	if summaryModelID != "" {
-		if model, err := s.modelService.GetModelByID(ctx, summaryModelID); err == nil && model != nil {
-			chatModelID = summaryModelID
-			logger.Infof(ctx, "Using request's summary model override: %s", chatModelID)
-		} else {
-			logger.Warnf(ctx, "Request provided invalid summary model ID %s: %v, falling back", summaryModelID, err)
-		}
-	}
-	if chatModelID == "" && customAgent != nil && customAgent.Config.ModelID != "" {
-		chatModelID = customAgent.Config.ModelID
-		logger.Infof(ctx, "Using custom agent's model_id: %s", chatModelID)
-	}
-	if chatModelID == "" {
-		var err error
-		chatModelID, err = s.selectChatModelID(ctx, session, knowledgeBaseIDs, knowledgeIDs)
-		if err != nil {
-			return err
-		}
-	}
-
-	// Initialize default values from config.yaml
-	rewritePromptSystem := s.cfg.Conversation.RewritePromptSystem
-	rewritePromptUser := s.cfg.Conversation.RewritePromptUser
-	vectorThreshold := s.cfg.Conversation.VectorThreshold
-	keywordThreshold := s.cfg.Conversation.KeywordThreshold
-	embeddingTopK := s.cfg.Conversation.EmbeddingTopK
-	rerankTopK := s.cfg.Conversation.RerankTopK
-	rerankThreshold := s.cfg.Conversation.RerankThreshold
-	maxRounds := s.cfg.Conversation.MaxRounds
-	fallbackStrategy := types.FallbackStrategy(s.cfg.Conversation.FallbackStrategy)
-	fallbackResponse := s.cfg.Conversation.FallbackResponse
-	fallbackPrompt := s.cfg.Conversation.FallbackPrompt
-	enableRewrite := s.cfg.Conversation.EnableRewrite
-	enableQueryExpansion := s.cfg.Conversation.EnableQueryExpansion
-	rerankModelID := ""
-
+	// Initialize ChatManage defaults from config.yaml
 	summaryConfig := types.SummaryConfig{
 		Prompt:              s.cfg.Conversation.Summary.Prompt,
 		ContextTemplate:     s.cfg.Conversation.Summary.ContextTemplate,
@@ -602,106 +556,10 @@ func (s *sessionService) KnowledgeQA(
 		MaxCompletionTokens: s.cfg.Conversation.Summary.MaxCompletionTokens,
 		Thinking:            s.cfg.Conversation.Summary.Thinking,
 	}
-
-	// Set default fallback strategy if not set
+	fallbackStrategy := types.FallbackStrategy(s.cfg.Conversation.FallbackStrategy)
 	if fallbackStrategy == "" {
 		fallbackStrategy = types.FallbackStrategyFixed
 		logger.Infof(ctx, "Fallback strategy not set, using default: %v", fallbackStrategy)
-	}
-
-	// Apply custom agent configuration if provided
-	if customAgent != nil {
-		// Ensure defaults are set
-		customAgent.EnsureDefaults()
-
-		// Override system prompt
-		if customAgent.Config.SystemPrompt != "" {
-			summaryConfig.Prompt = customAgent.Config.SystemPrompt
-			logger.Infof(ctx, "Using custom agent's system_prompt")
-		}
-		// Override context template
-		if customAgent.Config.ContextTemplate != "" {
-			summaryConfig.ContextTemplate = customAgent.Config.ContextTemplate
-			logger.Infof(ctx, "Using custom agent's context_template")
-		}
-		// Override temperature
-		if customAgent.Config.Temperature > 0 {
-			summaryConfig.Temperature = customAgent.Config.Temperature
-			logger.Infof(ctx, "Using custom agent's temperature: %f", customAgent.Config.Temperature)
-		}
-		// Override max completion tokens
-		if customAgent.Config.MaxCompletionTokens > 0 {
-			summaryConfig.MaxCompletionTokens = customAgent.Config.MaxCompletionTokens
-			logger.Infof(ctx, "Using custom agent's max_completion_tokens: %d", customAgent.Config.MaxCompletionTokens)
-		}
-		// Override thinking mode from agent config
-		// Agent-level thinking setting takes full control (no global fallback)
-		summaryConfig.Thinking = customAgent.Config.Thinking
-		if customAgent.Config.Thinking != nil {
-			logger.Infof(ctx, "Using custom agent's thinking: %v", *customAgent.Config.Thinking)
-		}
-		// Override retrieval strategy settings
-		if customAgent.Config.EmbeddingTopK > 0 {
-			embeddingTopK = customAgent.Config.EmbeddingTopK
-		}
-		if customAgent.Config.KeywordThreshold > 0 {
-			keywordThreshold = customAgent.Config.KeywordThreshold
-		}
-		if customAgent.Config.VectorThreshold > 0 {
-			vectorThreshold = customAgent.Config.VectorThreshold
-		}
-		if customAgent.Config.RerankTopK > 0 {
-			rerankTopK = customAgent.Config.RerankTopK
-		}
-		if customAgent.Config.RerankThreshold > 0 {
-			rerankThreshold = customAgent.Config.RerankThreshold
-		}
-		if customAgent.Config.RerankModelID != "" {
-			rerankModelID = customAgent.Config.RerankModelID
-		}
-		// Override rewrite settings
-		enableRewrite = customAgent.Config.EnableRewrite
-		enableQueryExpansion = customAgent.Config.EnableQueryExpansion
-		if customAgent.Config.RewritePromptSystem != "" {
-			rewritePromptSystem = customAgent.Config.RewritePromptSystem
-		}
-		if customAgent.Config.RewritePromptUser != "" {
-			rewritePromptUser = customAgent.Config.RewritePromptUser
-		}
-		// Override fallback settings
-		if customAgent.Config.FallbackStrategy != "" {
-			fallbackStrategy = types.FallbackStrategy(customAgent.Config.FallbackStrategy)
-		}
-		if customAgent.Config.FallbackResponse != "" {
-			fallbackResponse = customAgent.Config.FallbackResponse
-		}
-		if customAgent.Config.FallbackPrompt != "" {
-			fallbackPrompt = customAgent.Config.FallbackPrompt
-		}
-		// Override history turns
-		if customAgent.Config.HistoryTurns > 0 {
-			maxRounds = customAgent.Config.HistoryTurns
-			logger.Infof(ctx, "Using custom agent's history_turns: %d", maxRounds)
-		}
-		// Check if multi-turn is disabled
-		if !customAgent.Config.MultiTurnEnabled {
-			maxRounds = 0 // Disable history
-			logger.Infof(ctx, "Multi-turn disabled by custom agent, clearing history")
-		}
-	}
-
-	// Extract FAQ strategy settings from custom agent
-	var faqPriorityEnabled bool
-	var faqDirectAnswerThreshold float64
-	var faqScoreBoost float64
-	if customAgent != nil {
-		faqPriorityEnabled = customAgent.Config.FAQPriorityEnabled
-		faqDirectAnswerThreshold = customAgent.Config.FAQDirectAnswerThreshold
-		faqScoreBoost = customAgent.Config.FAQScoreBoost
-		if faqPriorityEnabled {
-			logger.Infof(ctx, "FAQ priority enabled: threshold=%.2f, boost=%.2f",
-				faqDirectAnswerThreshold, faqScoreBoost)
-		}
 	}
 
 	// Resolve chat model vision capability and VLM model ID for image routing
@@ -716,17 +574,8 @@ func (s *sessionService) KnowledgeQA(
 		vlmModelID = customAgent.Config.VLMModelID
 	}
 
-	// Retrieval scope: when agent is set, use agent's tenant (own or shared); otherwise session tenant or context
-	retrievalTenantID := session.TenantID
-	if customAgent != nil && customAgent.TenantID != 0 {
-		retrievalTenantID = customAgent.TenantID
-		logger.Infof(ctx, "Using agent tenant %d for retrieval scope", retrievalTenantID)
-	} else if v := ctx.Value(types.TenantIDContextKey); v != nil {
-		if tid, ok := v.(uint64); ok && tid != 0 {
-			retrievalTenantID = tid
-			logger.Infof(ctx, "Using effective tenant %d for retrieval from context", retrievalTenantID)
-		}
-	}
+	// Resolve retrieval tenant scope using shared helper
+	retrievalTenantID := s.resolveRetrievalTenantID(ctx, req)
 
 	// Build unified search targets (computed once, used throughout pipeline)
 	searchTargets, err := s.buildSearchTargets(ctx, retrievalTenantID, knowledgeBaseIDs, knowledgeIDs)
@@ -752,34 +601,29 @@ func (s *sessionService) KnowledgeQA(
 		RewriteQuery:         query,
 		SessionID:            session.ID,
 		UserID:               userID,
-		MessageID:            assistantMessageID, // NEW: For event emission in pipeline
-		KnowledgeBaseIDs:     knowledgeBaseIDs,   // Multi-KB support
-		KnowledgeIDs:         knowledgeIDs,       // Specific knowledge (file) IDs
-		SearchTargets:        searchTargets,      // Pre-computed search targets
-		VectorThreshold:      vectorThreshold,
-		KeywordThreshold:     keywordThreshold,
-		EmbeddingTopK:        embeddingTopK,
-		RerankModelID:        rerankModelID,
-		RerankTopK:           rerankTopK,
-		RerankThreshold:      rerankThreshold,
-		MaxRounds:            maxRounds,
+		MessageID:            assistantMessageID,
+		KnowledgeBaseIDs:     knowledgeBaseIDs,
+		KnowledgeIDs:         knowledgeIDs,
+		SearchTargets:        searchTargets,
+		VectorThreshold:      s.cfg.Conversation.VectorThreshold,
+		KeywordThreshold:     s.cfg.Conversation.KeywordThreshold,
+		EmbeddingTopK:        s.cfg.Conversation.EmbeddingTopK,
+		RerankTopK:           s.cfg.Conversation.RerankTopK,
+		RerankThreshold:      s.cfg.Conversation.RerankThreshold,
+		MaxRounds:            s.cfg.Conversation.MaxRounds,
 		ChatModelID:          chatModelID,
 		SummaryConfig:        summaryConfig,
 		FallbackStrategy:     fallbackStrategy,
-		FallbackResponse:     fallbackResponse,
-		FallbackPrompt:       fallbackPrompt,
-		EventBus:             eventBus.AsEventBusInterface(), // NEW: For pipeline to emit events directly
+		FallbackResponse:     s.cfg.Conversation.FallbackResponse,
+		FallbackPrompt:       s.cfg.Conversation.FallbackPrompt,
+		EventBus:             eventBus.AsEventBusInterface(),
 		WebSearchEnabled:     webSearchEnabled,
-		EnableMemory:         enableMemory,      // Enable memory feature
-		TenantID:             retrievalTenantID, // Effective tenant for retrieval (shared agent = agent's tenant)
-		RewritePromptSystem:  rewritePromptSystem,
-		RewritePromptUser:    rewritePromptUser,
-		EnableRewrite:        enableRewrite,
-		EnableQueryExpansion: enableQueryExpansion,
-		// FAQ Strategy Settings
-		FAQPriorityEnabled:       faqPriorityEnabled,
-		FAQDirectAnswerThreshold: faqDirectAnswerThreshold,
-		FAQScoreBoost:            faqScoreBoost,
+		EnableMemory:         enableMemory,
+		TenantID:             retrievalTenantID,
+		RewritePromptSystem:  s.cfg.Conversation.RewritePromptSystem,
+		RewritePromptUser:    s.cfg.Conversation.RewritePromptUser,
+		EnableRewrite:        s.cfg.Conversation.EnableRewrite,
+		EnableQueryExpansion: s.cfg.Conversation.EnableQueryExpansion,
 		// Image support
 		UserMessageID:           userMessageID,
 		Images:                  imageURLs,
@@ -787,6 +631,10 @@ func (s *sessionService) KnowledgeQA(
 		VLMModelID:              vlmModelID,
 		ChatModelSupportsVision: chatModelSupportsVision,
 	}
+
+	// Apply custom agent overrides (system prompt, temperature, retrieval params,
+	// rewrite, fallback, FAQ strategy, history turns)
+	s.applyAgentOverridesToChatManage(ctx, customAgent, chatManage)
 
 	// Determine pipeline based on knowledge bases availability and web search setting
 	// If no knowledge bases are selected AND web search is disabled, use pure chat pipeline
@@ -803,8 +651,8 @@ func (s *sessionService) KnowledgeQA(
 		chatManage.UserContent = userContent
 
 		// Use chat_history_stream if multi-turn is enabled, otherwise use chat_stream
-		if maxRounds > 0 {
-			logger.Infof(ctx, "Multi-turn enabled with maxRounds=%d, using chat_history_stream pipeline", maxRounds)
+		if chatManage.MaxRounds > 0 {
+			logger.Infof(ctx, "Multi-turn enabled with maxRounds=%d, using chat_history_stream pipeline", chatManage.MaxRounds)
 			pipeline = types.Pipline["chat_history_stream"]
 		} else {
 			logger.Info(ctx, "Multi-turn disabled, using chat_stream pipeline")
@@ -1362,17 +1210,19 @@ func (s *sessionService) SearchKnowledge(ctx context.Context,
 // summaryModelID is optional - if provided, overrides the model from customAgent config
 func (s *sessionService) AgentQA(
 	ctx context.Context,
-	session *types.Session,
-	query string,
-	assistantMessageID string,
-	summaryModelID string,
+	req *types.QARequest,
 	eventBus *event.EventBus,
-	customAgent *types.CustomAgent,
-	knowledgeBaseIDs []string,
-	knowledgeIDs []string,
-	imageURLs []string, imageDescription string, userMessageID string,
-	webSearchEnabled bool,
 ) error {
+	// Unpack request fields for readability
+	session := req.Session
+	query := req.Query
+	assistantMessageID := req.AssistantMessageID
+	customAgent := req.CustomAgent
+	imageURLs := req.ImageURLs
+	imageDescription := req.ImageDescription
+	userMessageID := req.UserMessageID
+	webSearchEnabled := req.WebSearchEnabled
+
 	_ = userMessageID // reserved for future use (AgentQA pipeline differs from KnowledgeQA)
 	sessionID := session.ID
 	sessionJSON, err := json.Marshal(session)
@@ -1387,11 +1237,8 @@ func (s *sessionService) AgentQA(
 		return errors.New("custom agent configuration is required for agent QA")
 	}
 
-	// Use agent's tenant for retrieval and tenant-scoped config (handler has validated access)
-	agentTenantID := customAgent.TenantID
-	if agentTenantID == 0 {
-		agentTenantID = session.TenantID
-	}
+	// Resolve retrieval tenant using shared helper
+	agentTenantID := s.resolveRetrievalTenantID(ctx, req)
 	logger.Infof(ctx, "Start agent-based question answering, session ID: %s, agent tenant ID: %d, query: %s, session: %s",
 		sessionID, agentTenantID, query, string(sessionJSON))
 
@@ -1435,30 +1282,8 @@ func (s *sessionService) AgentQA(
 	// Configure skills based on CustomAgentConfig
 	s.configureSkillsFromAgent(ctx, agentConfig, customAgent)
 
-	// Resolve knowledge bases: request-level @ mentions take priority over agent config
-	// If RetrieveKBOnlyWhenMentioned is enabled and no @ mentions, don't use KB at all
-	hasExplicitMention := len(knowledgeBaseIDs) > 0 || len(knowledgeIDs) > 0
-	logger.Infof(ctx, "KB resolution: hasExplicitMention=%v, RetrieveKBOnlyWhenMentioned=%v, KBSelectionMode=%s",
-		hasExplicitMention, agentConfig.RetrieveKBOnlyWhenMentioned, customAgent.Config.KBSelectionMode)
-	if hasExplicitMention {
-		// User explicitly specified via @ mention
-		if len(knowledgeBaseIDs) > 0 {
-			agentConfig.KnowledgeBases = knowledgeBaseIDs
-			logger.Infof(ctx, "Using request-specified knowledge bases: %v", knowledgeBaseIDs)
-		}
-		if len(knowledgeIDs) > 0 {
-			agentConfig.KnowledgeIDs = knowledgeIDs
-			logger.Infof(ctx, "Using request-specified knowledge IDs: %v", knowledgeIDs)
-		}
-	} else if agentConfig.RetrieveKBOnlyWhenMentioned {
-		// User didn't mention any KB/file, and the setting requires explicit mention
-		agentConfig.KnowledgeBases = nil
-		agentConfig.KnowledgeIDs = nil
-		logger.Infof(ctx, "RetrieveKBOnlyWhenMentioned is enabled and no @ mention found, KB retrieval disabled for this request")
-	} else {
-		// Use agent's configured knowledge bases based on KBSelectionMode
-		agentConfig.KnowledgeBases = s.resolveKnowledgeBasesFromAgent(ctx, customAgent, session.TenantID)
-	}
+	// Resolve knowledge bases using shared helper
+	agentConfig.KnowledgeBases, agentConfig.KnowledgeIDs = s.resolveKnowledgeBases(ctx, req)
 
 	// Use custom agent's allowed tools if specified, otherwise use defaults
 	if len(customAgent.Config.AllowedTools) > 0 {
@@ -1504,20 +1329,14 @@ func (s *sessionService) AgentQA(
 	agentConfig.SearchTargets = searchTargets
 	logger.Infof(ctx, "Agent search targets built: %d targets", len(searchTargets))
 
-	// Get summary model: prioritize request's summaryModelID, then custom agent config
-	// Note: tenantInfo.ConversationConfig is deprecated, all config comes from customAgent now
-	effectiveModelID := summaryModelID
-	if effectiveModelID == "" {
-		effectiveModelID = customAgent.Config.ModelID
+	// Resolve model ID using shared helper (AgentQA requires a model, so error if not found)
+	effectiveModelID, err := s.resolveChatModelID(ctx, req, agentConfig.KnowledgeBases, agentConfig.KnowledgeIDs)
+	if err != nil {
+		return err
 	}
 	if effectiveModelID == "" {
 		logger.Warnf(ctx, "No summary model configured for custom agent %s", customAgent.ID)
 		return errors.New("summary model (model_id) is not configured in custom agent settings")
-	}
-	if summaryModelID != "" {
-		logger.Infof(ctx, "Using request's summary model override: %s", effectiveModelID)
-	} else {
-		logger.Infof(ctx, "Using custom agent's model_id: %s", effectiveModelID)
 	}
 
 	summaryModel, err := s.modelService.GetChatModel(ctx, effectiveModelID)
@@ -1843,5 +1662,191 @@ func (s *sessionService) emitFallbackAnswer(ctx context.Context, chatManage *typ
 		logger.Errorf(ctx, "Failed to emit fallback answer event: %v", err)
 	} else {
 		logger.Infof(ctx, "Fallback answer event emitted successfully")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Shared QA helpers: KB resolution, model resolution, retrieval tenant
+// ---------------------------------------------------------------------------
+
+// resolveKnowledgeBases resolves the effective knowledge base IDs and knowledge IDs
+// for a QA request. Priority:
+//  1. Explicit @mentions (request-specified kbIDs / knowledgeIDs)
+//  2. RetrieveKBOnlyWhenMentioned → disable KB if no mention
+//  3. Agent's configured knowledge bases (via KBSelectionMode)
+func (s *sessionService) resolveKnowledgeBases(
+	ctx context.Context,
+	req *types.QARequest,
+) (kbIDs []string, knowledgeIDs []string) {
+	kbIDs = req.KnowledgeBaseIDs
+	knowledgeIDs = req.KnowledgeIDs
+	customAgent := req.CustomAgent
+
+	hasExplicitMention := len(kbIDs) > 0 || len(knowledgeIDs) > 0
+	if customAgent != nil {
+		logger.Infof(ctx, "KB resolution: hasExplicitMention=%v, RetrieveKBOnlyWhenMentioned=%v, KBSelectionMode=%s",
+			hasExplicitMention, customAgent.Config.RetrieveKBOnlyWhenMentioned, customAgent.Config.KBSelectionMode)
+	}
+
+	if hasExplicitMention {
+		logger.Infof(ctx, "Using request-specified targets: kbs=%v, docs=%v", kbIDs, knowledgeIDs)
+	} else if customAgent != nil && customAgent.Config.RetrieveKBOnlyWhenMentioned {
+		kbIDs = nil
+		knowledgeIDs = nil
+		logger.Infof(ctx, "RetrieveKBOnlyWhenMentioned is enabled and no @ mention found, KB retrieval disabled for this request")
+	} else if customAgent != nil {
+		kbIDs = s.resolveKnowledgeBasesFromAgent(ctx, customAgent, req.Session.TenantID)
+	}
+	return kbIDs, knowledgeIDs
+}
+
+// resolveChatModelID resolves the effective chat model ID for a QA request.
+// Priority:
+//  1. Request's SummaryModelID (explicit override, validated)
+//  2. Custom agent's ModelID
+//  3. KB / session / system default (via selectChatModelID)
+func (s *sessionService) resolveChatModelID(
+	ctx context.Context,
+	req *types.QARequest,
+	knowledgeBaseIDs []string,
+	knowledgeIDs []string,
+) (string, error) {
+	summaryModelID := req.SummaryModelID
+	customAgent := req.CustomAgent
+	session := req.Session
+
+	if summaryModelID != "" {
+		if model, err := s.modelService.GetModelByID(ctx, summaryModelID); err == nil && model != nil {
+			logger.Infof(ctx, "Using request's summary model override: %s", summaryModelID)
+			return summaryModelID, nil
+		}
+		logger.Warnf(ctx, "Request provided invalid summary model ID %s, falling back", summaryModelID)
+	}
+	if customAgent != nil && customAgent.Config.ModelID != "" {
+		logger.Infof(ctx, "Using custom agent's model_id: %s", customAgent.Config.ModelID)
+		return customAgent.Config.ModelID, nil
+	}
+	return s.selectChatModelID(ctx, session, knowledgeBaseIDs, knowledgeIDs)
+}
+
+// resolveRetrievalTenantID determines the tenant ID to use for retrieval scope.
+// Priority: agent's tenant > context tenant > session tenant.
+func (s *sessionService) resolveRetrievalTenantID(
+	ctx context.Context,
+	req *types.QARequest,
+) uint64 {
+	session := req.Session
+	customAgent := req.CustomAgent
+
+	retrievalTenantID := session.TenantID
+	if customAgent != nil && customAgent.TenantID != 0 {
+		retrievalTenantID = customAgent.TenantID
+		logger.Infof(ctx, "Using agent tenant %d for retrieval scope", retrievalTenantID)
+	} else if v := ctx.Value(types.TenantIDContextKey); v != nil {
+		if tid, ok := v.(uint64); ok && tid != 0 {
+			retrievalTenantID = tid
+			logger.Infof(ctx, "Using effective tenant %d for retrieval from context", retrievalTenantID)
+		}
+	}
+	return retrievalTenantID
+}
+
+// applyAgentOverridesToChatManage applies custom agent configuration overrides
+// to a ChatManage object that was initialized with system defaults.
+// This covers: system prompt, context template, temperature, max tokens, thinking,
+// retrieval thresholds, rewrite settings, fallback settings, FAQ strategy, and history turns.
+func (s *sessionService) applyAgentOverridesToChatManage(
+	ctx context.Context,
+	customAgent *types.CustomAgent,
+	cm *types.ChatManage,
+) {
+	if customAgent == nil {
+		return
+	}
+
+	// Ensure defaults are set
+	customAgent.EnsureDefaults()
+
+	// Override summary config fields
+	if customAgent.Config.SystemPrompt != "" {
+		cm.SummaryConfig.Prompt = customAgent.Config.SystemPrompt
+		logger.Infof(ctx, "Using custom agent's system_prompt")
+	}
+	if customAgent.Config.ContextTemplate != "" {
+		cm.SummaryConfig.ContextTemplate = customAgent.Config.ContextTemplate
+		logger.Infof(ctx, "Using custom agent's context_template")
+	}
+	if customAgent.Config.Temperature > 0 {
+		cm.SummaryConfig.Temperature = customAgent.Config.Temperature
+		logger.Infof(ctx, "Using custom agent's temperature: %f", customAgent.Config.Temperature)
+	}
+	if customAgent.Config.MaxCompletionTokens > 0 {
+		cm.SummaryConfig.MaxCompletionTokens = customAgent.Config.MaxCompletionTokens
+		logger.Infof(ctx, "Using custom agent's max_completion_tokens: %d", customAgent.Config.MaxCompletionTokens)
+	}
+	// Agent-level thinking setting takes full control (no global fallback)
+	cm.SummaryConfig.Thinking = customAgent.Config.Thinking
+	if customAgent.Config.Thinking != nil {
+		logger.Infof(ctx, "Using custom agent's thinking: %v", *customAgent.Config.Thinking)
+	}
+
+	// Override retrieval strategy settings
+	if customAgent.Config.EmbeddingTopK > 0 {
+		cm.EmbeddingTopK = customAgent.Config.EmbeddingTopK
+	}
+	if customAgent.Config.KeywordThreshold > 0 {
+		cm.KeywordThreshold = customAgent.Config.KeywordThreshold
+	}
+	if customAgent.Config.VectorThreshold > 0 {
+		cm.VectorThreshold = customAgent.Config.VectorThreshold
+	}
+	if customAgent.Config.RerankTopK > 0 {
+		cm.RerankTopK = customAgent.Config.RerankTopK
+	}
+	if customAgent.Config.RerankThreshold > 0 {
+		cm.RerankThreshold = customAgent.Config.RerankThreshold
+	}
+	if customAgent.Config.RerankModelID != "" {
+		cm.RerankModelID = customAgent.Config.RerankModelID
+	}
+
+	// Override rewrite settings
+	cm.EnableRewrite = customAgent.Config.EnableRewrite
+	cm.EnableQueryExpansion = customAgent.Config.EnableQueryExpansion
+	if customAgent.Config.RewritePromptSystem != "" {
+		cm.RewritePromptSystem = customAgent.Config.RewritePromptSystem
+	}
+	if customAgent.Config.RewritePromptUser != "" {
+		cm.RewritePromptUser = customAgent.Config.RewritePromptUser
+	}
+
+	// Override fallback settings
+	if customAgent.Config.FallbackStrategy != "" {
+		cm.FallbackStrategy = types.FallbackStrategy(customAgent.Config.FallbackStrategy)
+	}
+	if customAgent.Config.FallbackResponse != "" {
+		cm.FallbackResponse = customAgent.Config.FallbackResponse
+	}
+	if customAgent.Config.FallbackPrompt != "" {
+		cm.FallbackPrompt = customAgent.Config.FallbackPrompt
+	}
+
+	// Override history turns
+	if customAgent.Config.HistoryTurns > 0 {
+		cm.MaxRounds = customAgent.Config.HistoryTurns
+		logger.Infof(ctx, "Using custom agent's history_turns: %d", cm.MaxRounds)
+	}
+	if !customAgent.Config.MultiTurnEnabled {
+		cm.MaxRounds = 0
+		logger.Infof(ctx, "Multi-turn disabled by custom agent, clearing history")
+	}
+
+	// FAQ strategy settings
+	cm.FAQPriorityEnabled = customAgent.Config.FAQPriorityEnabled
+	cm.FAQDirectAnswerThreshold = customAgent.Config.FAQDirectAnswerThreshold
+	cm.FAQScoreBoost = customAgent.Config.FAQScoreBoost
+	if cm.FAQPriorityEnabled {
+		logger.Infof(ctx, "FAQ priority enabled: threshold=%.2f, boost=%.2f",
+			cm.FAQDirectAnswerThreshold, cm.FAQScoreBoost)
 	}
 }
