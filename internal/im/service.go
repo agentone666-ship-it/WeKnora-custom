@@ -2,7 +2,7 @@ package im
 
 import (
 	"context"
-"fmt"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -63,6 +63,24 @@ type Service struct {
 	processedMsgs sync.Map
 
 	stopCh chan struct{}
+}
+
+func buildIMQARequest(
+	session *types.Session,
+	query string,
+	assistantMessageID string,
+	userMessageID string,
+	customAgent *types.CustomAgent,
+	kbIDs []string,
+) *types.QARequest {
+	return &types.QARequest{
+		Session:            session,
+		Query:              query,
+		AssistantMessageID: assistantMessageID,
+		CustomAgent:        customAgent,
+		KnowledgeBaseIDs:   kbIDs,
+		UserMessageID:      userMessageID,
+	}
 }
 
 // NewService creates a new IM service.
@@ -479,10 +497,11 @@ func (s *Service) handleMessageStream(ctx context.Context, msg *IncomingMessage,
 	requestID := uuid.New().String()
 
 	// Create user message
-	if _, err := s.messageService.CreateMessage(qaCtx, &types.Message{
+	userMsg, err := s.messageService.CreateMessage(qaCtx, &types.Message{
 		SessionID: session.ID, Role: "user", Content: msg.Content,
 		RequestID: requestID, CreatedAt: time.Now(), IsCompleted: true,
-	}); err != nil {
+	})
+	if err != nil {
 		return fmt.Errorf("create user message: %w", err)
 	}
 
@@ -498,10 +517,11 @@ func (s *Service) handleMessageStream(ctx context.Context, msg *IncomingMessage,
 	// Run QA async
 	go func() {
 		var err error
+		req := buildIMQARequest(session, msg.Content, assistantMsg.ID, userMsg.ID, customAgent, kbIDs)
 		if useAgent {
-			err = s.sessionService.AgentQA(qaCtx, session, msg.Content, assistantMsg.ID, "", eventBus, customAgent, kbIDs, nil)
+			err = s.sessionService.AgentQA(qaCtx, req, eventBus)
 		} else {
-			err = s.sessionService.KnowledgeQA(qaCtx, session, msg.Content, kbIDs, nil, assistantMsg.ID, "", false, eventBus, customAgent, false)
+			err = s.sessionService.KnowledgeQA(qaCtx, req, eventBus)
 		}
 		if err != nil {
 			logger.Errorf(ctx, "[IM] QA stream execution error: %v", err)
@@ -644,7 +664,6 @@ func (s *Service) runQA(ctx context.Context, session *types.Session, query strin
 	if err != nil {
 		return "", fmt.Errorf("create user message: %w", err)
 	}
-	_ = userMsg
 
 	// Create a placeholder assistant message
 	assistantMsg, err := s.messageService.CreateMessage(ctx, &types.Message{
@@ -661,10 +680,11 @@ func (s *Service) runQA(ctx context.Context, session *types.Session, query strin
 	// Run QA async
 	go func() {
 		var err error
+		req := buildIMQARequest(session, query, assistantMsg.ID, userMsg.ID, customAgent, kbIDs)
 		if useAgent {
-			err = s.sessionService.AgentQA(ctx, session, query, assistantMsg.ID, "", eventBus, customAgent, kbIDs, nil)
+			err = s.sessionService.AgentQA(ctx, req, eventBus)
 		} else {
-			err = s.sessionService.KnowledgeQA(ctx, session, query, kbIDs, nil, assistantMsg.ID, "", false, eventBus, customAgent, false)
+			err = s.sessionService.KnowledgeQA(ctx, req, eventBus)
 		}
 		if err != nil {
 			logger.Errorf(ctx, "[IM] QA execution error: %v", err)
