@@ -38,6 +38,25 @@ type qaRequestContext struct {
 	userMessageID     string            // Created user message ID (populated after createUserMessage)
 }
 
+// buildQARequest converts the qaRequestContext into a types.QARequest for service invocation.
+func (rc *qaRequestContext) buildQARequest() *types.QARequest {
+	imageURLs, imageDescription := extractImageURLsAndOCRText(rc.images)
+	return &types.QARequest{
+		Session:            rc.session,
+		Query:              rc.query,
+		AssistantMessageID: rc.assistantMessage.ID,
+		SummaryModelID:     rc.summaryModelID,
+		CustomAgent:        rc.customAgent,
+		KnowledgeBaseIDs:   rc.knowledgeBaseIDs,
+		KnowledgeIDs:       rc.knowledgeIDs,
+		ImageURLs:          imageURLs,
+		ImageDescription:   imageDescription,
+		UserMessageID:      rc.userMessageID,
+		WebSearchEnabled:   rc.webSearchEnabled,
+		EnableMemory:       rc.enableMemory,
+	}
+}
+
 // parseQARequest parses and validates a QA request, returns the request context
 func (h *Handler) parseQARequest(c *gin.Context, logPrefix string) (*qaRequestContext, *CreateKnowledgeQARequest, error) {
 	ctx := logger.CloneContext(c.Request.Context())
@@ -77,75 +96,10 @@ func (h *Handler) parseQARequest(c *gin.Context, logPrefix string) (*qaRequestCo
 	}
 
 	// Get custom agent if agent_id is provided. Backend resolves shared agent from share relation (no client-provided tenant).
-	var customAgent *types.CustomAgent
-	var effectiveTenantID uint64
-	if request.AgentID != "" {
-		logger.Infof(ctx, "Resolving agent, agent ID: %s", secutils.SanitizeForLog(request.AgentID))
-		userIDVal, _ := c.Get(types.UserIDContextKey.String())
-		currentTenantID := c.GetUint64(types.TenantIDContextKey.String())
-		if h.agentShareService != nil && userIDVal != nil && currentTenantID != 0 {
-			userID, _ := userIDVal.(string)
-			agent, err := h.agentShareService.GetSharedAgentForUser(ctx, userID, currentTenantID, request.AgentID)
-			if err == nil && agent != nil {
-				effectiveTenantID = agent.TenantID
-				customAgent = agent
-				logger.Infof(ctx, "Using shared agent: ID=%s, Name=%s, effectiveTenantID=%d (retrieval scope)",
-					customAgent.ID, customAgent.Name, effectiveTenantID)
-			}
-		}
-		if customAgent == nil {
-			agent, err := h.customAgentService.GetAgentByID(ctx, request.AgentID)
-			if err == nil {
-				customAgent = agent
-				logger.Infof(ctx, "Using own agent: ID=%s, Name=%s, AgentMode=%s",
-					customAgent.ID, customAgent.Name, customAgent.Config.AgentMode)
-			} else {
-				logger.Warnf(ctx, "Failed to get custom agent, agent ID: %s, error: %v, using default config",
-					secutils.SanitizeForLog(request.AgentID), err)
-			}
-		} else {
-			logger.Infof(ctx, "Using custom agent: ID=%s, Name=%s, IsBuiltin=%v, AgentMode=%s, effectiveTenantID=%d",
-				customAgent.ID, customAgent.Name, customAgent.IsBuiltin, customAgent.Config.AgentMode, effectiveTenantID)
-		}
-	}
+	customAgent, effectiveTenantID := h.resolveAgent(ctx, c, request.AgentID)
 
-	// Merge @mentioned items into knowledge_base_ids and knowledge_ids so that
-	// retrieval (quick-answer and agent mode) uses the same targets the user @mentioned.
-	// This fixes the case where user only @mentions a (shared) KB in the input but
-	// does not select it in the sidebar — without this merge, retrieval would not search those KBs.
-	kbIDs := make([]string, 0, len(request.KnowledgeBaseIDs)+len(request.MentionedItems))
-	kbIDSet := make(map[string]bool)
-	for _, id := range request.KnowledgeBaseIDs {
-		if id != "" && !kbIDSet[id] {
-			kbIDs = append(kbIDs, id)
-			kbIDSet[id] = true
-		}
-	}
-	knowledgeIDs := make([]string, 0, len(request.KnowledgeIds)+len(request.MentionedItems))
-	knowledgeIDSet := make(map[string]bool)
-	for _, id := range request.KnowledgeIds {
-		if id != "" && !knowledgeIDSet[id] {
-			knowledgeIDs = append(knowledgeIDs, id)
-			knowledgeIDSet[id] = true
-		}
-	}
-	for _, item := range request.MentionedItems {
-		if item.ID == "" {
-			continue
-		}
-		switch item.Type {
-		case "kb":
-			if !kbIDSet[item.ID] {
-				kbIDs = append(kbIDs, item.ID)
-				kbIDSet[item.ID] = true
-			}
-		case "file":
-			if !knowledgeIDSet[item.ID] {
-				knowledgeIDs = append(knowledgeIDs, item.ID)
-				knowledgeIDSet[item.ID] = true
-			}
-		}
-	}
+	// Merge @mentioned items into knowledge_base_ids and knowledge_ids
+	kbIDs, knowledgeIDs := mergeKnowledgeTargets(request.KnowledgeBaseIDs, request.KnowledgeIds, request.MentionedItems)
 
 	// Log merge results for debugging
 	logger.Infof(ctx, "[%s] @mention merge: request.KnowledgeBaseIDs=%v, request.MentionedItems=%d, merged kbIDs=%v, merged knowledgeIDs=%v",
@@ -198,6 +152,90 @@ func (h *Handler) parseQARequest(c *gin.Context, logPrefix string) (*qaRequestCo
 	}
 
 	return reqCtx, &request, nil
+}
+
+// resolveAgent resolves the custom agent by ID, trying shared agent first, then own agent.
+// Returns (nil, 0) if agentID is empty or not found.
+func (h *Handler) resolveAgent(ctx context.Context, c *gin.Context, agentID string) (*types.CustomAgent, uint64) {
+	if agentID == "" {
+		return nil, 0
+	}
+
+	logger.Infof(ctx, "Resolving agent, agent ID: %s", secutils.SanitizeForLog(agentID))
+
+	// Try shared agent first
+	var customAgent *types.CustomAgent
+	var effectiveTenantID uint64
+	userIDVal, _ := c.Get(types.UserIDContextKey.String())
+	currentTenantID := c.GetUint64(types.TenantIDContextKey.String())
+	if h.agentShareService != nil && userIDVal != nil && currentTenantID != 0 {
+		userID, _ := userIDVal.(string)
+		agent, err := h.agentShareService.GetSharedAgentForUser(ctx, userID, currentTenantID, agentID)
+		if err == nil && agent != nil {
+			effectiveTenantID = agent.TenantID
+			customAgent = agent
+			logger.Infof(ctx, "Using shared agent: ID=%s, Name=%s, effectiveTenantID=%d (retrieval scope)",
+				customAgent.ID, customAgent.Name, effectiveTenantID)
+		}
+	}
+
+	// Fall back to own agent
+	if customAgent == nil {
+		agent, err := h.customAgentService.GetAgentByID(ctx, agentID)
+		if err == nil {
+			customAgent = agent
+			logger.Infof(ctx, "Using own agent: ID=%s, Name=%s, AgentMode=%s",
+				customAgent.ID, customAgent.Name, customAgent.Config.AgentMode)
+		} else {
+			logger.Warnf(ctx, "Failed to get custom agent, agent ID: %s, error: %v, using default config",
+				secutils.SanitizeForLog(agentID), err)
+		}
+	} else {
+		logger.Infof(ctx, "Using custom agent: ID=%s, Name=%s, IsBuiltin=%v, AgentMode=%s, effectiveTenantID=%d",
+			customAgent.ID, customAgent.Name, customAgent.IsBuiltin, customAgent.Config.AgentMode, effectiveTenantID)
+	}
+
+	return customAgent, effectiveTenantID
+}
+
+// mergeKnowledgeTargets merges request KB/knowledge IDs with @mentioned items into deduplicated slices.
+func mergeKnowledgeTargets(requestKBIDs []string, requestKnowledgeIDs []string, mentionedItems []MentionedItemRequest) (kbIDs []string, knowledgeIDs []string) {
+	kbIDSet := make(map[string]bool)
+	kbIDs = make([]string, 0, len(requestKBIDs)+len(mentionedItems))
+	for _, id := range requestKBIDs {
+		if id != "" && !kbIDSet[id] {
+			kbIDs = append(kbIDs, id)
+			kbIDSet[id] = true
+		}
+	}
+
+	knowledgeIDSet := make(map[string]bool)
+	knowledgeIDs = make([]string, 0, len(requestKnowledgeIDs)+len(mentionedItems))
+	for _, id := range requestKnowledgeIDs {
+		if id != "" && !knowledgeIDSet[id] {
+			knowledgeIDs = append(knowledgeIDs, id)
+			knowledgeIDSet[id] = true
+		}
+	}
+
+	for _, item := range mentionedItems {
+		if item.ID == "" {
+			continue
+		}
+		switch item.Type {
+		case "kb":
+			if !kbIDSet[item.ID] {
+				kbIDs = append(kbIDs, item.ID)
+				kbIDSet[item.ID] = true
+			}
+		case "file":
+			if !knowledgeIDSet[item.ID] {
+				knowledgeIDs = append(knowledgeIDs, item.ID)
+				knowledgeIDSet[item.ID] = true
+			}
+		}
+	}
+	return kbIDs, knowledgeIDs
 }
 
 // sseStreamContext holds the context for SSE streaming
@@ -511,21 +549,7 @@ func (h *Handler) executeQA(reqCtx *qaRequestContext, mode qaMode, generateTitle
 		h.runVLMAnalysisIfNeeded(streamCtx, reqCtx, mode)
 
 		// Build QA request and invoke the appropriate service
-		imageURLs, imageDescription := extractImageURLsAndOCRText(reqCtx.images)
-		qaReq := &types.QARequest{
-			Session:            reqCtx.session,
-			Query:              reqCtx.query,
-			AssistantMessageID: reqCtx.assistantMessage.ID,
-			SummaryModelID:     reqCtx.summaryModelID,
-			CustomAgent:        reqCtx.customAgent,
-			KnowledgeBaseIDs:   reqCtx.knowledgeBaseIDs,
-			KnowledgeIDs:       reqCtx.knowledgeIDs,
-			ImageURLs:          imageURLs,
-			ImageDescription:   imageDescription,
-			UserMessageID:      reqCtx.userMessageID,
-			WebSearchEnabled:   reqCtx.webSearchEnabled,
-			EnableMemory:       reqCtx.enableMemory,
-		}
+		qaReq := reqCtx.buildQARequest()
 
 		var serviceErr error
 		var stageName string

@@ -1352,7 +1352,21 @@ const getTokens = (content: any) => {
   const contentStr = typeof content === 'string' ? content : String(content || '');
   if (!contentStr.trim()) return [];
 
-  const processed = preprocessMarkdown(sanitizeForDisplay(contentStr));
+  // Extract <kb.../> and <web.../> tags before sanitization to prevent
+  // sanitizeForDisplay from stripping chunk_id labels and UUIDs inside them.
+  const tagPlaceholders: string[] = [];
+  const preserved = contentStr.replace(/<(?:kb|web)\b[^>]*\/>/g, (match) => {
+    const idx = tagPlaceholders.length;
+    tagPlaceholders.push(match);
+    return `\x00TAG${idx}\x00`;
+  });
+
+  let sanitized = sanitizeForDisplay(preserved);
+
+  // Restore preserved tags
+  sanitized = sanitized.replace(/\x00TAG(\d+)\x00/g, (_, idx) => tagPlaceholders[Number(idx)]);
+
+  const processed = preprocessMarkdown(sanitized);
   return marked.lexer(processed);
 };
 

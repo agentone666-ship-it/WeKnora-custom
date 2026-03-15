@@ -1375,6 +1375,11 @@ const createSession = async (val: string) => {
     kb_type: item.type === 'kb' ? (item.kbType || 'document') : undefined
   }));
   const imageFiles = uploadedImages.value.map(img => img.file);
+  // Blur the textarea BEFORE emitting, so that when the parent navigates away
+  // and Vue unmounts this component, TDesign's blur handler won't fire on a
+  // detached DOM element (which causes getComputedStyle to throw).
+  const textarea = getTextareaEl();
+  if (textarea) textarea.blur();
   emit('send-msg', val, selectedModelId.value, mentionedItems, imageFiles);
   // Clean up image previews
   uploadedImages.value.forEach(img => URL.revokeObjectURL(img.preview));
@@ -1560,6 +1565,9 @@ const handleSelectAgent = (agent: CustomAgent, sourceTenantId?: string) => {
 }
 
 const clearvalue = () => {
+  // Guard: only clear when the textarea DOM element is still mounted,
+  // otherwise TDesign's autosize will call getComputedStyle on a non-Element.
+  if (!getTextareaEl()) return;
   query.value = "";
 }
 
