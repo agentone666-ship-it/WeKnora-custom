@@ -676,7 +676,7 @@ const handleDetailsScroll = () => {
         <span class="label">{{ $t('knowledgeBase.fileName') }}</span>
         <div class="download_box">
           <span class="doc_t">{{ details.title }}</span>
-          <div class="icon_box" @click="downloadFile()">
+          <div class="icon_box" @click="downloadFile()" aria-label="Download">
             <img class="download_box" src="@/assets/img/download.svg" alt="">
           </div>
         </div>
@@ -1022,7 +1022,7 @@ const handleDetailsScroll = () => {
 .manual_title_box {
   border-radius: 4px;
   border: 1px solid var(--td-component-border);
-  background: var(--td-success-color-light);
+  background: var(--td-bg-color-container-hover);
   padding: 8px 12px;
   
   .manual_title {
