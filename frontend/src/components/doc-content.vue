@@ -627,7 +627,9 @@ const downloadFile = () => {
         const link = document.createElement("a");
         link.style.display = "none";
         link.setAttribute("href", url.value);
-        link.setAttribute("download", props.details.type === 'manual' ? props.details.title + '.md' : props.details.title);
+        const needsExt = props.details.type === 'manual' && !props.details.title.toLowerCase().endsWith('.md');
+        const ext = needsExt ? '.md' : '';
+        link.setAttribute("download", props.details.title + ext);
         document.body.appendChild(link);
         link.click();
         nextTick(() => {
@@ -695,11 +697,13 @@ const handleDetailsScroll = () => {
       <!-- 手动创建类型专属区域 -->
       <div v-else-if="details.type === 'manual'" class="manual_box">
         <span class="label">{{ $t('knowledgeBase.documentTitle') }}</span>
-        <div class="manual_title_box">
-          <span class="manual_title">{{ details.title }}</span>
-        </div>
-        <div class="icon_box" @click="downloadFile()">
-          <img class="download_box" src="@/assets/img/download.svg" alt="">
+        <div class="download_box">
+          <div class="manual_title_box">
+            <span class="manual_title">{{ details.title }}</span>
+          </div>
+          <div class="icon_box" @click="downloadFile()" aria-label="Download">
+            <img class="download_box" src="@/assets/img/download.svg" alt="">
+          </div>
         </div>
       </div>
       
