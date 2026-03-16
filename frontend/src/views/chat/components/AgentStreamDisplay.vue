@@ -1915,7 +1915,7 @@ const handleAddToKnowledge = (answerEvent: any) => {
 
 // ============ Tree View ============
 .tree-container {
-  margin-bottom: 16px;
+  margin-bottom: 10px;
   position: relative;
 }
 
@@ -2187,7 +2187,7 @@ const handleAddToKnowledge = (answerEvent: any) => {
   }
 
   .answer-toolbar {
-    margin-top: 4px;
+    margin-top: 10px;
   }
 }
 
