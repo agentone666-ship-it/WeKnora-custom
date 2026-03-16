@@ -352,16 +352,6 @@ func (p *PluginRewrite) buildPrompts(chatManage *types.ChatManage, historyList [
 	if chatManage.RewritePromptSystem != "" {
 		systemPrompt = chatManage.RewritePromptSystem
 	}
-	// Strengthen context inheritance in multi-turn conversation:
-	// for follow-up questions that clearly refer to previous turns (especially
-	// uploaded-image understanding), prefer skipping KB retrieval.
-	systemPrompt += "\n\n## Additional Context Inheritance Guidance\n" +
-		"- If the current question is a follow-up to previous conversation content (especially previously uploaded images) and can be answered by that context, you MUST set skip_kb_search=true.\n" +
-		"- Examples: “第一张图再详细描述一下”, “第二张门上的字是什么意思”, “这个再展开讲讲”.\n" +
-		"- You MUST output ONLY a single JSON object (no markdown/code fences, no extra text) with schema: {\"rewrite_query\":\"...\",\"skip_kb_search\":true|false,\"image_description\":\"...\"}.\n" +
-		"- `skip_kb_search` field is REQUIRED and must be explicit true/false.\n" +
-		"- For images, `image_description` MUST include a detailed visual description and complete OCR text. Keep all key details; do not overly summarize.\n" +
-		"- image_description should be empty string only when there are no images or truly no readable visual text/details."
 
 	conversationText := formatConversationHistory(historyList)
 	currentTime := time.Now().Format("2006-01-02 15:04:05")

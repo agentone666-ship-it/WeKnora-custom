@@ -2728,11 +2728,6 @@ const handleSave = async () => {
         currentSection.value = 'conversation';
         return;
       }
-      if (!hasPlaceholder(rewritePrompt, 'conversation')) {
-        MessagePlugin.error(t('agent.editor.conversationMissing'));
-        currentSection.value = 'conversation';
-        return;
-      }
     }
   }
 

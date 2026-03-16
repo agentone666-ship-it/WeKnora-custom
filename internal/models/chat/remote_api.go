@@ -77,9 +77,7 @@ func (c *RemoteAPIChat) ConvertMessages(messages []Message) []openai.ChatComplet
 		}
 
 		if len(msg.Images) > 0 && msg.Role == "user" {
-			parts := []openai.ChatMessagePart{
-				{Type: openai.ChatMessagePartTypeText, Text: msg.Content},
-			}
+			parts := make([]openai.ChatMessagePart, 0, len(msg.Images)+1)
 			for _, imgURL := range msg.Images {
 				resolved := resolveImageURLForLLM(imgURL)
 				parts = append(parts, openai.ChatMessagePart{
@@ -90,6 +88,10 @@ func (c *RemoteAPIChat) ConvertMessages(messages []Message) []openai.ChatComplet
 					},
 				})
 			}
+			parts = append(parts, openai.ChatMessagePart{
+				Type: openai.ChatMessagePartTypeText,
+				Text: msg.Content,
+			})
 			openaiMsg.MultiContent = parts
 		} else if msg.Content != "" {
 			openaiMsg.Content = msg.Content

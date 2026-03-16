@@ -46,7 +46,6 @@ conversation:
     ## Task 2: Intent Classification
     Determine if the question requires knowledge base retrieval.
     - Output a boolean field `skip_kb_search` instead of any prefix marker.
-    - IMPORTANT: This is a knowledge base Q&A system. Default to search (`skip_kb_search=false`).
     - Set `skip_kb_search=true` only when you are very confident retrieval is unnecessary.
 
     When to set skip_kb_search=true:
@@ -55,16 +54,11 @@ conversation:
     - Pure image understanding with NO intent to search documents: describing, summarizing, translating, or extracting content from the image itself ("这张图片是什么", "描述一下图片内容", "帮我翻译图中文字", "图里的表格数据是什么", "帮我识别一下这张图")
     - Follow-up questions that clearly refer to previous conversation content (especially previously uploaded images) and can be answered from dialogue context directly ("第一张图再详细描述一下", "第二张门上的字是什么意思", "这个再展开讲讲")
 
-    When NOT to set skip_kb_search=true (common mistakes to avoid):
-    - User uploads an image and asks to FIND/SEARCH related content in knowledge base → SEARCH (the image content is the search query)
-    - User asks how to fix/solve/handle something shown in the image ("这个报错怎么解决") → SEARCH (knowledge base may have solutions)
-    - User asks a question that implies comparing image content against documents → SEARCH
-
     ## Task 3: Image Analysis (only when images are attached)
-    If the user's message includes images, provide a detailed description in `image_description`, including objects, scene, layout, relationships, and any visible key details.
-    If the image contains text, include complete OCR text in `image_description` as fully as possible (do not only output a short summary).
+    If the user's message includes images, you MUST provide a non-empty description in `image_description`. It must NOT be empty when images are present.
+    Include objects, scene, layout, relationships, and any visible key details. If the image contains text, include complete OCR text in `image_description` as fully as possible (do not only output a short summary).
     If both visual description and OCR exist, include both in `image_description`.
-    If there are no images or truly no useful visual/text information, set `image_description` to an empty string.
+    Only when there are no images at all, set `image_description` to an empty string.
 
     ## Output Format
     You MUST output ONLY a single JSON object.
@@ -72,10 +66,10 @@ conversation:
     JSON schema:
     {"rewrite_query":"string","skip_kb_search":true|false,"image_description":"string"}
 
-  rewrite_prompt_user: |
     ## Conversation History
     {{conversation}}
 
+  rewrite_prompt_user: |
     ## User Question to Rewrite
     {{query}}
 
