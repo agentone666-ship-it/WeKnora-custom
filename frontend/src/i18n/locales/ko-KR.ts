@@ -3300,6 +3300,7 @@ export default {
       callbackUrl: "콜백 URL",
       empty: "IM 채널이 없습니다. 아래 버튼을 클릭하여 추가하세요.",
       unnamed: "이름 없는 채널",
+      docLink: "통합 가이드 보기",
     },
     tools: {
       thinking: '사고',

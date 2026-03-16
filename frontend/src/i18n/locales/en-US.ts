@@ -3270,6 +3270,7 @@ export default {
       callbackUrl: 'Callback URL',
       empty: 'No IM channels yet. Click the button below to add one.',
       unnamed: 'Unnamed Channel',
+      docLink: 'Integration Guide',
     },
     mcp: {
       label: 'MCP Services',

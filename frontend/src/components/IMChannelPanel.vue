@@ -497,6 +497,12 @@ onMounted(() => {
 // --- Add button ---
 .add-btn {
   margin-top: 4px;
+
+  :deep(.t-button__text) {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
 }
 
 // --- Dialog form (matches share form pattern) ---

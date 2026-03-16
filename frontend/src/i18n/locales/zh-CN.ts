@@ -3245,6 +3245,7 @@ export default {
       callbackUrl: "回调地址",
       empty: "暂无 IM 渠道，点击下方按钮添加",
       unnamed: "未命名渠道",
+      docLink: "查看接入文档",
     },
     tools: {
       thinking: "思考",
