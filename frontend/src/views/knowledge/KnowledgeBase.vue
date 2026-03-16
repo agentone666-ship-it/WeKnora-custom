@@ -1468,11 +1468,11 @@ async function createNewSession(value: string): Promise<void> {
             <span>{{ $t('knowledgeBase.unsupportedTypesHint', { types: unsupportedFileTypes.map(t => '.' + t).join('、') }) }}</span>
             <span class="parser-hint-link">{{ $t('knowledgeBase.goToParserSettings') }} →</span>
           </p>
-          <div v-if="missingStorageEngine" class="storage-engine-warning" @click="handleOpenKBSettings">
-            <t-icon name="error-circle" class="warning-icon" />
+          <p v-if="missingStorageEngine" class="storage-engine-warning" @click="handleOpenKBSettings">
+            <t-icon name="info-circle" class="warning-icon" />
             <span>{{ $t('knowledgeBase.missingStorageEngine') }}</span>
             <span class="warning-link">{{ $t('knowledgeBase.goToStorageSettings') }} →</span>
-          </div>
+          </p>
         </div>
       </div>
       
@@ -2652,20 +2652,16 @@ async function createNewSession(value: string): Promise<void> {
   .storage-engine-warning {
     display: flex;
     align-items: center;
-    gap: 6px;
-    margin: 8px 0 0;
-    padding: 8px 12px;
-    background: var(--td-warning-color-1, #fff8e6);
-    border: 1px solid var(--td-warning-color-3, #ffcc33);
-    border-radius: 6px;
+    gap: 4px;
+    margin: 2px 0 0;
     color: var(--td-warning-color);
-    font-size: 13px;
+    font-size: 12px;
     line-height: 1.4;
     cursor: pointer;
-    transition: background 0.15s ease;
+    transition: color 0.15s ease;
 
     &:hover {
-      background: var(--td-warning-color-2, #fff1c9);
+      color: var(--td-warning-color-active);
 
       .warning-link {
         text-decoration: underline;
@@ -2673,7 +2669,7 @@ async function createNewSession(value: string): Promise<void> {
     }
 
     .warning-icon {
-      font-size: 14px;
+      font-size: 12px;
       flex-shrink: 0;
     }
 
