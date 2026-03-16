@@ -1,0 +1,524 @@
+<template>
+  <div class="section-content">
+    <!-- Channel list header -->
+    <div class="channels-section">
+      <div class="channels-header">
+        <span class="channels-title">{{ $t('agentEditor.im.addChannel') }}</span>
+        <span class="channels-count">{{ channels.length }}</span>
+      </div>
+
+      <div v-if="loading" class="channels-loading">
+        <t-loading size="small" />
+        <span>{{ $t('common.loading') }}</span>
+      </div>
+
+      <div v-else-if="channels.length === 0" class="channels-empty">
+        <t-icon name="chat-message" class="empty-icon" />
+        <span>{{ $t('agentEditor.im.empty') }}</span>
+      </div>
+
+      <div v-else class="channels-list">
+        <div v-for="channel in channels" :key="channel.id" class="channel-item">
+          <div class="channel-info">
+            <div class="channel-info-top">
+              <div class="channel-main">
+                <span class="platform-badge" :class="channel.platform">
+                  {{ channel.platform === 'wecom' ? $t('agentEditor.im.wecom') : $t('agentEditor.im.feishu') }}
+                </span>
+                <span class="channel-name">{{ channel.name || $t('agentEditor.im.unnamed') }}</span>
+              </div>
+            </div>
+            <div class="channel-meta">
+              <span class="meta-tag">
+                <t-icon name="link" class="meta-icon" />
+                {{ channel.mode }}
+              </span>
+              <span class="meta-tag">
+                <t-icon name="play-circle" class="meta-icon" />
+                {{ channel.output_mode === 'stream' ? $t('agentEditor.im.outputStream') : $t('agentEditor.im.outputFull') }}
+              </span>
+            </div>
+            <div v-if="channel.mode === 'webhook'" class="callback-url-row">
+              <span class="url-label">{{ $t('agentEditor.im.callbackUrl') }}:</span>
+              <code class="url-value">{{ getCallbackUrl(channel) }}</code>
+              <t-button theme="default" size="small" variant="text" @click="copyUrl(channel)">
+                <t-icon name="file-copy" />
+              </t-button>
+            </div>
+          </div>
+          <div class="channel-actions">
+            <t-switch
+              :value="channel.enabled"
+              size="small"
+              @change="handleToggle(channel)"
+            />
+            <t-button variant="text" theme="default" size="small" @click="editChannel(channel)">
+              <t-icon name="edit" />
+            </t-button>
+            <t-popconfirm :content="$t('agentEditor.im.deleteConfirm')" @confirm="handleDelete(channel.id)">
+              <t-button variant="text" theme="danger" size="small">
+                <t-icon name="delete" />
+              </t-button>
+            </t-popconfirm>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Add button -->
+    <t-button theme="default" variant="dashed" block @click="showCreateDialog = true" class="add-btn">
+      <t-icon name="add" />
+      {{ $t('agentEditor.im.addChannel') }}
+    </t-button>
+
+    <!-- Create/Edit dialog -->
+    <t-dialog
+      v-model:visible="showCreateDialog"
+      :header="editingChannel ? $t('agentEditor.im.editChannel') : $t('agentEditor.im.addChannel')"
+      :confirm-btn="$t('common.save')"
+      :cancel-btn="$t('common.cancel')"
+      @confirm="handleSave"
+      @close="resetForm"
+      width="560px"
+    >
+      <div class="dialog-form">
+        <!-- Platform -->
+        <div class="form-item">
+          <label class="form-label">{{ $t('agentEditor.im.platform') }}</label>
+          <t-radio-group v-model="formData.platform" :disabled="!!editingChannel">
+            <t-radio-button value="wecom">{{ $t('agentEditor.im.wecom') }}</t-radio-button>
+            <t-radio-button value="feishu">{{ $t('agentEditor.im.feishu') }}</t-radio-button>
+          </t-radio-group>
+        </div>
+
+        <!-- Name -->
+        <div class="form-item">
+          <label class="form-label">{{ $t('agentEditor.im.channelName') }}</label>
+          <t-input v-model="formData.name" :placeholder="$t('agentEditor.im.channelNamePlaceholder')" />
+        </div>
+
+        <!-- Mode -->
+        <div class="form-item">
+          <label class="form-label">{{ $t('agentEditor.im.mode') }}</label>
+          <t-radio-group v-model="formData.mode">
+            <t-radio-button value="websocket">WebSocket</t-radio-button>
+            <t-radio-button value="webhook">Webhook</t-radio-button>
+          </t-radio-group>
+        </div>
+
+        <!-- Output mode -->
+        <div class="form-item">
+          <label class="form-label">{{ $t('agentEditor.im.outputMode') }}</label>
+          <t-radio-group v-model="formData.output_mode">
+            <t-radio-button value="stream">{{ $t('agentEditor.im.outputStream') }}</t-radio-button>
+            <t-radio-button value="full">{{ $t('agentEditor.im.outputFull') }}</t-radio-button>
+          </t-radio-group>
+        </div>
+
+        <!-- Credentials divider -->
+        <div class="form-divider"></div>
+
+        <!-- WeCom credentials -->
+        <template v-if="formData.platform === 'wecom'">
+          <template v-if="formData.mode === 'websocket'">
+            <div class="form-item">
+              <label class="form-label">Bot ID</label>
+              <t-input v-model="formData.credentials.bot_id" placeholder="Bot ID" />
+            </div>
+            <div class="form-item">
+              <label class="form-label">Bot Secret</label>
+              <t-input v-model="formData.credentials.bot_secret" type="password" placeholder="Bot Secret" />
+            </div>
+          </template>
+          <template v-else>
+            <div class="form-item">
+              <label class="form-label">Corp ID</label>
+              <t-input v-model="formData.credentials.corp_id" placeholder="Corp ID" />
+            </div>
+            <div class="form-item">
+              <label class="form-label">Agent Secret</label>
+              <t-input v-model="formData.credentials.agent_secret" type="password" placeholder="Agent Secret" />
+            </div>
+            <div class="form-item">
+              <label class="form-label">Token</label>
+              <t-input v-model="formData.credentials.token" placeholder="Token" />
+            </div>
+            <div class="form-item">
+              <label class="form-label">EncodingAESKey</label>
+              <t-input v-model="formData.credentials.encoding_aes_key" placeholder="EncodingAESKey" />
+            </div>
+            <div class="form-item">
+              <label class="form-label">Corp Agent ID</label>
+              <t-input-number v-model="formData.credentials.corp_agent_id" placeholder="Corp Agent ID" style="width: 100%;" />
+            </div>
+          </template>
+        </template>
+
+        <!-- Feishu credentials -->
+        <template v-if="formData.platform === 'feishu'">
+          <div class="form-item">
+            <label class="form-label">App ID</label>
+            <t-input v-model="formData.credentials.app_id" placeholder="App ID" />
+          </div>
+          <div class="form-item">
+            <label class="form-label">App Secret</label>
+            <t-input v-model="formData.credentials.app_secret" type="password" placeholder="App Secret" />
+          </div>
+          <template v-if="formData.mode === 'webhook'">
+            <div class="form-item">
+              <label class="form-label">Verification Token</label>
+              <t-input v-model="formData.credentials.verification_token" placeholder="Verification Token" />
+            </div>
+            <div class="form-item">
+              <label class="form-label">Encrypt Key</label>
+              <t-input v-model="formData.credentials.encrypt_key" type="password" placeholder="Encrypt Key" />
+            </div>
+          </template>
+        </template>
+      </div>
+    </t-dialog>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { ref, onMounted } from 'vue';
+import { useI18n } from 'vue-i18n';
+import { MessagePlugin } from 'tdesign-vue-next';
+import { listIMChannels, createIMChannel, updateIMChannel, deleteIMChannel, toggleIMChannel } from '@/api/agent';
+import type { IMChannel } from '@/api/agent';
+
+const { t } = useI18n();
+
+const props = defineProps<{
+  agentId: string;
+}>();
+
+const channels = ref<IMChannel[]>([]);
+const loading = ref(false);
+const showCreateDialog = ref(false);
+const editingChannel = ref<IMChannel | null>(null);
+
+const defaultCredentials = (): Record<string, any> => ({});
+
+const formData = ref({
+  platform: 'wecom' as 'wecom' | 'feishu',
+  name: '',
+  mode: 'websocket' as 'webhook' | 'websocket',
+  output_mode: 'stream' as 'stream' | 'full',
+  credentials: defaultCredentials(),
+});
+
+async function loadChannels() {
+  loading.value = true;
+  try {
+    const res = await listIMChannels(props.agentId);
+    channels.value = res.data || [];
+  } catch {
+    channels.value = [];
+  } finally {
+    loading.value = false;
+  }
+}
+
+function getCallbackUrl(channel: IMChannel): string {
+  const base = window.location.origin;
+  return `${base}/api/v1/im/callback/${channel.id}`;
+}
+
+async function copyUrl(channel: IMChannel) {
+  try {
+    await navigator.clipboard.writeText(getCallbackUrl(channel));
+    MessagePlugin.success(t('common.copySuccess'));
+  } catch {
+    MessagePlugin.error(t('common.copyFailed'));
+  }
+}
+
+function editChannel(channel: IMChannel) {
+  editingChannel.value = channel;
+  formData.value = {
+    platform: channel.platform,
+    name: channel.name,
+    mode: channel.mode,
+    output_mode: channel.output_mode,
+    credentials: { ...channel.credentials },
+  };
+  showCreateDialog.value = true;
+}
+
+function resetForm() {
+  editingChannel.value = null;
+  formData.value = {
+    platform: 'wecom',
+    name: '',
+    mode: 'websocket',
+    output_mode: 'stream',
+    credentials: defaultCredentials(),
+  };
+}
+
+async function handleSave() {
+  try {
+    if (editingChannel.value) {
+      await updateIMChannel(editingChannel.value.id, {
+        name: formData.value.name,
+        mode: formData.value.mode,
+        output_mode: formData.value.output_mode,
+        credentials: formData.value.credentials,
+      });
+      MessagePlugin.success(t('common.updateSuccess'));
+    } else {
+      await createIMChannel(props.agentId, {
+        platform: formData.value.platform,
+        name: formData.value.name,
+        mode: formData.value.mode,
+        output_mode: formData.value.output_mode,
+        credentials: formData.value.credentials,
+      });
+      MessagePlugin.success(t('common.createSuccess'));
+    }
+    showCreateDialog.value = false;
+    resetForm();
+    await loadChannels();
+  } catch (e: any) {
+    MessagePlugin.error(e?.message || t('common.operationFailed'));
+  }
+}
+
+async function handleToggle(channel: IMChannel) {
+  try {
+    await toggleIMChannel(channel.id);
+    await loadChannels();
+  } catch (e: any) {
+    MessagePlugin.error(e?.message || t('common.operationFailed'));
+  }
+}
+
+async function handleDelete(id: string) {
+  try {
+    await deleteIMChannel(id);
+    MessagePlugin.success(t('common.deleteSuccess'));
+    await loadChannels();
+  } catch (e: any) {
+    MessagePlugin.error(e?.message || t('common.operationFailed'));
+  }
+}
+
+onMounted(() => {
+  loadChannels();
+});
+</script>
+
+<style scoped lang="less">
+.section-content {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+// --- Channel list section (matches AgentShareSettings pattern) ---
+.channels-section {
+  margin-bottom: 8px;
+}
+
+.channels-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+
+  .channels-title {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--td-text-color-primary);
+  }
+
+  .channels-count {
+    padding: 2px 8px;
+    background: var(--td-bg-color-secondarycontainer);
+    border-radius: 10px;
+    font-size: 12px;
+    color: var(--td-text-color-disabled);
+  }
+}
+
+.channels-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 32px;
+  color: var(--td-text-color-disabled);
+  font-size: 14px;
+}
+
+.channels-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 40px 20px;
+  background: var(--td-bg-color-secondarycontainer);
+  border-radius: 8px;
+  color: var(--td-text-color-disabled);
+
+  .empty-icon {
+    font-size: 32px;
+    opacity: 0.5;
+  }
+}
+
+.channels-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+// --- Channel card (matches share-item pattern) ---
+.channel-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  background: var(--td-bg-color-secondarycontainer);
+  border: 1px solid var(--td-component-stroke);
+  border-radius: 8px;
+  transition: background 0.2s ease, border-color 0.2s ease;
+
+  &:hover {
+    border-color: var(--td-brand-color-focus);
+  }
+}
+
+.channel-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.channel-info-top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.channel-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.platform-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+
+  &.wecom {
+    background: rgba(7, 193, 96, 0.08);
+    color: #07c160;
+  }
+
+  &.feishu {
+    background: rgba(51, 112, 255, 0.08);
+    color: #3370ff;
+  }
+}
+
+.channel-name {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--td-text-color-primary);
+}
+
+.channel-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--td-text-color-placeholder);
+
+  .meta-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 2px 6px;
+    background: var(--td-bg-color-secondarycontainer);
+    border-radius: 4px;
+  }
+
+  .meta-icon {
+    font-size: 12px;
+    flex-shrink: 0;
+  }
+}
+
+.callback-url-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  padding-top: 4px;
+  border-top: 1px dashed var(--td-component-stroke);
+
+  .url-label {
+    color: var(--td-text-color-secondary);
+    white-space: nowrap;
+  }
+
+  .url-value {
+    background: var(--td-bg-color-container);
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+    min-width: 0;
+  }
+}
+
+.channel-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+// --- Add button ---
+.add-btn {
+  margin-top: 4px;
+}
+
+// --- Dialog form (matches share form pattern) ---
+.dialog-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.form-item {
+  .form-label {
+    display: block;
+    margin-bottom: 8px;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--td-text-color-primary);
+  }
+}
+
+.form-divider {
+  height: 1px;
+  background: var(--td-component-stroke);
+  margin: 4px 0;
+}
+</style>

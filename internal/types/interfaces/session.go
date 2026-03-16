@@ -32,42 +32,17 @@ type SessionService interface {
 	// It emits an event when the title is generated
 	// modelID: optional model ID to use for title generation (if empty, uses first available KnowledgeQA model)
 	GenerateTitleAsync(ctx context.Context, session *types.Session, userQuery string, modelID string, eventBus *event.EventBus)
-	// KnowledgeQA performs knowledge-based question answering
-	// knowledgeBaseIDs: list of knowledge base IDs to search (supports multi-KB)
-	// knowledgeIDs: list of specific knowledge (file) IDs to search
-	// summaryModelID: optional summary model ID override (if empty, uses session/KB default)
-	// webSearchEnabled: whether to enable web search to supplement knowledge base results
-	// customAgent: optional custom agent for config override (multiTurnEnabled, historyTurns)
-	// enableMemory: whether to enable memory feature for this request
-	// Events are emitted through eventBus (references, answer chunks, completion)
-	KnowledgeQA(ctx context.Context,
-		session *types.Session, query string, knowledgeBaseIDs []string, knowledgeIDs []string,
-		assistantMessageID string, summaryModelID string, webSearchEnabled bool, eventBus *event.EventBus,
-		customAgent *types.CustomAgent, enableMemory bool,
-		imageURLs []string, imageDescription string, userMessageID string,
-	) error
+	// KnowledgeQA performs knowledge-based question answering.
+	// Events are emitted through eventBus (references, answer chunks, completion).
+	KnowledgeQA(ctx context.Context, req *types.QARequest, eventBus *event.EventBus) error
 	// KnowledgeQAByEvent performs knowledge-based question answering by event
 	KnowledgeQAByEvent(ctx context.Context, chatManage *types.ChatManage, eventList []types.EventType) error
 	// SearchKnowledge performs knowledge-based search, without summarization
 	// knowledgeBaseIDs: list of knowledge base IDs to search (supports multi-KB)
 	// knowledgeIDs: list of specific knowledge (file) IDs to search
 	SearchKnowledge(ctx context.Context, knowledgeBaseIDs []string, knowledgeIDs []string, query string) ([]*types.SearchResult, error)
-	// AgentQA performs agent-based question answering with conversation history and streaming support
-	// eventBus is optional - if nil, uses service's default EventBus
-	// customAgent is optional - if provided, uses custom agent configuration instead of tenant defaults
-	// summaryModelID is optional - if provided, overrides the model from customAgent config
-	AgentQA(
-		ctx context.Context,
-		session *types.Session,
-		query string,
-		assistantMessageID string,
-		summaryModelID string,
-		eventBus *event.EventBus,
-		customAgent *types.CustomAgent,
-		knowledgeBaseIDs []string,
-		knowledgeIDs []string,
-		imageURLs []string, imageDescription string, userMessageID string,
-	) error
+	// AgentQA performs agent-based question answering with conversation history and streaming support.
+	AgentQA(ctx context.Context, req *types.QARequest, eventBus *event.EventBus) error
 	// ClearContext clears the LLM context for a session
 	ClearContext(ctx context.Context, sessionID string) error
 }

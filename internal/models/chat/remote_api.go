@@ -29,6 +29,10 @@ type RemoteAPIChat struct {
 	// requestCustomizer 允许子类自定义请求
 	// 返回自定义请求体（如果为 nil 则使用标准请求）和是否需要使用原始 HTTP 请求
 	requestCustomizer func(req *openai.ChatCompletionRequest, opts *ChatOptions, isStream bool) (customReq any, useRawHTTP bool)
+
+	// endpointCustomizer 允许子类自定义请求的 endpoint
+	// 返回是否使用自定义请求地址, 返回空则使用默认OpenAI格式地址
+	endpointCustomizer func(baseURL string, modelID string, isStream bool) (endpoint string)
 }
 
 // NewRemoteAPIChat 创建远程 API 聊天实例
@@ -57,6 +61,11 @@ func NewRemoteAPIChat(chatConfig *ChatConfig) (*RemoteAPIChat, error) {
 // SetRequestCustomizer 设置请求自定义器
 func (c *RemoteAPIChat) SetRequestCustomizer(customizer func(req *openai.ChatCompletionRequest, opts *ChatOptions, isStream bool) (any, bool)) {
 	c.requestCustomizer = customizer
+}
+
+// SetEndpointCustomizer 设置请求地址自定义器
+func (c *RemoteAPIChat) SetEndpointCustomizer(customizer func(baseURL string, modelID string, isStream bool) string) {
+	c.endpointCustomizer = customizer
 }
 
 // ConvertMessages 转换消息格式为 OpenAI 格式（导出供子类使用）
@@ -194,13 +203,21 @@ func (c *RemoteAPIChat) logRequest(ctx context.Context, req any, isStream bool) 
 // Chat 进行非流式聊天
 func (c *RemoteAPIChat) Chat(ctx context.Context, messages []Message, opts *ChatOptions) (*types.ChatResponse, error) {
 	req := c.BuildChatCompletionRequest(messages, opts, false)
-
+	var customEndpoint string
+	if c.endpointCustomizer != nil {
+		customEndpoint = c.endpointCustomizer(c.baseURL, c.modelID, true)
+	}
 	// 检查是否需要自定义请求
 	if c.requestCustomizer != nil {
 		customReq, useRawHTTP := c.requestCustomizer(&req, opts, false)
 		if useRawHTTP && customReq != nil {
-			return c.chatWithRawHTTP(ctx, customReq)
+			return c.chatWithRawHTTP(ctx, customEndpoint, customReq)
 		}
+	}
+
+	// 使用自定义请求地址
+	if customEndpoint != "" {
+		return c.chatWithRawHTTP(ctx, customEndpoint, &req)
 	}
 
 	c.logRequest(ctx, req, false)
@@ -222,15 +239,16 @@ func (c *RemoteAPIChat) Chat(ctx context.Context, messages []Message, opts *Chat
 }
 
 // chatWithRawHTTP 使用原始 HTTP 请求进行聊天（供自定义请求使用）
-func (c *RemoteAPIChat) chatWithRawHTTP(ctx context.Context, customReq any) (*types.ChatResponse, error) {
+func (c *RemoteAPIChat) chatWithRawHTTP(ctx context.Context, endpoint string, customReq any) (*types.ChatResponse, error) {
 	jsonData, err := json.Marshal(customReq)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	logger.Infof(ctx, "[LLM Request] model=%s, raw HTTP request:\n%s", c.modelName, secutils.CompactImageDataURLForLog(string(jsonData)))
-
-	endpoint := c.baseURL + "/chat/completions"
+	logger.Infof(ctx, "[LLM Request] model=%s, raw HTTP request:\n%s", c.modelName, string(jsonData))
+	if endpoint == "" {
+		endpoint = c.baseURL + "/chat/completions"
+	}
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
@@ -328,14 +346,22 @@ func removeThinkingContent(content string) string {
 func (c *RemoteAPIChat) ChatStream(ctx context.Context, messages []Message, opts *ChatOptions) (<-chan types.StreamResponse, error) {
 	req := c.BuildChatCompletionRequest(messages, opts, true)
 
+	var customEndpoint string
+	if c.endpointCustomizer != nil {
+		customEndpoint = c.endpointCustomizer(c.baseURL, c.modelID, true)
+	}
+
 	// 检查是否需要自定义请求
 	if c.requestCustomizer != nil {
 		customReq, useRawHTTP := c.requestCustomizer(&req, opts, true)
 		if useRawHTTP && customReq != nil {
-			return c.chatStreamWithRawHTTP(ctx, customReq)
+			return c.chatStreamWithRawHTTP(ctx, customEndpoint, customReq)
 		}
 	}
-
+	// 使用自定义请求地址
+	if customEndpoint != "" {
+		return c.chatStreamWithRawHTTP(ctx, customEndpoint, &req)
+	}
 	c.logRequest(ctx, req, true)
 
 	streamChan := make(chan types.StreamResponse)
@@ -360,7 +386,7 @@ func (c *RemoteAPIChat) ChatStream(ctx context.Context, messages []Message, opts
 }
 
 // chatStreamWithRawHTTP 使用原始 HTTP 请求进行流式聊天
-func (c *RemoteAPIChat) chatStreamWithRawHTTP(ctx context.Context, customReq any) (<-chan types.StreamResponse, error) {
+func (c *RemoteAPIChat) chatStreamWithRawHTTP(ctx context.Context, endpoint string, customReq any) (<-chan types.StreamResponse, error) {
 	jsonData, err := json.Marshal(customReq)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
@@ -368,7 +394,9 @@ func (c *RemoteAPIChat) chatStreamWithRawHTTP(ctx context.Context, customReq any
 
 	logger.Infof(ctx, "[LLM Stream] model=%s", c.modelName)
 
-	endpoint := c.baseURL + "/chat/completions"
+	if endpoint == "" {
+		endpoint = c.baseURL + "/chat/completions"
+	}
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewBuffer(jsonData))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)

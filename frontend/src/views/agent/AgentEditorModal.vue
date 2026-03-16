@@ -1115,6 +1115,17 @@
                 <div v-if="props.mode === 'edit' && props.agent?.id && !props.agent?.is_builtin" v-show="currentSection === 'share'" class="section">
                   <AgentShareSettings :agent-id="props.agent.id" :agent="props.agent" />
                 </div>
+
+                <!-- IM集成（仅编辑模式） -->
+                <div v-if="props.mode === 'edit' && props.agent?.id" v-show="currentSection === 'im'" class="section">
+                  <div class="section-header">
+                    <h2>{{ $t('agentEditor.im.title') }}</h2>
+                    <p class="section-description">{{ $t('agentEditor.im.description') }}</p>
+                  </div>
+                  <div class="settings-group">
+                    <IMChannelPanel :agent-id="props.agent.id" />
+                  </div>
+                </div>
               </div>
 
               <!-- 底部操作栏 -->
@@ -1146,6 +1157,7 @@ import AgentAvatar from '@/components/AgentAvatar.vue';
 import PromptTemplateSelector from '@/components/PromptTemplateSelector.vue';
 import ModelSelector from '@/components/ModelSelector.vue';
 import AgentShareSettings from '@/components/AgentShareSettings.vue';
+import IMChannelPanel from '@/components/IMChannelPanel.vue';
 
 const uiStore = useUIStore();
 const orgStore = useOrganizationStore();
@@ -1377,6 +1389,10 @@ const navItems = computed(() => {
   // 共享管理（仅编辑模式且非内置智能体）
   if (props.mode === 'edit' && props.agent?.id && !props.agent?.is_builtin) {
     items.push({ key: 'share', icon: 'share', label: t('knowledgeEditor.sidebar.share') });
+  }
+  // IM集成（仅编辑模式，创建时Agent还没有ID）
+  if (props.mode === 'edit' && props.agent?.id) {
+    items.push({ key: 'im', icon: 'chat-message', label: t('agentEditor.im.title') });
   }
   return items;
 });

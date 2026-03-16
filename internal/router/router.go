@@ -59,6 +59,7 @@ type RouterParams struct {
 	CustomAgentHandler    *handler.CustomAgentHandler
 	SkillHandler          *handler.SkillHandler
 	OrganizationHandler   *handler.OrganizationHandler
+	IMHandler             *handler.IMHandler
 }
 
 // NewRouter 创建新的路由
@@ -103,6 +104,9 @@ func NewRouter(params RouterParams) *gin.Engine {
 		serveFrontendStatic(r)
 	}
 
+	// IM 回调路由（在认证中间件之前注册，使用各平台自身的签名验证）
+	RegisterIMRoutes(r, params.IMHandler)
+
 	// 认证中间件
 	r.Use(middleware.Auth(params.TenantService, params.UserService, params.Config))
 
@@ -134,6 +138,7 @@ func NewRouter(params RouterParams) *gin.Engine {
 		RegisterCustomAgentRoutes(v1, params.CustomAgentHandler)
 		RegisterSkillRoutes(v1, params.SkillHandler)
 		RegisterOrganizationRoutes(v1, params.OrganizationHandler)
+		RegisterIMChannelRoutes(v1, params.IMHandler)
 	}
 
 	return r
@@ -575,6 +580,34 @@ func RegisterOrganizationRoutes(r *gin.RouterGroup, orgHandler *handler.Organiza
 	// Shared agents route
 	r.GET("/shared-agents", orgHandler.ListSharedAgents)
 	r.POST("/shared-agents/disabled", orgHandler.SetSharedAgentDisabledByMe)
+}
+
+// RegisterIMRoutes registers IM callback routes.
+// These are registered BEFORE auth middleware since IM platforms use their own signature verification.
+func RegisterIMRoutes(r *gin.Engine, imHandler *handler.IMHandler) {
+	im := r.Group("/api/v1/im")
+	{
+		im.GET("/callback/:channel_id", imHandler.IMCallback)
+		im.POST("/callback/:channel_id", imHandler.IMCallback)
+	}
+}
+
+// RegisterIMChannelRoutes registers IM channel CRUD routes (requires authentication).
+func RegisterIMChannelRoutes(r *gin.RouterGroup, imHandler *handler.IMHandler) {
+	// Channel CRUD under agents
+	agentChannels := r.Group("/agents/:id/im-channels")
+	{
+		agentChannels.POST("", imHandler.CreateIMChannel)
+		agentChannels.GET("", imHandler.ListIMChannels)
+	}
+
+	// Channel operations by channel ID
+	channels := r.Group("/im-channels")
+	{
+		channels.PUT("/:id", imHandler.UpdateIMChannel)
+		channels.DELETE("/:id", imHandler.DeleteIMChannel)
+		channels.POST("/:id/toggle", imHandler.ToggleIMChannel)
+	}
 }
 
 // serveFrontendStatic registers a middleware that serves the frontend SPA

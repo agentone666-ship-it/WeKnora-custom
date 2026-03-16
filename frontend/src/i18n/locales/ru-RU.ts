@@ -1463,7 +1463,11 @@ export default {
         lkeap: {
           label: 'Tencent Cloud LKEAP',
           description: 'DeepSeek-R1, DeepSeek-V3 с поддержкой цепочки рассуждений'
-        }
+        },
+        nvidia: {
+          label: "NVIDIA",
+          description: "deepseek-ai-deepseek-v3_1, nv-embed-v1, rerank-qa-mistral-4b, etc.",
+        },
       }
     },
     builtinTag: 'Built-in'
@@ -2830,6 +2834,25 @@ export default {
       dataSchema: 'Схема данных',
       dataSchemaDesc: 'Получение метаинформации табличных файлов',
       requiresKb: '(требуется настройка базы знаний)'
+    },
+    im: {
+      title: 'Интеграция IM',
+      description: 'Подключите агента к платформам мгновенных сообщений, таким как WeCom и Feishu',
+      wecom: 'WeCom',
+      feishu: 'Feishu',
+      addChannel: 'Добавить канал',
+      editChannel: 'Редактировать канал',
+      deleteConfirm: 'Вы уверены, что хотите удалить этот канал? Это действие не может быть отменено.',
+      channelName: 'Имя канала',
+      channelNamePlaceholder: 'Введите имя для легкой идентификации',
+      platform: 'Платформа',
+      mode: 'Режим подключения',
+      outputMode: 'Режим вывода',
+      outputStream: 'Стриминг',
+      outputFull: 'Полное выходное значение',
+      callbackUrl: 'URL обратного вызова',
+      empty: 'Нет IM каналов. Нажмите кнопку ниже, чтобы добавить один.',
+      unnamed: 'Неименованный канал'
     },
     mcp: {
       label: 'MCP-сервисы',

@@ -38,6 +38,25 @@ type qaRequestContext struct {
 	userMessageID     string            // Created user message ID (populated after createUserMessage)
 }
 
+// buildQARequest converts the qaRequestContext into a types.QARequest for service invocation.
+func (rc *qaRequestContext) buildQARequest() *types.QARequest {
+	imageURLs, imageDescription := extractImageURLsAndOCRText(rc.images)
+	return &types.QARequest{
+		Session:            rc.session,
+		Query:              rc.query,
+		AssistantMessageID: rc.assistantMessage.ID,
+		SummaryModelID:     rc.summaryModelID,
+		CustomAgent:        rc.customAgent,
+		KnowledgeBaseIDs:   rc.knowledgeBaseIDs,
+		KnowledgeIDs:       rc.knowledgeIDs,
+		ImageURLs:          imageURLs,
+		ImageDescription:   imageDescription,
+		UserMessageID:      rc.userMessageID,
+		WebSearchEnabled:   rc.webSearchEnabled,
+		EnableMemory:       rc.enableMemory,
+	}
+}
+
 // parseQARequest parses and validates a QA request, returns the request context
 func (h *Handler) parseQARequest(c *gin.Context, logPrefix string) (*qaRequestContext, *CreateKnowledgeQARequest, error) {
 	ctx := logger.CloneContext(c.Request.Context())
@@ -77,75 +96,10 @@ func (h *Handler) parseQARequest(c *gin.Context, logPrefix string) (*qaRequestCo
 	}
 
 	// Get custom agent if agent_id is provided. Backend resolves shared agent from share relation (no client-provided tenant).
-	var customAgent *types.CustomAgent
-	var effectiveTenantID uint64
-	if request.AgentID != "" {
-		logger.Infof(ctx, "Resolving agent, agent ID: %s", secutils.SanitizeForLog(request.AgentID))
-		userIDVal, _ := c.Get(types.UserIDContextKey.String())
-		currentTenantID := c.GetUint64(types.TenantIDContextKey.String())
-		if h.agentShareService != nil && userIDVal != nil && currentTenantID != 0 {
-			userID, _ := userIDVal.(string)
-			agent, err := h.agentShareService.GetSharedAgentForUser(ctx, userID, currentTenantID, request.AgentID)
-			if err == nil && agent != nil {
-				effectiveTenantID = agent.TenantID
-				customAgent = agent
-				logger.Infof(ctx, "Using shared agent: ID=%s, Name=%s, effectiveTenantID=%d (retrieval scope)",
-					customAgent.ID, customAgent.Name, effectiveTenantID)
-			}
-		}
-		if customAgent == nil {
-			agent, err := h.customAgentService.GetAgentByID(ctx, request.AgentID)
-			if err == nil {
-				customAgent = agent
-				logger.Infof(ctx, "Using own agent: ID=%s, Name=%s, AgentMode=%s",
-					customAgent.ID, customAgent.Name, customAgent.Config.AgentMode)
-			} else {
-				logger.Warnf(ctx, "Failed to get custom agent, agent ID: %s, error: %v, using default config",
-					secutils.SanitizeForLog(request.AgentID), err)
-			}
-		} else {
-			logger.Infof(ctx, "Using custom agent: ID=%s, Name=%s, IsBuiltin=%v, AgentMode=%s, effectiveTenantID=%d",
-				customAgent.ID, customAgent.Name, customAgent.IsBuiltin, customAgent.Config.AgentMode, effectiveTenantID)
-		}
-	}
+	customAgent, effectiveTenantID := h.resolveAgent(ctx, c, request.AgentID)
 
-	// Merge @mentioned items into knowledge_base_ids and knowledge_ids so that
-	// retrieval (quick-answer and agent mode) uses the same targets the user @mentioned.
-	// This fixes the case where user only @mentions a (shared) KB in the input but
-	// does not select it in the sidebar — without this merge, retrieval would not search those KBs.
-	kbIDs := make([]string, 0, len(request.KnowledgeBaseIDs)+len(request.MentionedItems))
-	kbIDSet := make(map[string]bool)
-	for _, id := range request.KnowledgeBaseIDs {
-		if id != "" && !kbIDSet[id] {
-			kbIDs = append(kbIDs, id)
-			kbIDSet[id] = true
-		}
-	}
-	knowledgeIDs := make([]string, 0, len(request.KnowledgeIds)+len(request.MentionedItems))
-	knowledgeIDSet := make(map[string]bool)
-	for _, id := range request.KnowledgeIds {
-		if id != "" && !knowledgeIDSet[id] {
-			knowledgeIDs = append(knowledgeIDs, id)
-			knowledgeIDSet[id] = true
-		}
-	}
-	for _, item := range request.MentionedItems {
-		if item.ID == "" {
-			continue
-		}
-		switch item.Type {
-		case "kb":
-			if !kbIDSet[item.ID] {
-				kbIDs = append(kbIDs, item.ID)
-				kbIDSet[item.ID] = true
-			}
-		case "file":
-			if !knowledgeIDSet[item.ID] {
-				knowledgeIDs = append(knowledgeIDs, item.ID)
-				knowledgeIDSet[item.ID] = true
-			}
-		}
-	}
+	// Merge @mentioned items into knowledge_base_ids and knowledge_ids
+	kbIDs, knowledgeIDs := mergeKnowledgeTargets(request.KnowledgeBaseIDs, request.KnowledgeIds, request.MentionedItems)
 
 	// Log merge results for debugging
 	logger.Infof(ctx, "[%s] @mention merge: request.KnowledgeBaseIDs=%v, request.MentionedItems=%d, merged kbIDs=%v, merged knowledgeIDs=%v",
@@ -198,6 +152,90 @@ func (h *Handler) parseQARequest(c *gin.Context, logPrefix string) (*qaRequestCo
 	}
 
 	return reqCtx, &request, nil
+}
+
+// resolveAgent resolves the custom agent by ID, trying shared agent first, then own agent.
+// Returns (nil, 0) if agentID is empty or not found.
+func (h *Handler) resolveAgent(ctx context.Context, c *gin.Context, agentID string) (*types.CustomAgent, uint64) {
+	if agentID == "" {
+		return nil, 0
+	}
+
+	logger.Infof(ctx, "Resolving agent, agent ID: %s", secutils.SanitizeForLog(agentID))
+
+	// Try shared agent first
+	var customAgent *types.CustomAgent
+	var effectiveTenantID uint64
+	userIDVal, _ := c.Get(types.UserIDContextKey.String())
+	currentTenantID := c.GetUint64(types.TenantIDContextKey.String())
+	if h.agentShareService != nil && userIDVal != nil && currentTenantID != 0 {
+		userID, _ := userIDVal.(string)
+		agent, err := h.agentShareService.GetSharedAgentForUser(ctx, userID, currentTenantID, agentID)
+		if err == nil && agent != nil {
+			effectiveTenantID = agent.TenantID
+			customAgent = agent
+			logger.Infof(ctx, "Using shared agent: ID=%s, Name=%s, effectiveTenantID=%d (retrieval scope)",
+				customAgent.ID, customAgent.Name, effectiveTenantID)
+		}
+	}
+
+	// Fall back to own agent
+	if customAgent == nil {
+		agent, err := h.customAgentService.GetAgentByID(ctx, agentID)
+		if err == nil {
+			customAgent = agent
+			logger.Infof(ctx, "Using own agent: ID=%s, Name=%s, AgentMode=%s",
+				customAgent.ID, customAgent.Name, customAgent.Config.AgentMode)
+		} else {
+			logger.Warnf(ctx, "Failed to get custom agent, agent ID: %s, error: %v, using default config",
+				secutils.SanitizeForLog(agentID), err)
+		}
+	} else {
+		logger.Infof(ctx, "Using custom agent: ID=%s, Name=%s, IsBuiltin=%v, AgentMode=%s, effectiveTenantID=%d",
+			customAgent.ID, customAgent.Name, customAgent.IsBuiltin, customAgent.Config.AgentMode, effectiveTenantID)
+	}
+
+	return customAgent, effectiveTenantID
+}
+
+// mergeKnowledgeTargets merges request KB/knowledge IDs with @mentioned items into deduplicated slices.
+func mergeKnowledgeTargets(requestKBIDs []string, requestKnowledgeIDs []string, mentionedItems []MentionedItemRequest) (kbIDs []string, knowledgeIDs []string) {
+	kbIDSet := make(map[string]bool)
+	kbIDs = make([]string, 0, len(requestKBIDs)+len(mentionedItems))
+	for _, id := range requestKBIDs {
+		if id != "" && !kbIDSet[id] {
+			kbIDs = append(kbIDs, id)
+			kbIDSet[id] = true
+		}
+	}
+
+	knowledgeIDSet := make(map[string]bool)
+	knowledgeIDs = make([]string, 0, len(requestKnowledgeIDs)+len(mentionedItems))
+	for _, id := range requestKnowledgeIDs {
+		if id != "" && !knowledgeIDSet[id] {
+			knowledgeIDs = append(knowledgeIDs, id)
+			knowledgeIDSet[id] = true
+		}
+	}
+
+	for _, item := range mentionedItems {
+		if item.ID == "" {
+			continue
+		}
+		switch item.Type {
+		case "kb":
+			if !kbIDSet[item.ID] {
+				kbIDs = append(kbIDs, item.ID)
+				kbIDSet[item.ID] = true
+			}
+		case "file":
+			if !knowledgeIDSet[item.ID] {
+				knowledgeIDs = append(knowledgeIDs, item.ID)
+				knowledgeIDSet[item.ID] = true
+			}
+		}
+	}
+	return kbIDs, knowledgeIDs
 }
 
 // sseStreamContext holds the context for SSE streaming
@@ -355,7 +393,7 @@ func (h *Handler) KnowledgeQA(c *gin.Context) {
 	}
 
 	// Execute normal mode QA, generate title unless disabled
-	h.executeNormalModeQA(reqCtx, !request.DisableTitle)
+	h.executeQA(reqCtx, qaModeNormal, !request.DisableTitle)
 }
 
 // AgentQA godoc
@@ -390,188 +428,42 @@ func (h *Handler) AgentQA(c *gin.Context) {
 
 	// Route to appropriate handler based on agent mode
 	if agentModeEnabled {
-		h.executeAgentModeQA(reqCtx)
+		h.executeQA(reqCtx, qaModeAgent, true)
 	} else {
 		logger.Infof(reqCtx.ctx, "Agent mode disabled, delegating to normal mode for session: %s", reqCtx.sessionID)
-		// Knowledge bases should be specified in request or from custom agent
-		h.executeNormalModeQA(reqCtx, false)
+		h.executeQA(reqCtx, qaModeNormal, false)
 	}
 }
 
-// executeNormalModeQA executes the normal (KnowledgeQA) mode
-func (h *Handler) executeNormalModeQA(reqCtx *qaRequestContext, generateTitle bool) {
+// qaMode determines which QA execution path to use.
+type qaMode int
+
+const (
+	qaModeNormal qaMode = iota // KnowledgeQA pipeline (RAG / pure chat)
+	qaModeAgent                // Agent engine with tool calling
+)
+
+// executeQA is the unified execution flow for both KnowledgeQA and AgentQA modes.
+// It handles message creation, SSE setup, VLM analysis, service invocation, and error handling.
+func (h *Handler) executeQA(reqCtx *qaRequestContext, mode qaMode, generateTitle bool) {
 	ctx := reqCtx.ctx
 	sessionID := reqCtx.sessionID
 
-	// Create user message
-	userMsg, err := h.createUserMessage(ctx, sessionID, reqCtx.query, reqCtx.requestID, reqCtx.mentionedItems, convertImageAttachments(reqCtx.images))
-	if err != nil {
-		reqCtx.c.Error(errors.NewInternalServerError(err.Error()))
-		return
-	}
-	reqCtx.userMessageID = userMsg.ID
-
-	// Create assistant message
-	if _, err := h.createAssistantMessage(ctx, reqCtx.assistantMessage); err != nil {
-		reqCtx.c.Error(errors.NewInternalServerError(err.Error()))
-		return
-	}
-
-	logger.Infof(ctx, "Using knowledge bases: %v", reqCtx.knowledgeBaseIDs)
-
-	// Setup SSE stream
-	streamCtx := h.setupSSEStream(reqCtx, generateTitle)
-
-	// Setup completion handler for normal mode
-	// Note: Thinking content is now embedded in answer stream with <think> tags
-	// by chat_completion_stream.go, so we don't need separate thinking event handling
-	var completionHandled bool // Prevent duplicate completion handling
-
-	streamCtx.eventBus.On(event.EventAgentFinalAnswer, func(ctx context.Context, evt event.Event) error {
-		data, ok := evt.Data.(event.AgentFinalAnswerData)
-		if !ok {
-			return nil
-		}
-		streamCtx.assistantMessage.Content += data.Content
-		if data.IsFallback {
-			streamCtx.assistantMessage.IsFallback = true
-		}
-		if data.Done {
-			// Prevent duplicate completion handling
-			if completionHandled {
-				return nil
-			}
-			completionHandled = true
-
-			logger.Infof(streamCtx.asyncCtx, "Knowledge QA service completed for session: %s", sessionID)
-			// Content already contains <think>...</think> tags from chat_completion_stream.go
-			// Use session's tenant for message update (asyncCtx may have effectiveTenantID when using shared agent)
-			updateCtx := context.WithValue(streamCtx.asyncCtx, types.TenantIDContextKey, reqCtx.session.TenantID)
-			h.completeAssistantMessage(updateCtx, streamCtx.assistantMessage, reqCtx.query)
-			// Emit EventAgentComplete - this will trigger handleComplete which sends the SSE complete event
-			// Note: Don't cancel context here, let the SSE handler close naturally after receiving the complete event
-			streamCtx.eventBus.Emit(streamCtx.asyncCtx, event.Event{
-				Type:      event.EventAgentComplete,
-				SessionID: sessionID,
-				Data:      event.AgentCompleteData{FinalAnswer: streamCtx.assistantMessage.Content},
-			})
-		}
-		return nil
-	})
-
-	// Execute KnowledgeQA asynchronously
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				buf := make([]byte, 10240)
-				runtime.Stack(buf, true)
-				logger.ErrorWithFields(streamCtx.asyncCtx,
-					errors.NewInternalServerError(fmt.Sprintf("Knowledge QA service panicked: %v\n%s", r, string(buf))), nil)
-			}
-		}()
-
-		// For pure-chat path (no KB, no web search), VLM analysis isn't handled by the
-		// rewrite pipeline step, so run it here with progress events.
-		// RAG paths (with KB/web search, including agent-resolved KBs) defer VLM analysis
-		// to the rewrite step to avoid duplicate progress events.
-		hasRequestKBs := len(reqCtx.knowledgeBaseIDs) > 0 || len(reqCtx.knowledgeIDs) > 0
-		agentWillResolveKBs := false
-		if !hasRequestKBs && reqCtx.customAgent != nil && !reqCtx.customAgent.Config.RetrieveKBOnlyWhenMentioned {
-			mode := reqCtx.customAgent.Config.KBSelectionMode
-			switch mode {
-			case "all":
-				agentWillResolveKBs = true
-			case "selected", "":
-				// "" keeps backward-compatible behavior (same as selected).
-				agentWillResolveKBs = len(reqCtx.customAgent.Config.KnowledgeBases) > 0
-			case "none":
-				agentWillResolveKBs = false
-			default:
-				agentWillResolveKBs = len(reqCtx.customAgent.Config.KnowledgeBases) > 0
-			}
-		}
-		isPureChatPath := !hasRequestKBs && !agentWillResolveKBs && !reqCtx.webSearchEnabled
-		if isPureChatPath && len(reqCtx.images) > 0 &&
-			reqCtx.customAgent != nil && reqCtx.customAgent.Config.VLMModelID != "" {
-			toolCallID := uuid.New().String()
-			streamCtx.eventBus.Emit(streamCtx.asyncCtx, event.Event{
-				Type:      event.EventAgentToolCall,
-				SessionID: sessionID,
-				Data: event.AgentToolCallData{
-					ToolCallID: toolCallID,
-					ToolName:   "image_analysis",
-				},
-			})
-			vlmStart := time.Now()
-			h.analyzeImageAttachments(streamCtx.asyncCtx, reqCtx.images,
-				reqCtx.customAgent.Config.VLMModelID, reqCtx.query)
-			streamCtx.eventBus.Emit(streamCtx.asyncCtx, event.Event{
-				Type:      event.EventAgentToolResult,
-				SessionID: sessionID,
-				Data: event.AgentToolResultData{
-					ToolCallID: toolCallID,
-					ToolName:   "image_analysis",
-					Output:     "已分析图片内容",
-					Success:    true,
-					Duration:   time.Since(vlmStart).Milliseconds(),
-				},
-			})
-		}
-
-		imageURLs, imageDescription := extractImageURLsAndOCRText(reqCtx.images)
-		err := h.sessionService.KnowledgeQA(
-			streamCtx.asyncCtx,
-			reqCtx.session,
-			reqCtx.query,
-			reqCtx.knowledgeBaseIDs,
-			reqCtx.knowledgeIDs,
-			reqCtx.assistantMessage.ID,
-			reqCtx.summaryModelID,
-			reqCtx.webSearchEnabled,
-			streamCtx.eventBus,
-			reqCtx.customAgent,
-			reqCtx.enableMemory,
-			imageURLs, imageDescription,
-			reqCtx.userMessageID,
-		)
-		if err != nil {
-			logger.ErrorWithFields(streamCtx.asyncCtx, err, nil)
-			streamCtx.eventBus.Emit(streamCtx.asyncCtx, event.Event{
-				Type:      event.EventError,
-				SessionID: sessionID,
-				Data: event.ErrorData{
-					Error:     err.Error(),
-					Stage:     "knowledge_qa_execution",
-					SessionID: sessionID,
-				},
-			})
-		}
-	}()
-
-	// Handle SSE events (blocking)
-	shouldWaitForTitle := generateTitle && reqCtx.session.Title == ""
-	h.handleAgentEventsForSSE(ctx, reqCtx.c, sessionID, reqCtx.assistantMessage.ID,
-		reqCtx.requestID, streamCtx.eventBus, shouldWaitForTitle)
-}
-
-// executeAgentModeQA executes the agent mode
-func (h *Handler) executeAgentModeQA(reqCtx *qaRequestContext) {
-	ctx := reqCtx.ctx
-	sessionID := reqCtx.sessionID
-
-	// Emit agent query event
-	if err := event.Emit(ctx, event.Event{
-		Type:      event.EventAgentQuery,
-		SessionID: sessionID,
-		RequestID: reqCtx.requestID,
-		Data: event.AgentQueryData{
+	// Agent mode: emit agent query event before message creation
+	if mode == qaModeAgent {
+		if err := event.Emit(ctx, event.Event{
+			Type:      event.EventAgentQuery,
 			SessionID: sessionID,
-			Query:     reqCtx.query,
 			RequestID: reqCtx.requestID,
-		},
-	}); err != nil {
-		logger.Errorf(ctx, "Failed to emit agent query event: %v", err)
-		return
+			Data: event.AgentQueryData{
+				SessionID: sessionID,
+				Query:     reqCtx.query,
+				RequestID: reqCtx.requestID,
+			},
+		}); err != nil {
+			logger.Errorf(ctx, "Failed to emit agent query event: %v", err)
+			return
+		}
 	}
 
 	// Create user message
@@ -590,79 +482,93 @@ func (h *Handler) executeAgentModeQA(reqCtx *qaRequestContext) {
 	}
 	reqCtx.assistantMessage = assistantMessagePtr
 
-	logger.Infof(ctx, "Calling agent QA service, session ID: %s", sessionID)
+	if mode == qaModeNormal {
+		logger.Infof(ctx, "Using knowledge bases: %v", reqCtx.knowledgeBaseIDs)
+	} else {
+		logger.Infof(ctx, "Calling agent QA service, session ID: %s", sessionID)
+	}
 
-	// Setup SSE stream (agent mode always generates title)
-	streamCtx := h.setupSSEStream(reqCtx, true)
+	// Setup SSE stream
+	streamCtx := h.setupSSEStream(reqCtx, generateTitle)
 
-	// Execute AgentQA asynchronously
+	// Normal mode: register completion handler on EventAgentFinalAnswer
+	// (Agent mode handles completion in the defer block instead)
+	if mode == qaModeNormal {
+		var completionHandled bool
+		streamCtx.eventBus.On(event.EventAgentFinalAnswer, func(ctx context.Context, evt event.Event) error {
+			data, ok := evt.Data.(event.AgentFinalAnswerData)
+			if !ok {
+				return nil
+			}
+			streamCtx.assistantMessage.Content += data.Content
+			if data.IsFallback {
+				streamCtx.assistantMessage.IsFallback = true
+			}
+			if data.Done {
+				if completionHandled {
+					return nil
+				}
+				completionHandled = true
+
+				logger.Infof(streamCtx.asyncCtx, "Knowledge QA service completed for session: %s", sessionID)
+				updateCtx := context.WithValue(streamCtx.asyncCtx, types.TenantIDContextKey, reqCtx.session.TenantID)
+				h.completeAssistantMessage(updateCtx, streamCtx.assistantMessage, reqCtx.query)
+				streamCtx.eventBus.Emit(streamCtx.asyncCtx, event.Event{
+					Type:      event.EventAgentComplete,
+					SessionID: sessionID,
+					Data:      event.AgentCompleteData{FinalAnswer: streamCtx.assistantMessage.Content},
+				})
+			}
+			return nil
+		})
+	}
+
+	// Execute QA asynchronously
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				buf := make([]byte, 1024)
+				buf := make([]byte, 10240)
 				runtime.Stack(buf, true)
+				stageName := "Knowledge QA"
+				if mode == qaModeAgent {
+					stageName = "Agent QA"
+				}
 				logger.ErrorWithFields(streamCtx.asyncCtx,
-					errors.NewInternalServerError(fmt.Sprintf("Agent QA service panicked: %v\n%s", r, string(buf))),
+					errors.NewInternalServerError(fmt.Sprintf("%s service panicked: %v\n%s", stageName, r, string(buf))),
 					map[string]interface{}{"session_id": sessionID})
 			}
-			// Use session's tenant for message update (session belongs to session.TenantID; asyncCtx may have effectiveTenantID when using shared agent)
-			updateCtx := context.WithValue(streamCtx.asyncCtx, types.TenantIDContextKey, reqCtx.session.TenantID)
-			h.completeAssistantMessage(updateCtx, streamCtx.assistantMessage, reqCtx.query)
-			logger.Infof(streamCtx.asyncCtx, "Agent QA service completed for session: %s", sessionID)
+			// Agent mode: complete the assistant message in defer (normal mode does it via event handler)
+			if mode == qaModeAgent {
+				updateCtx := context.WithValue(streamCtx.asyncCtx, types.TenantIDContextKey, reqCtx.session.TenantID)
+				h.completeAssistantMessage(updateCtx, streamCtx.assistantMessage, reqCtx.query)
+				logger.Infof(streamCtx.asyncCtx, "Agent QA service completed for session: %s", sessionID)
+			}
 		}()
 
-		// Run VLM analysis inside the async flow so SSE stream is already up
-		// and the user can see progress. Emit tool_call/tool_result events.
-		if len(reqCtx.images) > 0 && reqCtx.customAgent != nil && reqCtx.customAgent.Config.VLMModelID != "" {
-			toolCallID := uuid.New().String()
-			streamCtx.eventBus.Emit(streamCtx.asyncCtx, event.Event{
-				Type:      event.EventAgentToolCall,
-				SessionID: sessionID,
-				Data: event.AgentToolCallData{
-					ToolCallID: toolCallID,
-					ToolName:   "image_analysis",
-					Iteration:  0,
-				},
-			})
-			vlmStart := time.Now()
-			h.analyzeImageAttachments(streamCtx.asyncCtx, reqCtx.images,
-				reqCtx.customAgent.Config.VLMModelID, reqCtx.query)
-			streamCtx.eventBus.Emit(streamCtx.asyncCtx, event.Event{
-				Type:      event.EventAgentToolResult,
-				SessionID: sessionID,
-				Data: event.AgentToolResultData{
-					ToolCallID: toolCallID,
-					ToolName:   "image_analysis",
-					Output:     "已查看图片内容",
-					Success:    true,
-					Duration:   time.Since(vlmStart).Milliseconds(),
-					Iteration:  0,
-				},
-			})
+		// Run VLM image analysis if applicable
+		h.runVLMAnalysisIfNeeded(streamCtx, reqCtx, mode)
+
+		// Build QA request and invoke the appropriate service
+		qaReq := reqCtx.buildQARequest()
+
+		var serviceErr error
+		var stageName string
+		if mode == qaModeNormal {
+			stageName = "knowledge_qa_execution"
+			serviceErr = h.sessionService.KnowledgeQA(streamCtx.asyncCtx, qaReq, streamCtx.eventBus)
+		} else {
+			stageName = "agent_execution"
+			serviceErr = h.sessionService.AgentQA(streamCtx.asyncCtx, qaReq, streamCtx.eventBus)
 		}
 
-		imageURLs, imageDescription := extractImageURLsAndOCRText(reqCtx.images)
-		err := h.sessionService.AgentQA(
-			streamCtx.asyncCtx,
-			reqCtx.session,
-			reqCtx.query,
-			reqCtx.assistantMessage.ID,
-			reqCtx.summaryModelID,
-			streamCtx.eventBus,
-			reqCtx.customAgent,
-			reqCtx.knowledgeBaseIDs,
-			reqCtx.knowledgeIDs,
-			imageURLs, imageDescription,
-			reqCtx.userMessageID,
-		)
-		if err != nil {
-			logger.ErrorWithFields(streamCtx.asyncCtx, err, nil)
+		if serviceErr != nil {
+			logger.ErrorWithFields(streamCtx.asyncCtx, serviceErr, nil)
 			streamCtx.eventBus.Emit(streamCtx.asyncCtx, event.Event{
 				Type:      event.EventError,
 				SessionID: sessionID,
 				Data: event.ErrorData{
-					Error:     err.Error(),
-					Stage:     "agent_execution",
+					Error:     serviceErr.Error(),
+					Stage:     stageName,
 					SessionID: sessionID,
 				},
 			})
@@ -670,8 +576,78 @@ func (h *Handler) executeAgentModeQA(reqCtx *qaRequestContext) {
 	}()
 
 	// Handle SSE events (blocking)
+	shouldWaitForTitle := generateTitle && reqCtx.session.Title == ""
 	h.handleAgentEventsForSSE(ctx, reqCtx.c, sessionID, reqCtx.assistantMessage.ID,
-		reqCtx.requestID, streamCtx.eventBus, reqCtx.session.Title == "")
+		reqCtx.requestID, streamCtx.eventBus, shouldWaitForTitle)
+}
+
+// runVLMAnalysisIfNeeded runs VLM image analysis within the async goroutine,
+// emitting tool_call/tool_result events so the user can see progress.
+// For normal mode, VLM only runs on the pure-chat path (no KB, no web search);
+// RAG paths defer VLM to the pipeline rewrite step.
+// For agent mode, VLM always runs when images and a VLM model are present.
+func (h *Handler) runVLMAnalysisIfNeeded(streamCtx *sseStreamContext, reqCtx *qaRequestContext, mode qaMode) {
+	if len(reqCtx.images) == 0 || reqCtx.customAgent == nil || reqCtx.customAgent.Config.VLMModelID == "" {
+		return
+	}
+
+	sessionID := reqCtx.sessionID
+
+	// In normal mode, only run VLM for pure-chat path
+	if mode == qaModeNormal {
+		hasRequestKBs := len(reqCtx.knowledgeBaseIDs) > 0 || len(reqCtx.knowledgeIDs) > 0
+		agentWillResolveKBs := false
+		if !hasRequestKBs && reqCtx.customAgent != nil && !reqCtx.customAgent.Config.RetrieveKBOnlyWhenMentioned {
+			switch reqCtx.customAgent.Config.KBSelectionMode {
+			case "all":
+				agentWillResolveKBs = true
+			case "selected", "":
+				agentWillResolveKBs = len(reqCtx.customAgent.Config.KnowledgeBases) > 0
+			case "none":
+				agentWillResolveKBs = false
+			default:
+				agentWillResolveKBs = len(reqCtx.customAgent.Config.KnowledgeBases) > 0
+			}
+		}
+		if hasRequestKBs || agentWillResolveKBs || reqCtx.webSearchEnabled {
+			return // VLM will be handled by the pipeline rewrite step
+		}
+	}
+
+	// Emit VLM tool call/result events
+	toolCallID := uuid.New().String()
+	iteration := 0 // agent mode uses iteration field
+
+	streamCtx.eventBus.Emit(streamCtx.asyncCtx, event.Event{
+		Type:      event.EventAgentToolCall,
+		SessionID: sessionID,
+		Data: event.AgentToolCallData{
+			ToolCallID: toolCallID,
+			ToolName:   "image_analysis",
+			Iteration:  iteration,
+		},
+	})
+
+	vlmStart := time.Now()
+	h.analyzeImageAttachments(streamCtx.asyncCtx, reqCtx.images,
+		reqCtx.customAgent.Config.VLMModelID, reqCtx.query)
+
+	outputMsg := "已分析图片内容"
+	if mode == qaModeAgent {
+		outputMsg = "已查看图片内容"
+	}
+	streamCtx.eventBus.Emit(streamCtx.asyncCtx, event.Event{
+		Type:      event.EventAgentToolResult,
+		SessionID: sessionID,
+		Data: event.AgentToolResultData{
+			ToolCallID: toolCallID,
+			ToolName:   "image_analysis",
+			Output:     outputMsg,
+			Success:    true,
+			Duration:   time.Since(vlmStart).Milliseconds(),
+			Iteration:  iteration,
+		},
+	})
 }
 
 // completeAssistantMessage marks an assistant message as complete, updates it,
@@ -686,4 +662,3 @@ func (h *Handler) completeAssistantMessage(ctx context.Context, assistantMessage
 	bgCtx := context.WithoutCancel(ctx)
 	go h.messageService.IndexMessageToKB(bgCtx, userQuery, assistantMessage.Content, assistantMessage.ID, assistantMessage.SessionID)
 }
-

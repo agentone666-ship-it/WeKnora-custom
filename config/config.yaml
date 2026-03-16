@@ -196,7 +196,16 @@ conversation:
       - If the user asks in English, respond in English
       - If the user asks in Chinese, respond in Chinese
 
-    context_template: "{{query}}"
+    context_template: |
+      The following is retrieved information that may or may not be relevant:
+      {{contexts}}
+
+      User question: {{query}}
+
+      Instructions:
+      - If the retrieved information is relevant to the user's question, use it to provide an accurate answer.
+      - If the retrieved information is NOT relevant (e.g., the user is greeting, chatting, or asking something unrelated), ignore it and respond naturally as a helpful assistant.
+      - Do not mention "retrieved information" or "reference materials" in your response unless the user explicitly asks about sources.
   extract_entities_prompt: |
     ## Task
     Extract all entities from the user-provided text that match the following entity types:
