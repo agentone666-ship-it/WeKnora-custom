@@ -2414,6 +2414,25 @@ func (s *knowledgeService) GetKnowledgeFile(ctx context.Context, id string) (io.
 		return nil, "", err
 	}
 
+	// Manual knowledge stores content in Metadata — stream it directly as a .md file.
+	if knowledge.IsManual() {
+		meta, err := knowledge.ManualMetadata()
+		if err != nil {
+			return nil, "", err
+		}
+		// ManualMetadata returns (nil, nil) when Metadata column is empty; treat as empty content.
+		content := ""
+		if meta != nil {
+			content = meta.Content
+		}
+		// Sanitize title: strip characters that are invalid or dangerous in HTTP headers / filenames.
+		safeName := strings.NewReplacer(
+			"\n", "", "\r", "", "/", "-", "\\", "-", "\"", "'",
+		).Replace(knowledge.Title)
+		filename := safeName + ".md"
+		return io.NopCloser(strings.NewReader(content)), filename, nil
+	}
+
 	// Resolve KB-level file service with FilePath fallback protection
 	kb, _ := s.kbService.GetKnowledgeBaseByID(ctx, knowledge.KnowledgeBaseID)
 	file, err := s.resolveFileServiceForPath(ctx, kb, knowledge.FilePath).GetFile(ctx, knowledge.FilePath)
