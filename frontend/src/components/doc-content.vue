@@ -627,7 +627,8 @@ const downloadFile = () => {
         const link = document.createElement("a");
         link.style.display = "none";
         link.setAttribute("href", url.value);
-        link.setAttribute("download", props.details.title);
+        link.setAttribute("download", props.details.type === 'manual' ? props.details.title + '.md' : props.details.title);
+        document.body.appendChild(link);
         link.click();
         nextTick(() => {
           document.body.removeChild(link);
@@ -696,6 +697,9 @@ const handleDetailsScroll = () => {
         <span class="label">{{ $t('knowledgeBase.documentTitle') }}</span>
         <div class="manual_title_box">
           <span class="manual_title">{{ details.title }}</span>
+        </div>
+        <div class="icon_box" @click="downloadFile()">
+          <img class="download_box" src="@/assets/img/download.svg" alt="">
         </div>
       </div>
       
