@@ -72,6 +72,16 @@ func TestSanitizeManualDownloadFilename(t *testing.T) {
 			title: "知识库文章",
 			want:  "知识库文章.md",
 		},
+		{
+			name:  "tab character stripped",
+			title: "file\tname",
+			want:  "filename.md",
+		},
+		{
+			name:  "title already ending in .md not double-extended",
+			title: "guide.md",
+			want:  "guide.md",
+		},
 	}
 
 	for _, tt := range tests {

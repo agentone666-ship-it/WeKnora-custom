@@ -6752,12 +6752,15 @@ func ensureManualFileName(title string) string {
 // back to "untitled".
 func sanitizeManualDownloadFilename(title string) string {
 	safeName := strings.NewReplacer(
-		"\n", "", "\r", "", "/", "-", "\\", "-", "\"", "'",
+		"\n", "", "\r", "", "\t", "", "/", "-", "\\", "-", "\"", "'",
 	).Replace(title)
 	if strings.TrimSpace(safeName) == "" {
 		safeName = "untitled"
 	}
-	return safeName + manualFileExtension
+	if !strings.HasSuffix(strings.ToLower(safeName), manualFileExtension) {
+		safeName += manualFileExtension
+	}
+	return safeName
 }
 
 func (s *knowledgeService) triggerManualProcessing(ctx context.Context,
