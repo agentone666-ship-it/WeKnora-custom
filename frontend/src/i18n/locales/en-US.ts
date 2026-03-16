@@ -3271,6 +3271,10 @@ export default {
       empty: 'No IM channels yet. Click the button below to add one.',
       unnamed: 'Unnamed Channel',
       docLink: 'Integration Guide',
+      wecomConsole: 'WeCom Admin',
+      feishuConsole: 'Feishu Open Platform',
+      modeHint: 'WebSocket is recommended for easier setup',
+      consoleTip: 'to get credentials',
     },
     mcp: {
       label: 'MCP Services',

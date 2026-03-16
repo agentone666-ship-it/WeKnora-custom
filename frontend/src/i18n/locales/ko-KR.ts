@@ -3301,6 +3301,10 @@ export default {
       empty: "IM 채널이 없습니다. 아래 버튼을 클릭하여 추가하세요.",
       unnamed: "이름 없는 채널",
       docLink: "통합 가이드 보기",
+      wecomConsole: "WeCom 관리 콘솔",
+      feishuConsole: "Feishu 개발 플랫폼",
+      modeHint: "WebSocket 방식이 설정이 더 간편하여 권장됩니다",
+      consoleTip: "자격 증명 정보를 가져오세요",
     },
     tools: {
       thinking: '사고',

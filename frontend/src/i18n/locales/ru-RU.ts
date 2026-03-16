@@ -2854,6 +2854,10 @@ export default {
       empty: 'Нет IM каналов. Нажмите кнопку ниже, чтобы добавить один.',
       unnamed: 'Неименованный канал',
       docLink: 'Руководство по интеграции',
+      wecomConsole: 'Консоль WeCom',
+      feishuConsole: 'Платформа Feishu',
+      modeHint: 'Рекомендуется WebSocket — проще настроить',
+      consoleTip: 'для получения учётных данных',
     },
     mcp: {
       label: 'MCP-сервисы',

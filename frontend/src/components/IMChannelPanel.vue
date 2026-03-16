@@ -104,6 +104,7 @@
             <t-radio-button value="websocket">WebSocket</t-radio-button>
             <t-radio-button value="webhook">Webhook</t-radio-button>
           </t-radio-group>
+          <p class="form-hint">{{ $t('agentEditor.im.modeHint') }}</p>
         </div>
 
         <!-- Output mode -->
@@ -120,6 +121,13 @@
 
         <!-- WeCom credentials -->
         <template v-if="formData.platform === 'wecom'">
+          <div class="platform-link-hint">
+            <t-icon name="jump" class="hint-link-icon" />
+            <a href="https://work.weixin.qq.com/" target="_blank" rel="noopener noreferrer" class="hint-link">
+              {{ $t('agentEditor.im.wecomConsole') }}
+            </a>
+            <span class="hint-text">{{ $t('agentEditor.im.consoleTip') }}</span>
+          </div>
           <template v-if="formData.mode === 'websocket'">
             <div class="form-item">
               <label class="form-label">Bot ID</label>
@@ -156,6 +164,13 @@
 
         <!-- Feishu credentials -->
         <template v-if="formData.platform === 'feishu'">
+          <div class="platform-link-hint">
+            <t-icon name="jump" class="hint-link-icon" />
+            <a href="https://open.feishu.cn/" target="_blank" rel="noopener noreferrer" class="hint-link">
+              {{ $t('agentEditor.im.feishuConsole') }}
+            </a>
+            <span class="hint-text">{{ $t('agentEditor.im.consoleTip') }}</span>
+          </div>
           <div class="form-item">
             <label class="form-label">App ID</label>
             <t-input v-model="formData.credentials.app_id" placeholder="App ID" />
@@ -526,5 +541,42 @@ onMounted(() => {
   height: 1px;
   background: var(--td-component-stroke);
   margin: 4px 0;
+}
+
+.form-hint {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--td-text-color-placeholder);
+  line-height: 1.4;
+}
+
+.platform-link-hint {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--td-text-color-placeholder);
+
+  .hint-link-icon {
+    font-size: 12px;
+    color: var(--td-brand-color);
+    flex-shrink: 0;
+  }
+
+  .hint-link {
+    color: var(--td-brand-color);
+    text-decoration: none;
+    font-weight: 500;
+    white-space: nowrap;
+
+    &:hover {
+      text-decoration: underline;
+    }
+  }
+
+  .hint-text {
+    color: var(--td-text-color-placeholder);
+  }
 }
 </style>

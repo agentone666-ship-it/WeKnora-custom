@@ -3246,6 +3246,10 @@ export default {
       empty: "暂无 IM 渠道，点击下方按钮添加",
       unnamed: "未命名渠道",
       docLink: "查看接入文档",
+      wecomConsole: "企业微信管理后台",
+      feishuConsole: "飞书开放平台",
+      modeHint: "推荐使用 WebSocket 方式接入，配置更简单",
+      consoleTip: "前往获取凭证信息",
     },
     tools: {
       thinking: "思考",
