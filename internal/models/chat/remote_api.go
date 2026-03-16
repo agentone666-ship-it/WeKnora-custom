@@ -76,7 +76,29 @@ func (c *RemoteAPIChat) ConvertMessages(messages []Message) []openai.ChatComplet
 			Role: msg.Role,
 		}
 
-		if len(msg.Images) > 0 && msg.Role == "user" {
+		// 优先处理多内容消息（包含图片等）
+		if len(msg.MultiContent) > 0 {
+			openaiMsg.MultiContent = make([]openai.ChatMessagePart, 0, len(msg.MultiContent))
+			for _, part := range msg.MultiContent {
+				switch part.Type {
+				case "text":
+					openaiMsg.MultiContent = append(openaiMsg.MultiContent, openai.ChatMessagePart{
+						Type: openai.ChatMessagePartTypeText,
+						Text: part.Text,
+					})
+				case "image_url":
+					if part.ImageURL != nil {
+						openaiMsg.MultiContent = append(openaiMsg.MultiContent, openai.ChatMessagePart{
+							Type: openai.ChatMessagePartTypeImageURL,
+							ImageURL: &openai.ChatMessageImageURL{
+								URL:    part.ImageURL.URL,
+								Detail: openai.ImageURLDetail(part.ImageURL.Detail),
+							},
+						})
+					}
+				}
+			}
+		} else if len(msg.Images) > 0 && msg.Role == "user" {
 			parts := make([]openai.ChatMessagePart, 0, len(msg.Images)+1)
 			for _, imgURL := range msg.Images {
 				resolved := resolveImageURLForLLM(imgURL)

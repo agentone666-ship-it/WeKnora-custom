@@ -39,14 +39,28 @@ type ChatOptions struct {
 	Format              json.RawMessage `json:"format,omitempty"`      // 响应格式定义
 }
 
+// MessageContentPart represents a part of multi-content message
+type MessageContentPart struct {
+	Type     string    `json:"type"`                // "text" or "image_url"
+	Text     string    `json:"text,omitempty"`      // For type="text"
+	ImageURL *ImageURL `json:"image_url,omitempty"` // For type="image_url"
+}
+
+// ImageURL represents the image URL structure
+type ImageURL struct {
+	URL    string `json:"url"`              // URL or base64 data URI
+	Detail string `json:"detail,omitempty"` // "auto", "low", "high"
+}
+
 // Message 表示聊天消息
 type Message struct {
-	Role       string     `json:"role"`                   // 角色：system, user, assistant, tool
-	Content    string     `json:"content"`                // 消息内容
-	Name       string     `json:"name,omitempty"`         // Function/tool name (for tool role)
-	ToolCallID string     `json:"tool_call_id,omitempty"` // Tool call ID (for tool role)
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`   // Tool calls (for assistant role)
-	Images     []string   `json:"images,omitempty"`       // Image URLs for multimodal (only for current user message)
+	Role         string               `json:"role"`                    // 角色：system, user, assistant, tool
+	Content      string               `json:"content"`                 // 消息内容
+	MultiContent []MessageContentPart `json:"multi_content,omitempty"` // 多内容消息（文本+图片）
+	Name         string               `json:"name,omitempty"`          // Function/tool name (for tool role)
+	ToolCallID   string               `json:"tool_call_id,omitempty"`  // Tool call ID (for tool role)
+	ToolCalls    []ToolCall           `json:"tool_calls,omitempty"`    // Tool calls (for assistant role)
+	Images       []string             `json:"images,omitempty"`        // Image URLs for multimodal (only for current user message)
 }
 
 // ToolCall represents a tool call in a message
