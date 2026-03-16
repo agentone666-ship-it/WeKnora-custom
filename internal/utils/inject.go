@@ -844,15 +844,31 @@ func InjectAndConditions(sql, filter string) string {
 
 	// Check if WHERE clause exists
 	wherePattern := regexp.MustCompile(`(?i)\bWHERE\b`)
-	if wherePattern.MatchString(sql) {
-		// Add filter and wrap existing conditions in parentheses to prevent OR precedence issues
-		return wherePattern.ReplaceAllString(sql, fmt.Sprintf("WHERE %s AND (", filter)) + ")"
+	if loc := wherePattern.FindStringIndex(sql); loc != nil {
+		// Add filter and wrap existing conditions in parentheses to prevent OR precedence issues.
+		// The wrapping must only apply to the original WHERE expression, not trailing clauses like
+		// ORDER BY / GROUP BY / LIMIT, otherwise it can generate invalid SQL.
+		whereExprStart := loc[1]
+		tailPattern := regexp.MustCompile(`(?i)\b(GROUP BY|ORDER BY|LIMIT|OFFSET|HAVING|FETCH)\b`)
+		tailLoc := tailPattern.FindStringIndex(sql[whereExprStart:])
+
+		if tailLoc == nil {
+			originalWhereExpr := strings.TrimSpace(sql[whereExprStart:])
+			return fmt.Sprintf("%sWHERE %s AND (%s)", sql[:loc[0]], filter, originalWhereExpr)
+		}
+
+		whereExprEnd := whereExprStart + tailLoc[0]
+		originalWhereExpr := strings.TrimSpace(sql[whereExprStart:whereExprEnd])
+		tailClause := strings.TrimLeft(sql[whereExprEnd:], " \t\r\n")
+		return fmt.Sprintf("%sWHERE %s AND (%s) %s", sql[:loc[0]], filter, originalWhereExpr, tailClause)
 	}
 
 	// Add new WHERE clause before ORDER BY, GROUP BY, LIMIT, etc.
 	clausePattern := regexp.MustCompile(`(?i)\b(GROUP BY|ORDER BY|LIMIT|OFFSET|HAVING|FETCH)\b`)
 	if loc := clausePattern.FindStringIndex(sql); loc != nil {
-		return sql[:loc[0]] + fmt.Sprintf(" WHERE %s ", filter) + sql[loc[0]:]
+		prefix := strings.TrimRight(sql[:loc[0]], " \t\r\n")
+		suffix := strings.TrimLeft(sql[loc[0]:], " \t\r\n")
+		return fmt.Sprintf("%s WHERE %s %s", prefix, filter, suffix)
 	}
 
 	// Add WHERE clause at the end
