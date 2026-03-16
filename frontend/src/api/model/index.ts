@@ -22,6 +22,7 @@ export interface ModelConfig {
     interface_type?: 'ollama' | 'openai'; // VLLM专用
     parameter_size?: string; // Ollama模型参数大小 (e.g., "7B", "13B", "70B")
     extra_config?: Record<string, string>; // Provider-specific configuration
+    supports_vision?: boolean; // Whether the model accepts image/multimodal input
   };
   is_default?: boolean;
   is_builtin?: boolean;

@@ -318,6 +318,79 @@
                         <t-switch v-model="thinkingEnabled" />
                       </div>
                     </div>
+
+                  </div>
+                </div>
+
+                <!-- 多模态配置 -->
+                <div v-show="currentSection === 'multimodal'" class="section">
+                  <div class="section-header">
+                    <h2>{{ $t('agentEditor.imageUpload.sectionTitle') }}</h2>
+                    <p class="section-description">{{ $t('agentEditor.imageUpload.sectionDesc') }}</p>
+                  </div>
+
+                  <div class="settings-group">
+                    <!-- 图片上传（多模态） -->
+                    <div class="setting-row">
+                      <div class="setting-info">
+                        <label>{{ $t('agentEditor.imageUpload.label') }}</label>
+                        <p class="desc">{{ $t('agentEditor.imageUpload.desc') }}</p>
+                      </div>
+                      <div class="setting-control">
+                        <t-switch v-model="formData.config.image_upload_enabled" />
+                      </div>
+                    </div>
+
+                    <!-- VLM模型（图片上传启用时） -->
+                    <div v-if="formData.config.image_upload_enabled" class="setting-row">
+                      <div class="setting-info">
+                        <label>{{ $t('agentEditor.imageUpload.vlmModel') }} <span class="required">*</span></label>
+                        <p class="desc">{{ $t('agentEditor.imageUpload.vlmModelDesc') }}</p>
+                      </div>
+                      <div class="setting-control">
+                        <ModelSelector
+                          model-type="VLLM"
+                          :selected-model-id="formData.config.vlm_model_id"
+                          :all-models="allModels"
+                          @update:selected-model-id="(val: string) => formData.config.vlm_model_id = val"
+                          @add-model="handleAddModel('vllm')"
+                          :placeholder="$t('agentEditor.imageUpload.vlmModelPlaceholder')"
+                        />
+                      </div>
+                    </div>
+
+                    <!-- 图片存储 Provider（图片上传启用时） -->
+                    <div v-if="formData.config.image_upload_enabled" class="setting-row">
+                      <div class="setting-info">
+                        <label>{{ $t('agentEditor.imageUpload.storageProvider') }}</label>
+                        <p class="desc">{{ $t('agentEditor.imageUpload.storageProviderDesc') }}</p>
+                      </div>
+                      <div class="setting-control" style="flex-direction: column; align-items: flex-end;">
+                        <t-select
+                          v-model="formData.config.image_storage_provider"
+                          style="width: 280px;"
+                          :placeholder="$t('agentEditor.imageUpload.storageProviderPlaceholder')"
+                          clearable
+                        >
+                          <t-option value="" :label="$t('agentEditor.imageUpload.storageDefault')" />
+                          <t-option
+                            v-for="opt in imageStorageOptions"
+                            :key="opt.value"
+                            :value="opt.value"
+                            :label="opt.label"
+                            :disabled="opt.disabled"
+                          >
+                            <span class="select-option-with-tag">
+                              <span>{{ opt.label }}</span>
+                              <t-tag v-if="opt.disabled" theme="warning" variant="light" size="small">{{ $t('agentEditor.imageUpload.notConfigured') }}</t-tag>
+                            </span>
+                          </t-option>
+                        </t-select>
+                        <a href="javascript:void(0)" class="go-settings-link" @click.prevent="uiStore.openSettings('storage')">
+                          {{ $t('agentEditor.imageUpload.goStorageSettings') }}
+                        </a>
+                      </div>
+                    </div>
                   </div>
                 </div>
 
@@ -1042,6 +1115,22 @@
                 <div v-if="props.mode === 'edit' && props.agent?.id && !props.agent?.is_builtin" v-show="currentSection === 'share'" class="section">
                   <AgentShareSettings :agent-id="props.agent.id" :agent="props.agent" />
                 </div>
+
+                <!-- IM集成（仅编辑模式） -->
+                <div v-if="props.mode === 'edit' && props.agent?.id" v-show="currentSection === 'im'" class="section">
+                  <div class="section-header">
+                    <h2>{{ $t('agentEditor.im.title') }}</h2>
+                    <p class="section-description">
+                      {{ $t('agentEditor.im.description') }}
+                      <a href="https://github.com/Tencent/WeKnora/blob/main/docs/IM%E9%9B%86%E6%88%90%E5%BC%80%E5%8F%91%E6%96%87%E6%A1%A3.md" target="_blank" rel="noopener noreferrer" class="section-doc-link">
+                        <t-icon name="link" class="link-icon" />{{ $t('agentEditor.im.docLink') }}
+                      </a>
+                    </p>
+                  </div>
+                  <div class="settings-group">
+                    <IMChannelPanel :agent-id="props.agent.id" />
+                  </div>
+                </div>
               </div>
 
               <!-- 底部操作栏 -->
@@ -1066,13 +1155,14 @@ import { listModels, type ModelConfig } from '@/api/model';
 import { listKnowledgeBases } from '@/api/knowledge-base';
 import { listMCPServices, type MCPService } from '@/api/mcp-service';
 import { listSkills, type SkillInfo } from '@/api/skill';
-import { getAgentConfig, getConversationConfig } from '@/api/system';
+import { getAgentConfig, getConversationConfig, getStorageEngineStatus, type StorageEngineStatusItem } from '@/api/system';
 import { useUIStore } from '@/stores/ui';
 import { useOrganizationStore } from '@/stores/organization';
 import AgentAvatar from '@/components/AgentAvatar.vue';
 import PromptTemplateSelector from '@/components/PromptTemplateSelector.vue';
 import ModelSelector from '@/components/ModelSelector.vue';
 import AgentShareSettings from '@/components/AgentShareSettings.vue';
+import IMChannelPanel from '@/components/IMChannelPanel.vue';
 
 const uiStore = useUIStore();
 const orgStore = useOrganizationStore();
@@ -1099,6 +1189,21 @@ const mcpOptions = ref<{ label: string; value: string }[]>([]);
 const skillOptions = ref<{ name: string; description: string }[]>([]);
 // 是否允许启用 Skills（取决于后端沙箱是否启用，disabled 时为 false；未请求前为 false 避免闪显）
 const skillsAvailable = ref(false);
+// 存储引擎可用状态（用于图片存储 provider 选择）
+const storageEngineStatus = ref<StorageEngineStatusItem[]>([]);
+const imageStorageOptions = computed(() => {
+  const statusMap: Record<string, boolean> = {};
+  for (const e of storageEngineStatus.value) {
+    statusMap[e.name] = e.available;
+  }
+  return [
+    { value: 'local', label: t('settings.storage.engineLocal'), disabled: false },
+    { value: 'minio', label: 'MinIO', disabled: statusMap.minio === false },
+    { value: 'cos', label: t('settings.storage.engineCos'), disabled: statusMap.cos === false },
+    { value: 'tos', label: t('settings.storage.engineTos'), disabled: statusMap.tos === false },
+    { value: 's3', label: 'Amazon S3', disabled: statusMap.s3 === false },
+  ];
+});
 
 // 系统默认配置（用于内置智能体显示默认提示词）
 const defaultAgentSystemPrompt = ref('');  // Agent 模式的默认系统提示词（来自 agent-config）
@@ -1280,6 +1385,8 @@ const navItems = computed(() => {
   }
   // 网络搜索（独立菜单）
   items.push({ key: 'websearch', icon: 'internet', label: t('agent.editor.webSearchConfig') });
+  // 多模态配置（图片上传）
+  items.push({ key: 'multimodal', icon: 'image', label: t('agentEditor.imageUpload.navLabel') });
   // 多轮对话（仅普通模式显示，Agent模式内部自动控制）
   if (!isAgentMode.value) {
     items.push({ key: 'conversation', icon: 'chat', label: t('agent.editor.conversationSettings') });
@@ -1287,6 +1394,10 @@ const navItems = computed(() => {
   // 共享管理（仅编辑模式且非内置智能体）
   if (props.mode === 'edit' && props.agent?.id && !props.agent?.is_builtin) {
     items.push({ key: 'share', icon: 'share', label: t('knowledgeEditor.sidebar.share') });
+  }
+  // IM集成（仅编辑模式，创建时Agent还没有ID）
+  if (props.mode === 'edit' && props.agent?.id) {
+    items.push({ key: 'im', icon: 'chat-message', label: t('agentEditor.im.title') });
   }
   return items;
 });
@@ -1320,6 +1431,10 @@ const defaultFormData = {
     // 知识库设置
     kb_selection_mode: 'none' as 'all' | 'selected' | 'none',
     knowledge_bases: [] as string[],
+    // 图片上传/多模态设置
+    image_upload_enabled: false,
+    vlm_model_id: '',
+    image_storage_provider: '',
     // 文件类型限制
     supported_file_types: [] as string[],
     // FAQ 策略设置
@@ -1642,12 +1757,18 @@ watch(() => uiStore.showSettingsModal, async (visible, prevVisible) => {
   // 从设置页面返回时（弹窗关闭），刷新模型列表
   if (prevVisible && !visible && props.visible) {
     try {
-      const models = await listModels();
+      const [models, statusRes] = await Promise.all([
+        listModels(),
+        getStorageEngineStatus(),
+      ]);
       if (models && models.length > 0) {
         allModels.value = models;
       }
+      if (statusRes?.data?.engines) {
+        storageEngineStatus.value = statusRes.data.engines;
+      }
     } catch (e) {
-      console.warn('Failed to refresh models after settings closed', e);
+      console.warn('Failed to refresh data after settings closed', e);
     }
   }
 });
@@ -1723,6 +1844,16 @@ const loadDependencies = async () => {
     } catch (e) {
       console.warn('Failed to load skills', e);
       skillsAvailable.value = false;
+    }
+
+    // 加载存储引擎可用状态（用于图片存储 provider 选择）
+    try {
+      const statusRes = await getStorageEngineStatus();
+      if (statusRes?.data?.engines) {
+        storageEngineStatus.value = statusRes.data.engines;
+      }
+    } catch (e) {
+      console.warn('Failed to load storage engine status', e);
     }
 
     // 加载占位符定义（从统一 API）
@@ -2602,11 +2733,6 @@ const handleSave = async () => {
         currentSection.value = 'conversation';
         return;
       }
-      if (!hasPlaceholder(rewritePrompt, 'conversation')) {
-        MessagePlugin.error(t('agent.editor.conversationMissing'));
-        currentSection.value = 'conversation';
-        return;
-      }
     }
   }
 
@@ -2624,6 +2750,13 @@ const handleSave = async () => {
   if (!formData.value.config.model_id) {
     MessagePlugin.error(t('agent.editor.modelRequired'));
     currentSection.value = 'model';
+    return;
+  }
+
+  // 校验 VLM 模型（当图片上传启用时必填）
+  if (formData.value.config.image_upload_enabled && !formData.value.config.vlm_model_id) {
+    MessagePlugin.error(t('agentEditor.imageUpload.vlmModelRequired'));
+    currentSection.value = 'multimodal';
     return;
   }
 
@@ -2815,6 +2948,26 @@ const handleSave = async () => {
     color: var(--td-text-color-secondary);
     margin: 0;
     line-height: 1.5;
+
+    .section-doc-link {
+      margin-left: 8px;
+      color: var(--td-brand-color);
+      text-decoration: none;
+      font-weight: 500;
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      transition: color 0.2s ease;
+
+      .link-icon {
+        font-size: 14px;
+      }
+
+      &:hover {
+        color: var(--td-brand-color-hover);
+        text-decoration: underline;
+      }
+    }
   }
 }
 
@@ -2911,6 +3064,24 @@ const handleSave = async () => {
 
   :deep(.t-input-number) {
     width: 120px;
+  }
+}
+
+.select-option-with-tag {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  gap: 8px;
+}
+
+.go-settings-link {
+  font-size: 12px;
+  color: var(--td-brand-color);
+  margin-top: 4px;
+  text-decoration: none;
+  &:hover {
+    text-decoration: underline;
   }
 }
 

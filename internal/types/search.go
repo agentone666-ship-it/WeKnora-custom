@@ -133,15 +133,20 @@ type SearchResult struct {
 
 // SearchParams represents the search parameters
 type SearchParams struct {
-	QueryText            string   `json:"query_text"`
-	VectorThreshold      float64  `json:"vector_threshold"`
-	KeywordThreshold     float64  `json:"keyword_threshold"`
-	MatchCount           int      `json:"match_count"`
-	DisableKeywordsMatch bool     `json:"disable_keywords_match"`
-	DisableVectorMatch   bool     `json:"disable_vector_match"`
-	KnowledgeIDs         []string `json:"knowledge_ids"`
-	TagIDs               []string `json:"tag_ids"` // Tag IDs for filtering (used for FAQ priority filtering)
-	OnlyRecommended      bool     `json:"only_recommended"`
+	QueryText            string    `json:"query_text"`
+	QueryEmbedding       []float32 `json:"query_embedding,omitempty"`
+	VectorThreshold      float64   `json:"vector_threshold"`
+	KeywordThreshold     float64   `json:"keyword_threshold"`
+	MatchCount           int       `json:"match_count"`
+	DisableKeywordsMatch bool      `json:"disable_keywords_match"`
+	DisableVectorMatch   bool      `json:"disable_vector_match"`
+	KnowledgeIDs         []string  `json:"knowledge_ids"`
+	TagIDs               []string  `json:"tag_ids"` // Tag IDs for filtering (used for FAQ priority filtering)
+	OnlyRecommended      bool      `json:"only_recommended"`
+	// KnowledgeBaseIDs overrides the single KB ID passed to HybridSearch,
+	// allowing a single retrieval call to span multiple KBs that share the
+	// same embedding model. When empty, HybridSearch uses its own id parameter.
+	KnowledgeBaseIDs []string `json:"knowledge_base_ids,omitempty"`
 	// SkipContextEnrichment skips fetching parent, nearby, and relation chunks
 	// in processSearchResults. Used by the chat pipeline where context assembly
 	// is handled separately in the merge stage.

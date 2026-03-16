@@ -415,7 +415,7 @@
                         <t-popup
                           v-if="canManage"
                           v-model="entry.showMore"
-                          overlayClassName="faq-card-popup"
+                          overlayClassName="card-more-popup"
                           trigger="click"
                           destroy-on-close
                           placement="bottom-right"
@@ -425,12 +425,12 @@
                             <img class="more-icon" src="@/assets/img/more.png" alt="" />
                           </div>
                           <template #content>
-                            <div class="card-menu" @click.stop>
-                              <div class="card-menu-item" @click.stop="handleMenuEdit(entry)">
+                            <div class="popup-menu" @click.stop>
+                              <div class="popup-menu-item" @click.stop="handleMenuEdit(entry)">
                                 <t-icon class="menu-icon" name="edit" />
                                 <span>{{ $t('common.edit') }}</span>
                               </div>
-                              <div class="card-menu-item danger" @click.stop="handleMenuDelete(entry)">
+                              <div class="popup-menu-item delete" @click.stop="handleMenuDelete(entry)">
                                 <t-icon class="menu-icon" name="delete" />
                                 <span>{{ $t('common.delete') }}</span>
                               </div>
@@ -3241,72 +3241,7 @@ watch(() => entries.value.map(e => ({
 </script>
 
 <style lang="less">
-.tag-more-popup {
-  z-index: 99 !important;
-
-  .t-popup__content {
-    padding: 4px 0 !important;
-    margin-top: 4px !important;
-    min-width: 120px;
-  }
-}
-
-/* 面包屑下拉菜单优化 */
-.t-popup__content {
-  .t-dropdown__menu {
-    background: var(--td-bg-color-container);
-    border: 1px solid var(--td-component-stroke);
-    border-radius: 10px;
-    box-shadow: 0 6px 28px rgba(15, 23, 42, 0.08);
-    padding: 6px;
-    min-width: 150px;
-    max-width: 200px;
-  }
-
-  .t-dropdown__item {
-    padding: 8px 12px;
-    border-radius: 6px;
-    margin: 2px 0;
-    transition: all 0.12s ease;
-    font-size: 13px;
-    color: var(--td-text-color-primary);
-    cursor: pointer;
-    min-width: auto !important;
-    max-width: 100% !important;
-    display: flex !important;
-    align-items: center;
-    width: 100%;
-
-    &:hover {
-      background: var(--td-bg-color-container);
-      color: var(--td-success-color);
-    }
-
-    .t-dropdown__item-icon {
-      flex-shrink: 0;
-      margin-right: 8px;
-      color: inherit;
-      display: flex;
-      align-items: center;
-      
-      .t-icon {
-        font-size: 16px;
-      }
-    }
-
-    .t-dropdown__item-text {
-      color: inherit !important;
-      font-size: 13px !important;
-      line-height: 1.5 !important;
-      white-space: nowrap !important;
-      overflow: hidden !important;
-      text-overflow: ellipsis !important;
-      flex: 1;
-      min-width: 0;
-      display: block;
-    }
-  }
-}
+/* 下拉菜单样式已统一至 @/assets/dropdown-menu.less */
 </style>
 <style scoped lang="less">
 .faq-manager {
@@ -4477,46 +4412,7 @@ watch(() => entries.value.map(e => ({
   }
 }
 
-.card-menu {
-  display: flex;
-  flex-direction: column;
-}
-
-.card-menu-item {
-  display: flex;
-  align-items: center;
-  padding: 8px 16px;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  color: var(--td-text-color-primary);
-  font-family: "PingFang SC";
-  font-size: 14px;
-  font-weight: 400;
-
-  .menu-icon {
-    margin-right: 8px;
-    font-size: 16px;
-    flex-shrink: 0;
-  }
-
-  &:hover {
-    background: var(--td-bg-color-secondarycontainer);
-    color: var(--td-text-color-primary);
-  }
-
-  &.danger {
-    color: var(--td-text-color-primary);
-
-    &:hover {
-      background: var(--td-error-color-light);
-      color: var(--td-error-color);
-
-      .menu-icon {
-        color: var(--td-error-color);
-      }
-    }
-  }
-}
+/* card-menu 样式已统一至 @/assets/dropdown-menu.less，使用 .popup-menu 类 */
 
 .faq-question {
   flex: 1;
@@ -5147,16 +5043,7 @@ watch(() => entries.value.map(e => ({
 
 // 响应式布局由 JavaScript 动态计算，这里不需要媒体查询
 
-// 卡片菜单弹窗样式
-:deep(.faq-card-popup) {
-  z-index: 99 !important;
-
-  .t-popup__content {
-    padding: 4px 0 !important;
-    margin-top: 4px !important;
-    min-width: 120px;
-  }
-}
+// 卡片菜单弹窗样式已统一至 @/assets/dropdown-menu.less
 
 // FAQ 编辑器抽屉样式
 :deep(.faq-editor-drawer) {

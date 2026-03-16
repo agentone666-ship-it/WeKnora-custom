@@ -4,7 +4,7 @@
             <div class="msg_list">
                 <div v-for="(session, id) in messagesList" :key='id'>
                     <div v-if="session.role == 'user'">
-                        <usermsg :content="session.content" :mentioned_items="session.mentioned_items"></usermsg>
+                        <usermsg :content="session.content" :mentioned_items="session.mentioned_items" :images="session.images"></usermsg>
                     </div>
                     <div v-if="session.role == 'assistant'">
                         <botmsg :content="session.content" :session="session" :user-query="getUserQuery(id)" @scroll-bottom="scrollToBottom"
@@ -23,7 +23,7 @@
         </div>
         <div style="min-height: 115px; margin: 16px auto 4px;width: 100%;max-width: 800px;">
             <InputField 
-                @send-msg="(query, modelId, mentionedItems) => sendMsg(query, modelId, mentionedItems)" 
+                @send-msg="(query, modelId, mentionedItems, imageFiles) => sendMsg(query, modelId, mentionedItems, imageFiles)" 
                 @stop-generation="handleStopGeneration"
                 :isReplying="isReplying" 
                 :sessionId="session_id"
@@ -61,7 +61,7 @@ const useSettingsStoreInstance = useSettingsStore();
 const uiStore = useUIStore();
 const { navigateToKnowledgeBaseList } = useKnowledgeBaseCreationNavigation();
 const { t } = useI18n();
-const { menuArr, isFirstSession, firstQuery, firstMentionedItems, firstModelId } = storeToRefs(usemenuStore);
+const { menuArr, isFirstSession, firstQuery, firstMentionedItems, firstModelId, firstImageFiles } = storeToRefs(usemenuStore);
 const { output, onChunk, isStreaming, isLoading, error, startStream, stopStream } = useStream();
 const route = useRoute();
 const router = useRouter();
@@ -81,6 +81,15 @@ let userquery = ref('')
 const scrollContainer = ref(null)
 const handleKBEditorSuccess = (kbId) => {
     navigateToKnowledgeBaseList(kbId)
+}
+
+function fileToBase64(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+    });
 }
 
 const getUserQuery = (index) => {
@@ -323,12 +332,31 @@ const handleStopGeneration = () => {
     // API 调用成功后，后端的 stop 事件会清空它
 };
 
-const sendMsg = async (value, modelId = '', mentionedItems = []) => {
+const sendMsg = async (value, modelId = '', mentionedItems = [], imageFiles = []) => {
     userquery.value = value;
     isReplying.value = true;
     loading.value = true;
+
+    // Convert images to base64 data URIs for backend processing and local display
+    let imageAttachments = [];
+    let userImages = [];
+    if (imageFiles && imageFiles.length > 0) {
+        try {
+            for (const file of imageFiles) {
+                const dataURI = await fileToBase64(file);
+                imageAttachments.push({ data: dataURI });
+                userImages.push({ url: dataURI });
+            }
+        } catch (e) {
+            console.error('[Image] Failed to read images:', e);
+            loading.value = false;
+            isReplying.value = false;
+            return;
+        }
+    }
+
     // 将@提及的知识库和文件信息存入用户消息
-    messagesList.push({ content: value, role: 'user', mentioned_items: mentionedItems });
+    messagesList.push({ content: value, role: 'user', mentioned_items: mentionedItems, images: userImages });
     scrollToBottom();
     
     // Get agent mode status from settings store
@@ -377,6 +405,7 @@ const sendMsg = async (value, modelId = '', mentionedItems = []) => {
         summary_model_id: modelId,
         mcp_service_ids: mcpServiceIds,
         mentioned_items: mentionedItems,
+        images: imageAttachments.length > 0 ? imageAttachments : undefined,
         query: value, 
         method: 'POST', 
         url: endpoint
@@ -926,7 +955,15 @@ const updateAssistantSession = (payload) => {
     }
     scrollToBottom();
 }
+const handleSessionCleared = (e) => {
+    if (e.detail?.sessionId === session_id.value) {
+        messagesList.splice(0);
+        created_at.value = '';
+    }
+};
+
 onMounted(async () => {
+    window.addEventListener('session-messages-cleared', handleSessionCleared);
     messagesList.splice(0);
     
     // 若从智能体列表点击共享智能体进入，URL 带 agent_id 与 source_tenant_id，同步到 store
@@ -953,8 +990,8 @@ onMounted(async () => {
     checkmenuTitle(session_id.value)
     if (firstQuery.value) {
         scrollLock.value = true;
-        sendMsg(firstQuery.value, firstModelId.value || '', firstMentionedItems.value || []);
-        usemenuStore.changeFirstQuery('', [], '');
+        sendMsg(firstQuery.value, firstModelId.value || '', firstMentionedItems.value || [], firstImageFiles.value || []);
+        usemenuStore.changeFirstQuery('', [], '', []);
     } else {
         scrollLock.value = false;
         let data = {
@@ -972,6 +1009,9 @@ const clearData = () => {
     userquery.value = '';
 
 }
+onUnmounted(() => {
+    window.removeEventListener('session-messages-cleared', handleSessionCleared);
+});
 onBeforeRouteLeave((to, from, next) => {
     clearData()
     next()

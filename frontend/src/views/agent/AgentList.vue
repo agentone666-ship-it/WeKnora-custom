@@ -1698,66 +1698,7 @@ defineExpose({
 </style>
 
 <style lang="less">
-// 更多操作弹窗样式
-.card-more-popup {
-  z-index: 99 !important;
-
-  .t-popup__content {
-    padding: 6px 0 !important;
-    margin-top: 6px !important;
-    min-width: 140px;
-    border-radius: 6px !important;
-    box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.1) !important;
-    border: 1px solid var(--td-component-stroke) !important;
-  }
-}
-
-.popup-menu {
-  display: flex;
-  flex-direction: column;
-}
-
-.popup-menu-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 16px;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  color: var(--td-text-color-primary);
-  font-family: "PingFang SC";
-  font-size: 14px;
-  font-weight: 400;
-  line-height: 20px;
-
-  .menu-icon {
-    font-size: 16px;
-    flex-shrink: 0;
-    color: var(--td-text-color-placeholder);
-    transition: color 0.2s ease;
-  }
-
-  &:hover {
-    background: var(--td-bg-color-container-hover);
-
-    .menu-icon {
-      color: var(--td-text-color-primary);
-    }
-  }
-
-  &.delete {
-    color: var(--td-text-color-primary);
-
-    &:hover {
-      background: var(--td-error-color-light);
-      color: var(--td-error-color);
-
-      .menu-icon {
-        color: var(--td-error-color);
-      }
-    }
-  }
-}
+/* 下拉菜单样式已统一至 @/assets/dropdown-menu.less */
 
 // 共享智能体详情侧边栏
 .shared-detail-drawer-overlay {

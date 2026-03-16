@@ -8,21 +8,56 @@ import (
 	"gorm.io/gorm"
 )
 
+// IMChannel represents an IM channel configuration stored in the database.
+// Each channel binds to an agent and contains platform-specific credentials.
+type IMChannel struct {
+	ID          string         `json:"id"          gorm:"type:varchar(36);primaryKey;default:uuid_generate_v4()"`
+	TenantID    uint64         `json:"tenant_id"   gorm:"not null;index:idx_im_channels_tenant"`
+	AgentID     string         `json:"agent_id"    gorm:"type:varchar(36);not null;index:idx_im_channels_agent"`
+	Platform    string         `json:"platform"    gorm:"type:varchar(20);not null"`
+	Name        string         `json:"name"        gorm:"type:varchar(255);not null;default:''"`
+	Enabled     bool           `json:"enabled"     gorm:"not null;default:true"`
+	Mode        string         `json:"mode"        gorm:"type:varchar(20);not null;default:'websocket'"`
+	OutputMode  string         `json:"output_mode" gorm:"type:varchar(20);not null;default:'stream'"`
+	Credentials types.JSON     `json:"credentials" gorm:"type:jsonb;not null;default:'{}'"`
+	CreatedAt   time.Time      `json:"created_at"`
+	UpdatedAt   time.Time      `json:"updated_at"`
+	DeletedAt   gorm.DeletedAt `json:"deleted_at"  gorm:"index"`
+}
+
+func (IMChannel) TableName() string {
+	return "im_channels"
+}
+
+func (ch *IMChannel) BeforeCreate(tx *gorm.DB) error {
+	if ch.ID == "" {
+		ch.ID = uuid.New().String()
+	}
+	if ch.Mode == "" {
+		ch.Mode = "websocket"
+	}
+	if ch.OutputMode == "" {
+		ch.OutputMode = "stream"
+	}
+	return nil
+}
+
 // ChannelSession maps an IM channel (user+chat combination) to a WeKnora session.
 // This allows the IM integration to maintain conversation continuity.
 type ChannelSession struct {
-	ID        string         `json:"id"         gorm:"type:varchar(36);primaryKey;default:uuid_generate_v4()"`
-	Platform  string         `json:"platform"   gorm:"type:varchar(20);not null"`
-	UserID    string         `json:"user_id"    gorm:"type:varchar(128);not null"`
-	ChatID    string         `json:"chat_id"    gorm:"type:varchar(128);not null;default:''"`
-	SessionID string         `json:"session_id" gorm:"type:varchar(36);not null;index"`
-	TenantID  uint64         `json:"tenant_id"  gorm:"not null;index"`
-	AgentID   string         `json:"agent_id"   gorm:"type:varchar(36);default:''"`
-	Status    string         `json:"status"     gorm:"type:varchar(20);not null;default:'active'"`
-	Metadata  types.JSON     `json:"metadata"   gorm:"type:jsonb;default:'{}'"`
-	CreatedAt time.Time      `json:"created_at"`
-	UpdatedAt time.Time      `json:"updated_at"`
-	DeletedAt gorm.DeletedAt `json:"deleted_at" gorm:"index"`
+	ID          string         `json:"id"            gorm:"type:varchar(36);primaryKey;default:uuid_generate_v4()"`
+	Platform    string         `json:"platform"      gorm:"type:varchar(20);not null"`
+	UserID      string         `json:"user_id"       gorm:"type:varchar(128);not null"`
+	ChatID      string         `json:"chat_id"       gorm:"type:varchar(128);not null;default:''"`
+	SessionID   string         `json:"session_id"    gorm:"type:varchar(36);not null;index"`
+	TenantID    uint64         `json:"tenant_id"     gorm:"not null;index"`
+	AgentID     string         `json:"agent_id"      gorm:"type:varchar(36);default:''"`
+	IMChannelID string         `json:"im_channel_id" gorm:"type:varchar(36);default:''"`
+	Status      string         `json:"status"        gorm:"type:varchar(20);not null;default:'active'"`
+	Metadata    types.JSON     `json:"metadata"      gorm:"type:jsonb;default:'{}'"`
+	CreatedAt   time.Time      `json:"created_at"`
+	UpdatedAt   time.Time      `json:"updated_at"`
+	DeletedAt   gorm.DeletedAt `json:"deleted_at"    gorm:"index"`
 }
 
 func (ChannelSession) TableName() string {

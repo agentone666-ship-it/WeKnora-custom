@@ -43,6 +43,11 @@ const folderUploadInputRef = ref<HTMLInputElement | null>(null);
 const uploading = ref(false);
 const kbLoading = ref(false);
 const isFAQ = computed(() => (kbInfo.value?.type || '') === 'faq');
+const missingStorageEngine = computed(() => {
+  if (!kbInfo.value || isFAQ.value) return false
+  const spc = kbInfo.value.storage_provider_config
+  return !spc || !spc.provider
+})
 const parserEngines = ref<ParserEngineInfo[]>([]);
 
 const supportedFileTypes = computed<Set<string>>(() => {
@@ -947,6 +952,10 @@ const ensureDocumentKbReady = () => {
     MessagePlugin.warning(t('knowledgeBase.notInitialized'));
     return false;
   }
+  if (missingStorageEngine.value) {
+    MessagePlugin.warning(t('knowledgeBase.missingStorageEngineUpload'));
+    return false;
+  }
   return true;
 };
 
@@ -1458,6 +1467,11 @@ async function createNewSession(value: string): Promise<void> {
             <t-icon name="info-circle" class="parser-hint-icon" />
             <span>{{ $t('knowledgeBase.unsupportedTypesHint', { types: unsupportedFileTypes.map(t => '.' + t).join('、') }) }}</span>
             <span class="parser-hint-link">{{ $t('knowledgeBase.goToParserSettings') }} →</span>
+          </p>
+          <p v-if="missingStorageEngine" class="storage-engine-warning" @click="handleOpenKBSettings">
+            <t-icon name="info-circle" class="warning-icon" />
+            <span>{{ $t('knowledgeBase.missingStorageEngine') }}</span>
+            <span class="warning-link">{{ $t('knowledgeBase.goToStorageSettings') }} →</span>
           </p>
         </div>
       </div>
@@ -1983,87 +1997,7 @@ async function createNewSession(value: string): Promise<void> {
   />
 </template>
 <style>
-.card-more {
-  z-index: 99 !important;
-}
-
-.card-more .t-popup__content {
-  min-width: 180px;
-  width: auto;
-  padding: 6px 0;
-  margin-top: 4px !important;
-  color: var(--td-text-color-primary);
-}
-.card-more .t-popup__content:hover {
-  color: inherit !important;
-}
-
-.tag-more-popup {
-  z-index: 99 !important;
-
-  .t-popup__content {
-    padding: 4px 0 !important;
-    margin-top: 4px !important;
-    min-width: 120px;
-  }
-}
-
-/* 面包屑下拉菜单优化 */
-.t-popup__content {
-  .t-dropdown__menu {
-    background: var(--td-bg-color-container);
-    border: 1px solid var(--td-component-stroke);
-    border-radius: 10px;
-    box-shadow: 0 6px 28px rgba(15, 23, 42, 0.08);
-    padding: 6px;
-    min-width: 200px;
-    max-width: 240px;
-  }
-
-  .t-dropdown__item {
-    padding: 8px 12px;
-    border-radius: 6px;
-    margin: 2px 0;
-    transition: all 0.12s ease;
-    font-size: 13px;
-    color: var(--td-text-color-primary);
-    cursor: pointer;
-    min-width: auto !important;
-    max-width: 100% !important;
-    display: flex !important;
-    align-items: center;
-    width: 100%;
-
-    &:hover {
-      background: var(--td-bg-color-container);
-      color: var(--td-success-color);
-    }
-
-    .t-dropdown__item-icon {
-      flex-shrink: 0;
-      margin-right: 8px;
-      color: inherit;
-      display: flex;
-      align-items: center;
-      
-      .t-icon {
-        font-size: 16px;
-      }
-    }
-
-    .t-dropdown__item-text {
-      color: inherit !important;
-      font-size: 13px !important;
-      line-height: 1.5 !important;
-      white-space: nowrap !important;
-      overflow: hidden !important;
-      text-overflow: ellipsis !important;
-      flex: 1;
-      min-width: 0;
-      display: block;
-    }
-  }
-}
+/* 下拉菜单容器样式已统一至 @/assets/dropdown-menu.less */
 </style>
 <style scoped lang="less">
 .knowledge-layout {
@@ -2714,6 +2648,37 @@ async function createNewSession(value: string): Promise<void> {
       white-space: nowrap;
     }
   }
+
+  .storage-engine-warning {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin: 2px 0 0;
+    color: var(--td-warning-color);
+    font-size: 12px;
+    line-height: 1.4;
+    cursor: pointer;
+    transition: color 0.15s ease;
+
+    &:hover {
+      color: var(--td-warning-color-active);
+
+      .warning-link {
+        text-decoration: underline;
+      }
+    }
+
+    .warning-icon {
+      font-size: 12px;
+      flex-shrink: 0;
+    }
+
+    .warning-link {
+      color: var(--td-brand-color);
+      margin-left: 2px;
+      white-space: nowrap;
+    }
+  }
 }
 
 
@@ -2946,26 +2911,71 @@ async function createNewSession(value: string): Promise<void> {
   display: flex;
   flex-direction: column;
   min-width: 140px;
+  gap: 1px;
 }
 
 .card-menu-item {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   padding: 8px 12px;
   cursor: pointer;
   color: var(--td-text-color-primary);
+  transition: all 0.15s cubic-bezier(0.2, 0, 0, 1);
+  border-radius: 6px;
+  font-size: 14px;
+  line-height: 20px;
 
   &:hover {
-    background: var(--td-bg-color-secondarycontainer);
+    background: var(--td-bg-color-container-hover);
+  }
+
+  &:active {
+    background: var(--td-bg-color-container-active);
+    transform: scale(0.98);
   }
 
   .icon {
     font-size: 16px;
+    color: var(--td-text-color-secondary);
+    transition: all 0.15s cubic-bezier(0.2, 0, 0, 1);
+  }
+
+  &:hover .icon {
+    color: var(--td-text-color-primary);
   }
 
   &.danger {
-    color: var(--td-error-color);
+    color: var(--td-error-color-6);
+    margin-top: 4px;
+    position: relative;
+
+    &::before {
+      content: '';
+      position: absolute;
+      top: -3px;
+      left: 8px;
+      right: 8px;
+      height: 1px;
+      background: var(--td-component-stroke);
+    }
+
+    .icon {
+      color: var(--td-error-color-6);
+    }
+
+    &:hover {
+      background: var(--td-error-color-1);
+      color: var(--td-error-color-6);
+
+      .icon {
+        color: var(--td-error-color-6);
+      }
+    }
+
+    &:active {
+      background: var(--td-error-color-2);
+    }
   }
 }
 

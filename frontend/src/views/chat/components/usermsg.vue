@@ -1,5 +1,5 @@
 <template>
-    <div class="user_msg_container">
+    <div class="user_msg_container" ref="containerRef">
         <!-- 显示@的知识库和文件 -->
         <div v-if="mentioned_items && mentioned_items.length > 0" class="mentioned_items">
             <span 
@@ -17,27 +17,70 @@
                 <span class="tag_name">{{ item.name }}</span>
             </span>
         </div>
+        <!-- 显示上传的图片 -->
+        <div v-if="hasImages" class="user_images">
+            <img 
+                v-for="(img, idx) in props.images" 
+                :key="idx" 
+                :src="img.url" 
+                class="user_image_thumb"
+                @click="previewImage($event)"
+            />
+        </div>
         <div class="user_msg">
             {{ content }}
         </div>
+        <picturePreview :reviewImg="reviewImg" :reviewUrl="reviewUrl" @closePreImg="closePreImg" />
     </div>
 </template>
 <script setup>
-import { defineProps } from "vue";
+import { defineProps, computed, ref, watch, onMounted, nextTick } from "vue";
+import { hydrateProtectedFileImages } from '@/utils/security';
+import picturePreview from '@/components/picture-preview.vue';
 
 const props = defineProps({
-    // 必填项
     content: {
         type: String,
         required: false
     },
-    // @提及的知识库和文件
     mentioned_items: {
+        type: Array,
+        required: false,
+        default: () => []
+    },
+    images: {
         type: Array,
         required: false,
         default: () => []
     }
 });
+
+const containerRef = ref(null);
+const hasImages = computed(() => props.images && props.images.length > 0);
+
+const hydrateImages = async () => {
+    await nextTick();
+    await hydrateProtectedFileImages(containerRef.value);
+};
+
+watch(() => props.images, hydrateImages);
+onMounted(hydrateImages);
+
+const reviewImg = ref(false);
+const reviewUrl = ref('');
+
+const previewImage = (event) => {
+    const src = event.target?.src;
+    if (src) {
+        reviewUrl.value = src;
+        reviewImg.value = true;
+    }
+};
+
+const closePreImg = () => {
+    reviewImg.value = false;
+    reviewUrl.value = '';
+};
 </script>
 <style scoped lang="less">
 .user_msg_container {
@@ -123,6 +166,28 @@ const props = defineProps({
     word-break: break-all;
     max-width: 100%;
     box-sizing: border-box;
+}
+
+.user_images {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    justify-content: flex-end;
+    max-width: 100%;
+}
+
+.user_image_thumb {
+    width: 120px;
+    height: 120px;
+    object-fit: cover;
+    border-radius: 6px;
+    cursor: pointer;
+    border: 1px solid var(--td-border-level-2-color, #e7e7e7);
+    transition: opacity 0.2s;
+
+    &:hover {
+        opacity: 0.85;
+    }
 }
 
 html[theme-mode="dark"] {

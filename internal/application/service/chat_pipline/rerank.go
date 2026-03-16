@@ -121,15 +121,7 @@ func (p *PluginRerank) OnEvent(ctx context.Context,
 		"result_cnt": len(rerankResp),
 	})
 
-	// Log input scores before reranking for debugging
-	for i, sr := range chatManage.SearchResult {
-		pipelineInfo(ctx, "Rerank", "input_score", map[string]interface{}{
-			"index":      i,
-			"chunk_id":   sr.ID,
-			"score":      fmt.Sprintf("%.4f", sr.Score),
-			"match_type": sr.MatchType,
-		})
-	}
+	logRerankInputScoreSample(ctx, chatManage.SearchResult)
 
 	for i := range chatManage.SearchResult {
 		chatManage.SearchResult[i].Metadata = ensureMetadata(chatManage.SearchResult[i].Metadata)
@@ -162,13 +154,6 @@ func (p *PluginRerank) OnEvent(ctx context.Context,
 			})
 		}
 
-		pipelineInfo(ctx, "Rerank", "composite_calc", map[string]interface{}{
-			"chunk_id":    sr.ID,
-			"base_score":  fmt.Sprintf("%.4f", base),
-			"model_score": fmt.Sprintf("%.4f", modelScore),
-			"final_score": fmt.Sprintf("%.4f", sr.Score),
-			"match_type":  sr.MatchType,
-		})
 		reranked = append(reranked, sr)
 	}
 
@@ -179,13 +164,6 @@ func (p *PluginRerank) OnEvent(ctx context.Context,
 		// Assign high model score for direct load items
 		modelScore := 1.0
 		sr.Score = compositeScore(sr, modelScore, base)
-		pipelineInfo(ctx, "Rerank", "composite_calc_direct", map[string]interface{}{
-			"chunk_id":    sr.ID,
-			"base_score":  fmt.Sprintf("%.4f", base),
-			"model_score": fmt.Sprintf("%.4f", modelScore),
-			"final_score": fmt.Sprintf("%.4f", sr.Score),
-			"match_type":  sr.MatchType,
-		})
 		reranked = append(reranked, sr)
 	}
 	final := applyMMR(ctx, reranked, chatManage, min(len(reranked), max(1, chatManage.RerankTopK)), 0.7)
@@ -237,17 +215,25 @@ func (p *PluginRerank) rerank(ctx context.Context,
 	pipelineInfo(ctx, "Rerank", "threshold", map[string]interface{}{
 		"threshold": chatManage.RerankThreshold,
 	})
-	for i := range min(5, len(rerankResp)) {
+	logged := min(5, len(rerankResp))
+	for i := range logged {
 		if rerankResp[i].Index < len(candidates) {
 			pipelineInfo(ctx, "Rerank", "top_score", map[string]interface{}{
-				"rank":       i + 1,
-				"score":      rerankResp[i].RelevanceScore,
-				"chunk_id":   candidates[rerankResp[i].Index].ID,
-				"match_type": candidates[rerankResp[i].Index].MatchType,
-				"chunk_type": candidates[rerankResp[i].Index].ChunkType,
-				"content":    candidates[rerankResp[i].Index].Content,
+				"rank":        i + 1,
+				"score":       rerankResp[i].RelevanceScore,
+				"chunk_id":    candidates[rerankResp[i].Index].ID,
+				"match_type":  candidates[rerankResp[i].Index].MatchType,
+				"chunk_type":  candidates[rerankResp[i].Index].ChunkType,
+				"content_len": len(candidates[rerankResp[i].Index].Content),
 			})
 		}
+	}
+	if len(rerankResp) > logged {
+		pipelineInfo(ctx, "Rerank", "top_score_summary", map[string]interface{}{
+			"total":     len(rerankResp),
+			"logged":    logged,
+			"truncated": len(rerankResp) - logged,
+		})
 	}
 
 	// Filter results based on threshold
@@ -529,11 +515,26 @@ func getEnrichedPassage(ctx context.Context, result *types.SearchResult) string 
 	}
 	combinedText += strings.Join(enrichments, "\n")
 
-	pipelineInfo(ctx, "Rerank", "passage_enrich", map[string]interface{}{
-		"content_len":    len(result.Content),
-		"cleaned_len":    len(cleanPassageForRerank(result.Content)),
-		"enrichment_len": len(strings.Join(enrichments, "\n")),
-	})
-
 	return combinedText
+}
+
+func logRerankInputScoreSample(ctx context.Context, results []*types.SearchResult) {
+	const maxLogRows = 8
+	limit := min(maxLogRows, len(results))
+	for i := 0; i < limit; i++ {
+		sr := results[i]
+		pipelineInfo(ctx, "Rerank", "input_score", map[string]interface{}{
+			"index":      i,
+			"chunk_id":   sr.ID,
+			"score":      fmt.Sprintf("%.4f", sr.Score),
+			"match_type": sr.MatchType,
+		})
+	}
+	if len(results) > limit {
+		pipelineInfo(ctx, "Rerank", "input_score_summary", map[string]interface{}{
+			"total":     len(results),
+			"logged":    limit,
+			"truncated": len(results) - limit,
+		})
+	}
 }

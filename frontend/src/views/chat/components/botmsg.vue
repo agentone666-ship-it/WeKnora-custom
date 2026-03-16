@@ -31,6 +31,14 @@
                     <div v-for="(token, index) in markdownTokens" :key="index" v-html="renderToken(token)"></div>
                 </div>
             </div>
+            <!-- Streaming indicator (non-Agent mode) -->
+            <div v-if="hasActualContent && !session.is_completed" class="loading-indicator">
+                <div class="loading-typing">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                </div>
+            </div>
             <!-- 复制和添加到知识库按钮 - 非 Agent 模式下显示 -->
             <div v-if="session.is_completed && (content || session.content)" class="answer-toolbar">
                 <t-button size="small" variant="outline" shape="round" @click.stop="handleCopyAnswer" :title="$t('agent.copy')">
@@ -545,6 +553,10 @@ onBeforeUnmount(() => {
 }
 
 .thinking-loading {
+    padding: 8px 0;
+}
+
+.loading-indicator {
     padding: 8px 0;
 }
 

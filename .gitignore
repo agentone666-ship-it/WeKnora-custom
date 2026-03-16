@@ -42,3 +42,4 @@ web/
 /scripts/scale_dev_jobs.sh
 server
 frontend/.vite
+frontend/chrome-extension/

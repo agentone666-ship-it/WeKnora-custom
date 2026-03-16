@@ -83,9 +83,11 @@ func (p *PluginLoadHistory) OnEvent(ctx context.Context,
 			h = &types.History{}
 		}
 		if message.Role == "user" {
-			// User message as query
 			h.Query = message.Content
 			h.CreateAt = message.CreatedAt
+			if desc := extractImageCaptions(message.Images); desc != "" {
+				h.Query += "\n\n[用户上传图片内容]\n" + desc
+			}
 		} else {
 			// System message as answer, while removing thinking process
 			h.Answer = regThink.ReplaceAllString(message.Content, "")

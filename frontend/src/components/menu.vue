@@ -77,7 +77,7 @@
                                     {{ subitem.title }}
                                 </span>
                                 <t-dropdown v-if="!batchMode"
-                                    :options="[{ content: t('upload.deleteRecord'), value: 'delete' }, { content: t('menu.batchManage'), value: 'batchManage' }]"
+                                    :options="[{ content: t('menu.clearMessages'), value: 'clearMessages', prefixIcon: () => h(TIcon, { name: 'clear', size: '16px' }) }, { content: t('menu.batchManage'), value: 'batchManage', prefixIcon: () => h(TIcon, { name: 'queue', size: '16px' }) }, { content: t('upload.deleteRecord'), value: 'delete', theme: 'error', prefixIcon: () => h(TIcon, { name: 'delete', size: '16px' }) }]"
                                     @click="handleSessionMenuClick($event, subitem.originalIndex, subitem)"
                                     placement="bottom-right"
                                     trigger="click">
@@ -124,16 +124,16 @@
 
 <script setup lang="ts">
 import { storeToRefs } from 'pinia';
-import { onMounted, watch, computed, ref } from 'vue';
+import { onMounted, watch, computed, ref, h } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { getSessionsList, delSession, batchDelSessions, deleteAllSessions } from "@/api/chat/index";
+import { getSessionsList, delSession, batchDelSessions, deleteAllSessions, clearSessionMessages } from "@/api/chat/index";
 import { getKnowledgeBaseById } from '@/api/knowledge-base';
 import { logout as logoutApi } from '@/api/auth';
 import { useMenuStore } from '@/stores/menu';
 import { useAuthStore } from '@/stores/auth';
 import { useOrganizationStore } from '@/stores/organization';
 import { useUIStore } from '@/stores/ui';
-import { MessagePlugin, DialogPlugin } from "tdesign-vue-next";
+import { MessagePlugin, DialogPlugin, Icon as TIcon } from "tdesign-vue-next";
 import UserMenu from '@/components/UserMenu.vue';
 import TenantSelector from '@/components/TenantSelector.vue';
 import { useI18n } from 'vue-i18n';
@@ -423,9 +423,26 @@ const handleInlineBatchDelete = () => {
 const handleSessionMenuClick = (data: { value: string }, index: number, item: any) => {
     if (data?.value === 'delete') {
         delCard(index, item);
+    } else if (data?.value === 'clearMessages') {
+        clearMessages(item);
     } else if (data?.value === 'batchManage') {
         enterBatchMode()
     }
+};
+
+const clearMessages = (item: any) => {
+    clearSessionMessages(item.id).then((res: any) => {
+        if (res && res.success) {
+            MessagePlugin.success(t('menu.clearMessagesSuccess'));
+            if (item.id === route.params.chatid) {
+                window.dispatchEvent(new CustomEvent('session-messages-cleared', { detail: { sessionId: item.id } }));
+            }
+        } else {
+            MessagePlugin.error(t('menu.clearMessagesFailed'));
+        }
+    }).catch(() => {
+        MessagePlugin.error(t('menu.clearMessagesFailed'));
+    });
 };
 
 const delCard = (index: number, item: any) => {
@@ -1040,7 +1057,7 @@ const onDragHandleMouseDown = (e: MouseEvent) => {
         &:hover {
             background: var(--td-bg-color-container-hover);
             color: var(--td-text-color-primary);
-            border-radius: 3px;
+            border-radius: 8px;
 
             .menu-more {
                 color: var(--td-text-color-primary);
@@ -1060,7 +1077,7 @@ const onDragHandleMouseDown = (e: MouseEvent) => {
     .submenu_item_active {
         background: var(--td-brand-color-light) !important;
         color: var(--td-brand-color) !important;
-        border-radius: 3px;
+        border-radius: 8px;
 
         .menu-more {
             color: var(--td-brand-color) !important;
@@ -1083,7 +1100,7 @@ const onDragHandleMouseDown = (e: MouseEvent) => {
 
     .submenu_item_selected {
         background: rgba(7, 192, 95, 0.05) !important;
-        border-radius: 3px;
+        border-radius: 8px;
     }
 
     .batch-checkbox {
@@ -1263,45 +1280,7 @@ html[theme-mode="dark"] .aside_box .menu_item_active .menu_icon img.icon {
     opacity: 1;
 }
 
-// 上传操作下拉菜单样式 - 全局样式（因为 TDesign 的下拉菜单挂载到 body 上）
-// 使用更具体的选择器来匹配上传操作下拉菜单
-.t-popup[data-popper-placement^="right"] {
-    .t-popup__content {
-        .t-dropdown__menu {
-            background: var(--td-bg-color-container) !important;
-            border: 1px solid var(--td-component-stroke) !important;
-            border-radius: 6px !important;
-            box-shadow: var(--td-shadow-2) !important;
-            padding: 4px !important;
-            min-width: 100px !important;
-        }
-
-        .t-dropdown__item {
-            padding: 8px 12px !important;
-            border-radius: 4px !important;
-            margin: 2px 0 !important;
-            transition: all 0.2s ease !important;
-            font-size: 14px !important;
-            color: var(--td-text-color-primary) !important;
-            min-width: auto !important;
-            max-width: none !important;
-            width: auto !important;
-            cursor: pointer !important;
-
-            &:hover {
-                background: var(--td-bg-color-container-hover) !important;
-                color: var(--td-brand-color) !important;
-            }
-
-            .t-dropdown__item-text {
-                color: inherit !important;
-                font-size: 14px !important;
-                line-height: 20px !important;
-                white-space: nowrap !important;
-            }
-        }
-    }
-}
+// 下拉菜单样式已统一至 @/assets/dropdown-menu.less
 
 // 退出登录确认框样式
 :deep(.t-popconfirm) {

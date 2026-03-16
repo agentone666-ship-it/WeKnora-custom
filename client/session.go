@@ -198,16 +198,26 @@ func (c *Client) GenerateTitle(ctx context.Context, sessionID string, request *G
 	return response.Data, nil
 }
 
+// ImageAttachment represents an image in a chat request.
+// Frontend sends base64 data in the Data field; the backend saves, runs VLM analysis,
+// and populates URL/Caption before proceeding with the chat pipeline.
+type ImageAttachment struct {
+	Data    string `json:"data,omitempty"`    // base64 data URI (data:image/png;base64,...)
+	URL     string `json:"url,omitempty"`     // serving URL after saving to storage
+	Caption string `json:"caption,omitempty"` // VLM analysis result
+}
+
 // KnowledgeQARequest knowledge Q&A request
 type KnowledgeQARequest struct {
-	Query            string   `json:"query"`              // Query text for knowledge base search
-	KnowledgeBaseIDs []string `json:"knowledge_base_ids"` // Selected knowledge base IDs for this request
-	KnowledgeIDs     []string `json:"knowledge_ids"`      // Selected knowledge IDs for this request
-	AgentEnabled     bool     `json:"agent_enabled"`      // Whether agent mode is enabled for this request
-	AgentID          string   `json:"agent_id"`           // Selected custom agent ID for this request
-	WebSearchEnabled bool     `json:"web_search_enabled"` // Whether web search is enabled for this request
-	SummaryModelID   string   `json:"summary_model_id"`   // Optional summary model ID (overrides session default)
-	DisableTitle     bool     `json:"disable_title"`      // Whether to disable auto title generation
+	Query            string            `json:"query"`              // Query text for knowledge base search
+	KnowledgeBaseIDs []string          `json:"knowledge_base_ids"` // Selected knowledge base IDs for this request
+	KnowledgeIDs     []string          `json:"knowledge_ids"`      // Selected knowledge IDs for this request
+	AgentEnabled     bool              `json:"agent_enabled"`      // Whether agent mode is enabled for this request
+	AgentID          string            `json:"agent_id"`           // Selected custom agent ID for this request
+	WebSearchEnabled bool              `json:"web_search_enabled"` // Whether web search is enabled for this request
+	SummaryModelID   string            `json:"summary_model_id"`   // Optional summary model ID (overrides session default)
+	DisableTitle     bool              `json:"disable_title"`      // Whether to disable auto title generation
+	Images           []ImageAttachment `json:"images,omitempty"`   // Attached images for multimodal chat
 }
 
 // LLMToolCall represents a function/tool call from the LLM

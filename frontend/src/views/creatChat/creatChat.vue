@@ -39,11 +39,11 @@ const uiStore = useUIStore();
 const { t } = useI18n();
 const { navigateToKnowledgeBaseList } = useKnowledgeBaseCreationNavigation();
 
-const sendMsg = (value: string, modelId: string, mentionedItems: any[]) => {
-    createNewSession(value, modelId, mentionedItems);
+const sendMsg = (value: string, modelId: string, mentionedItems: any[], imageFiles: any[] = []) => {
+    createNewSession(value, modelId, mentionedItems, imageFiles);
 }
 
-async function createNewSession(value: string, modelId: string, mentionedItems: any[] = []) {
+async function createNewSession(value: string, modelId: string, mentionedItems: any[] = [], imageFiles: any[] = []) {
     const selectedKbs = settingsStore.settings.selectedKnowledgeBases || [];
     const selectedFiles = settingsStore.settings.selectedFiles || [];
 
@@ -63,7 +63,7 @@ async function createNewSession(value: string, modelId: string, mentionedItems: 
     try {
         const res = await createSessions(sessionData);
         if (res.data && res.data.id) {
-            await navigateToSession(res.data.id, value, modelId, mentionedItems);
+            await navigateToSession(res.data.id, value, modelId, mentionedItems, imageFiles);
         } else {
             console.error('[createChat] Failed to create session');
             MessagePlugin.error(t('createChat.messages.createFailed'));
@@ -74,7 +74,7 @@ async function createNewSession(value: string, modelId: string, mentionedItems: 
     }
 }
 
-const navigateToSession = async (sessionId: string, value: string, modelId: string, mentionedItems: any[]) => {
+const navigateToSession = async (sessionId: string, value: string, modelId: string, mentionedItems: any[], imageFiles: any[] = []) => {
     const now = new Date().toISOString();
     let obj = { 
         title: t('createChat.newSessionTitle'), 
@@ -87,7 +87,7 @@ const navigateToSession = async (sessionId: string, value: string, modelId: stri
     };
     usemenuStore.updataMenuChildren(obj);
     usemenuStore.changeIsFirstSession(true);
-    usemenuStore.changeFirstQuery(value, mentionedItems, modelId);
+    usemenuStore.changeFirstQuery(value, mentionedItems, modelId, imageFiles);
     router.push(`/platform/chat/${sessionId}`);
 }
 

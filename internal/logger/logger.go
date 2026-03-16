@@ -82,10 +82,10 @@ func (f *CustomFormatter) Format(entry *logrus.Entry) ([]byte, error) {
 	// request_id 优先输出
 	if v, ok := entry.Data["request_id"]; ok {
 		if f.ForceColor {
-			fields += fmt.Sprintf("%srequest_id%s=%s%v%s ",
-				colorCyan, colorReset, colorBlue, v, colorReset)
+			fields += fmt.Sprintf("%s%v%s ",
+				colorBlue, v, colorReset)
 		} else {
-			fields += fmt.Sprintf("request_id=%v ", v)
+			fields += fmt.Sprintf("%v ", v)
 		}
 	}
 

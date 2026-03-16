@@ -77,6 +77,30 @@ func (p *PluginIntoChatMessage) OnEvent(ctx context.Context,
 	// Prepare weekday names
 	weekdayName := []string{"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"}
 
+	// Intent-based no-search path: bypass "reference materials" template entirely.
+	if chatManage.SkipKBSearch {
+		// Prefer rewritten query in no-search mode; fallback to original query.
+		userContent := safeQuery
+		if rewrite := strings.TrimSpace(chatManage.RewriteQuery); rewrite != "" {
+			if safeRewrite, ok := utils.ValidateInput(rewrite); ok {
+				userContent = safeRewrite
+			} else {
+				pipelineWarn(ctx, "IntoChatMessage", "invalid_rewrite_query_fallback", map[string]interface{}{
+					"session_id": chatManage.SessionID,
+				})
+			}
+		}
+		if chatManage.ImageDescription != "" && !chatManage.ChatModelSupportsVision {
+			userContent += "\n\n[用户上传图片内容]\n" + chatManage.ImageDescription
+		}
+		chatManage.UserContent = userContent
+		pipelineInfo(ctx, "IntoChatMessage", "skip_template_no_search", map[string]interface{}{
+			"session_id":       chatManage.SessionID,
+			"user_content_len": len(chatManage.UserContent),
+		})
+		return next()
+	}
+
 	var contextsBuilder strings.Builder
 
 	// Build contexts string based on FAQ priority strategy
@@ -122,12 +146,21 @@ func (p *PluginIntoChatMessage) OnEvent(ctx context.Context,
 	userContent = strings.ReplaceAll(userContent, "{{current_time}}", time.Now().Format("2006-01-02 15:04:05"))
 	userContent = strings.ReplaceAll(userContent, "{{current_week}}", weekdayName[time.Now().Weekday()])
 
+	// Append image description as text fallback only when the chat model cannot
+	// process images directly. Vision-capable models see images via MultiContent.
+	if chatManage.ImageDescription != "" && !chatManage.ChatModelSupportsVision {
+		userContent += "\n\n[用户上传图片内容]\n" + chatManage.ImageDescription
+	}
+
 	// Set formatted content back to chat management
 	chatManage.UserContent = userContent
 	pipelineInfo(ctx, "IntoChatMessage", "output", map[string]interface{}{
-		"session_id":       chatManage.SessionID,
-		"user_content_len": len(chatManage.UserContent),
-		"faq_priority":     chatManage.FAQPriorityEnabled,
+		"session_id":                 chatManage.SessionID,
+		"user_content_len":           len(chatManage.UserContent),
+		"faq_priority":               chatManage.FAQPriorityEnabled,
+		"skip_kb_search":             chatManage.SkipKBSearch,
+		"image_description":          chatManage.ImageDescription,
+		"chat_model_supports_vision": chatManage.ChatModelSupportsVision,
 	})
 	return next()
 }

@@ -293,7 +293,8 @@ function convertToLegacyFormat(model: ModelConfig) {
     apiKey: model.parameters.api_key || '',
     provider: model.parameters.provider || '', // 添加 provider 字段
     dimension: model.parameters.embedding_parameters?.dimension,
-    isBuiltin: model.is_builtin || false
+    isBuiltin: model.is_builtin || false,
+    supportsVision: model.parameters.supports_vision || false
   }
 }
 
@@ -408,6 +409,9 @@ const handleModelSave = async (modelData: any) => {
             dimension: modelData.dimension,
             truncate_prompt_tokens: 0
           }
+        } : {}),
+        ...((currentModelType.value === 'chat' || currentModelType.value === 'vllm') ? {
+          supports_vision: modelData.supportsVision ?? false
         } : {})
       }
     }
@@ -841,49 +845,5 @@ onMounted(() => {
   }
 }
 
-// Dropdown 菜单样式优化
-:deep(.t-popup__content) {
-  .t-dropdown__menu {
-    background: var(--td-bg-color-container);
-    border: 1px solid var(--td-component-stroke);
-    border-radius: 8px;
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
-    padding: 4px;
-    min-width: 140px;
-  }
-
-  .t-dropdown__item {
-    padding: 8px 12px;
-    border-radius: 4px;
-    margin: 2px 0;
-    font-size: 13px;
-    color: var(--td-text-color-primary);
-    transition: all 0.15s ease;
-    cursor: pointer;
-
-    &:hover {
-      background: var(--td-bg-color-secondarycontainer);
-      color: var(--td-brand-color);
-    }
-
-    &:active {
-      background: var(--td-success-color-light);
-    }
-
-    // 删除按钮特殊样式 - 覆盖默认 hover 样式
-    &.t-dropdown__item--theme-error {
-      color: var(--td-error-color);
-
-      &:hover {
-        background: var(--td-error-color-light);
-        color: var(--td-error-color) !important; // 使用 !important 确保覆盖默认样式
-      }
-
-      &:active {
-        background: var(--td-error-color-light);
-        color: var(--td-error-color);
-      }
-    }
-  }
-}
+// Dropdown 菜单样式已统一至 @/assets/dropdown-menu.less
 </style>

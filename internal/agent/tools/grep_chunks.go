@@ -56,7 +56,7 @@ grep_chunks scans enabled chunks across the specified knowledge bases and return
 	schema: json.RawMessage(`{
   "type": "object",
   "properties": {
-    "pattern": {
+    "patterns": {
       "type": "array",
       "description": "REQUIRED: Text patterns to search for. Can be a single pattern or multiple patterns. Treated as literal text (fixed string matching). Results match any of the patterns (OR logic).",
       "items": {
@@ -79,13 +79,13 @@ grep_chunks scans enabled chunks across the specified knowledge bases and return
       "maximum": 200
     }
   },
-  "required": ["pattern"]
+  "required": ["patterns"]
 }`),
 }
 
 // GrepChunksInput defines the input parameters for grep chunks tool
 type GrepChunksInput struct {
-	Pattern          []string `json:"pattern" `
+	Patterns         []string `json:"patterns" `
 	KnowledgeBaseIDs []string `json:"knowledge_base_ids,omitempty"`
 	MaxResults       int      `json:"max_results,omitempty"`
 }
@@ -122,11 +122,11 @@ func (t *GrepChunksTool) Execute(ctx context.Context, args json.RawMessage) (*ty
 	}
 
 	// Parse pattern parameter (required) - support multiple patterns
-	patterns := input.Pattern
+	patterns := input.Patterns
 
 	// Validate patterns
 	if len(patterns) == 0 {
-		logger.Errorf(ctx, "[Tool][GrepChunks] Missing or invalid pattern parameter")
+		logger.Errorf(ctx, "[Tool][GrepChunks] Missing or invalid patterns parameter")
 		return &types.ToolResult{
 			Success: false,
 			Error:   "pattern parameter is required and must contain at least one non-empty pattern",

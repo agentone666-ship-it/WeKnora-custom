@@ -627,7 +627,10 @@ const downloadFile = () => {
         const link = document.createElement("a");
         link.style.display = "none";
         link.setAttribute("href", url.value);
-        link.setAttribute("download", props.details.title);
+        const needsExt = props.details.type === 'manual' && !props.details.title.toLowerCase().endsWith('.md');
+        const ext = needsExt ? '.md' : '';
+        link.setAttribute("download", props.details.title + ext);
+        document.body.appendChild(link);
         link.click();
         nextTick(() => {
           document.body.removeChild(link);
@@ -673,7 +676,7 @@ const handleDetailsScroll = () => {
         <span class="label">{{ $t('knowledgeBase.fileName') }}</span>
         <div class="download_box">
           <span class="doc_t">{{ details.title }}</span>
-          <div class="icon_box" @click="downloadFile()">
+          <div class="icon_box" @click="downloadFile()" aria-label="Download">
             <img class="download_box" src="@/assets/img/download.svg" alt="">
           </div>
         </div>
@@ -694,8 +697,13 @@ const handleDetailsScroll = () => {
       <!-- 手动创建类型专属区域 -->
       <div v-else-if="details.type === 'manual'" class="manual_box">
         <span class="label">{{ $t('knowledgeBase.documentTitle') }}</span>
-        <div class="manual_title_box">
-          <span class="manual_title">{{ details.title }}</span>
+        <div class="download_box">
+          <div class="manual_title_box">
+            <span class="manual_title">{{ details.title }}</span>
+          </div>
+          <div class="icon_box" @click="downloadFile()" aria-label="Download">
+            <img class="download_box" src="@/assets/img/download.svg" alt="">
+          </div>
         </div>
       </div>
       
@@ -1014,7 +1022,7 @@ const handleDetailsScroll = () => {
 .manual_title_box {
   border-radius: 4px;
   border: 1px solid var(--td-component-border);
-  background: var(--td-success-color-light);
+  background: var(--td-bg-color-container-hover);
   padding: 8px 12px;
   
   .manual_title {

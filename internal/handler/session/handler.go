@@ -22,6 +22,8 @@ type Handler struct {
 	customAgentService   interfaces.CustomAgentService   // Service for managing custom agents
 	tenantService        interfaces.TenantService        // Service for loading tenant (shared agent context)
 	agentShareService    interfaces.AgentShareService    // Service for resolving shared agents (KB scope in retrieval)
+	fileService          interfaces.FileService          // Service for file storage (image uploads)
+	modelService         interfaces.ModelService         // Service for model management (VLM access)
 }
 
 // NewHandler creates a new instance of Handler with all necessary dependencies
@@ -34,6 +36,8 @@ func NewHandler(
 	customAgentService interfaces.CustomAgentService,
 	tenantService interfaces.TenantService,
 	agentShareService interfaces.AgentShareService,
+	fileService interfaces.FileService,
+	modelService interfaces.ModelService,
 ) *Handler {
 	return &Handler{
 		sessionService:       sessionService,
@@ -44,6 +48,8 @@ func NewHandler(
 		customAgentService:   customAgentService,
 		tenantService:        tenantService,
 		agentShareService:    agentShareService,
+		fileService:          fileService,
+		modelService:         modelService,
 	}
 }
 
@@ -254,11 +260,19 @@ func (h *Handler) UpdateSession(c *gin.Context) {
 		return
 	}
 
+	// Reload session from database to return complete timestamps and stored fields
+	updatedSession, err := h.sessionService.GetSession(ctx, id)
+	if err != nil {
+		logger.ErrorWithFields(ctx, err, nil)
+		c.Error(errors.NewInternalServerError(err.Error()))
+		return
+	}
+
 	// Return updated session
 	logger.Infof(ctx, "Session updated successfully, ID: %s", id)
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"data":    session,
+		"data":    updatedSession,
 	})
 }
 
@@ -301,6 +315,48 @@ func (h *Handler) DeleteSession(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "Session deleted successfully",
+	})
+}
+
+// ClearSessionMessages godoc
+// @Summary      清空会话消息
+// @Description  删除会话中的所有消息，同时清除 LLM 上下文和聊天历史知识库条目。会话本身保留。
+// @Tags         会话
+// @Accept       json
+// @Produce      json
+// @Param        id   path      string  true  "会话ID"
+// @Success      200  {object}  map[string]interface{}  "清空成功"
+// @Failure      400  {object}  errors.AppError         "请求参数错误"
+// @Failure      404  {object}  errors.AppError         "会话不存在"
+// @Security     Bearer
+// @Security     ApiKeyAuth
+// @Router       /sessions/{id}/messages [delete]
+func (h *Handler) ClearSessionMessages(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	id := secutils.SanitizeForLog(c.Param("id"))
+	if id == "" {
+		logger.Error(ctx, "Session ID is empty")
+		c.Error(errors.NewBadRequestError(errors.ErrInvalidSessionID.Error()))
+		return
+	}
+
+	logger.Infof(ctx, "Clearing all messages for session: %s", id)
+
+	if err := h.messageService.ClearSessionMessages(ctx, id); err != nil {
+		logger.ErrorWithFields(ctx, err, map[string]interface{}{"session_id": id})
+		c.Error(errors.NewInternalServerError(err.Error()))
+		return
+	}
+
+	if err := h.sessionService.ClearContext(ctx, id); err != nil {
+		logger.Warnf(ctx, "Failed to clear LLM context for session %s: %v", id, err)
+	}
+
+	logger.Infof(ctx, "Session messages cleared successfully, ID: %s", id)
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "Session messages cleared successfully",
 	})
 }
 

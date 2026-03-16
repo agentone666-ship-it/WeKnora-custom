@@ -29,6 +29,17 @@ const (
 	streamFlushInterval = 300 * time.Millisecond
 )
 
+// channelState holds runtime state for a running IM channel.
+type channelState struct {
+	Channel *IMChannel
+	Adapter Adapter
+	Cancel  context.CancelFunc // for stopping websocket goroutines
+}
+
+// AdapterFactory creates an Adapter from an IMChannel configuration.
+// The second return value is an optional cleanup function (e.g., for stopping websocket connections).
+type AdapterFactory func(ctx context.Context, channel *IMChannel, msgHandler func(ctx context.Context, msg *IncomingMessage) error) (Adapter, context.CancelFunc, error)
+
 // Service orchestrates IM message handling:
 // 1. Receives a unified IncomingMessage from an Adapter
 // 2. Resolves or creates a WeKnora session for the IM channel
@@ -41,16 +52,35 @@ type Service struct {
 	tenantService  interfaces.TenantService
 	agentService   interfaces.CustomAgentService
 
-	adapters map[Platform]Adapter
+	// channels maps channel ID -> running channel state
+	channels map[string]*channelState
 	mu       sync.RWMutex
+
+	// adapterFactories maps platform name -> factory function
+	adapterFactories map[string]AdapterFactory
 
 	// processedMsgs tracks recently processed message IDs to prevent duplicate handling.
 	processedMsgs sync.Map
 
-	// streamDisabled tracks platforms where streaming is explicitly disabled via output_mode config.
-	streamDisabled map[Platform]bool
-
 	stopCh chan struct{}
+}
+
+func buildIMQARequest(
+	session *types.Session,
+	query string,
+	assistantMessageID string,
+	userMessageID string,
+	customAgent *types.CustomAgent,
+	kbIDs []string,
+) *types.QARequest {
+	return &types.QARequest{
+		Session:            session,
+		Query:              query,
+		AssistantMessageID: assistantMessageID,
+		CustomAgent:        customAgent,
+		KnowledgeBaseIDs:   kbIDs,
+		UserMessageID:      userMessageID,
+	}
 }
 
 // NewService creates a new IM service.
@@ -62,14 +92,14 @@ func NewService(
 	agentService interfaces.CustomAgentService,
 ) *Service {
 	s := &Service{
-		db:             db,
-		sessionService: sessionService,
-		messageService: messageService,
-		tenantService:  tenantService,
-		agentService:   agentService,
-		adapters:       make(map[Platform]Adapter),
-		streamDisabled: make(map[Platform]bool),
-		stopCh:         make(chan struct{}),
+		db:               db,
+		sessionService:   sessionService,
+		messageService:   messageService,
+		tenantService:    tenantService,
+		agentService:     agentService,
+		channels:         make(map[string]*channelState),
+		adapterFactories: make(map[string]AdapterFactory),
+		stopCh:           make(chan struct{}),
 	}
 
 	// Start periodic dedup cleanup instead of per-message goroutines
@@ -78,9 +108,24 @@ func NewService(
 	return s
 }
 
-// Stop gracefully shuts down the service, stopping background goroutines.
+// RegisterAdapterFactory registers a factory for creating adapters for a given platform.
+func (s *Service) RegisterAdapterFactory(platform string, factory AdapterFactory) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.adapterFactories[platform] = factory
+}
+
+// Stop gracefully shuts down the service, stopping all channels and background goroutines.
 func (s *Service) Stop() {
 	close(s.stopCh)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id, cs := range s.channels {
+		if cs.Cancel != nil {
+			cs.Cancel()
+		}
+		delete(s.channels, id)
+	}
 }
 
 // dedupCleanupLoop periodically cleans up expired entries from the dedup map.
@@ -103,33 +148,102 @@ func (s *Service) dedupCleanupLoop() {
 	}
 }
 
-// RegisterAdapter registers an IM platform adapter.
-func (s *Service) RegisterAdapter(adapter Adapter) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.adapters[adapter.Platform()] = adapter
+// LoadAndStartChannels loads all enabled channels from the database and starts them.
+func (s *Service) LoadAndStartChannels() error {
+	ctx := context.Background()
+	var channels []IMChannel
+	if err := s.db.Where("enabled = ? AND deleted_at IS NULL", true).Find(&channels).Error; err != nil {
+		return fmt.Errorf("load im channels: %w", err)
+	}
+
+	for i := range channels {
+		ch := channels[i]
+		if err := s.StartChannel(&ch); err != nil {
+			logger.Warnf(ctx, "[IM] Failed to start channel %s (%s/%s): %v", ch.ID, ch.Platform, ch.Name, err)
+		} else {
+			logger.Infof(ctx, "[IM] Started channel: id=%s platform=%s name=%s mode=%s agent=%s",
+				ch.ID, ch.Platform, ch.Name, ch.Mode, ch.AgentID)
+		}
+	}
+
+	logger.Infof(ctx, "[IM] Loaded %d enabled channels", len(channels))
+	return nil
 }
 
-// SetStreamDisabled disables streaming output for a specific platform.
-// When disabled, the service will always collect the full answer before sending,
-// even if the adapter implements StreamSender.
-func (s *Service) SetStreamDisabled(platform Platform, disabled bool) {
+// StartChannel creates and registers an adapter for the given channel.
+func (s *Service) StartChannel(channel *IMChannel) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.streamDisabled[platform] = disabled
+	factory, ok := s.adapterFactories[channel.Platform]
+	if !ok {
+		s.mu.Unlock()
+		return fmt.Errorf("no adapter factory for platform: %s", channel.Platform)
+	}
+	// Stop existing channel if running
+	if existing, ok := s.channels[channel.ID]; ok {
+		if existing.Cancel != nil {
+			existing.Cancel()
+		}
+		delete(s.channels, channel.ID)
+	}
+	s.mu.Unlock()
+
+	// Build the message handler that delegates to HandleMessage with this channel's config
+	msgHandler := func(msgCtx context.Context, msg *IncomingMessage) error {
+		return s.HandleMessage(msgCtx, msg, channel.ID)
+	}
+
+	ctx := context.Background()
+	adapter, cancelFn, err := factory(ctx, channel, msgHandler)
+	if err != nil {
+		return fmt.Errorf("create adapter: %w", err)
+	}
+
+	s.mu.Lock()
+	s.channels[channel.ID] = &channelState{
+		Channel: channel,
+		Adapter: adapter,
+		Cancel:  cancelFn,
+	}
+	s.mu.Unlock()
+
+	return nil
 }
 
-// GetAdapter returns the adapter for a given platform.
-func (s *Service) GetAdapter(platform Platform) (Adapter, bool) {
+// StopChannel stops and removes a running channel.
+func (s *Service) StopChannel(channelID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if cs, ok := s.channels[channelID]; ok {
+		if cs.Cancel != nil {
+			cs.Cancel()
+		}
+		delete(s.channels, channelID)
+		logger.Infof(context.Background(), "[IM] Stopped channel: id=%s", channelID)
+	}
+}
+
+// GetChannelAdapter returns the adapter and channel config for a given channel ID.
+func (s *Service) GetChannelAdapter(channelID string) (Adapter, *IMChannel, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	a, ok := s.adapters[platform]
-	return a, ok
+	cs, ok := s.channels[channelID]
+	if !ok {
+		return nil, nil, false
+	}
+	return cs.Adapter, cs.Channel, true
 }
 
-// HandleMessage processes an incoming IM message end-to-end:
-// resolves session, runs QA, sends reply.
-func (s *Service) HandleMessage(ctx context.Context, msg *IncomingMessage, tenantID uint64, agentID string, kbIDs []string) error {
+// GetChannelByID loads a channel from the database.
+func (s *Service) GetChannelByID(channelID string) (*IMChannel, error) {
+	var ch IMChannel
+	if err := s.db.Where("id = ? AND deleted_at IS NULL", channelID).First(&ch).Error; err != nil {
+		return nil, err
+	}
+	return &ch, nil
+}
+
+// HandleMessage processes an incoming IM message end-to-end using channel config.
+func (s *Service) HandleMessage(ctx context.Context, msg *IncomingMessage, channelID string) error {
 	// Dedup: skip if this message was already processed (IM platforms may retry)
 	if msg.MessageID != "" {
 		if _, loaded := s.processedMsgs.LoadOrStore(msg.MessageID, time.Now()); loaded {
@@ -145,10 +259,31 @@ func (s *Service) HandleMessage(ctx context.Context, msg *IncomingMessage, tenan
 		msg.Content = string(contentRunes[:maxContentLength])
 	}
 
-	logger.Infof(ctx, "[IM] HandleMessage: platform=%s user=%s chat=%s content_len=%d",
-		msg.Platform, msg.UserID, msg.ChatID, len(msg.Content))
+	// Get channel config
+	adapter, channel, ok := s.GetChannelAdapter(channelID)
+	if !ok {
+		// Try loading from DB (channel might have been created after service start)
+		ch, err := s.GetChannelByID(channelID)
+		if err != nil {
+			return fmt.Errorf("channel not found: %s", channelID)
+		}
+		// Start it dynamically
+		if err := s.StartChannel(ch); err != nil {
+			return fmt.Errorf("start channel %s: %w", channelID, err)
+		}
+		adapter, channel, ok = s.GetChannelAdapter(channelID)
+		if !ok {
+			return fmt.Errorf("channel adapter not available after start: %s", channelID)
+		}
+	}
 
-	// 1. Get tenant (once, shared across resolve + QA)
+	tenantID := channel.TenantID
+	agentID := channel.AgentID
+
+	logger.Infof(ctx, "[IM] HandleMessage: channel=%s platform=%s user=%s chat=%s content_len=%d",
+		channelID, msg.Platform, msg.UserID, msg.ChatID, len(msg.Content))
+
+	// 1. Get tenant
 	tenant, err := s.tenantService.GetTenantByID(ctx, tenantID)
 	if err != nil {
 		return fmt.Errorf("get tenant: %w", err)
@@ -157,7 +292,7 @@ func (s *Service) HandleMessage(ctx context.Context, msg *IncomingMessage, tenan
 	sessionCtx = context.WithValue(sessionCtx, types.TenantInfoContextKey, tenant)
 
 	// 2. Resolve or create a WeKnora session
-	channelSession, err := s.resolveSession(sessionCtx, msg, tenantID, agentID)
+	channelSession, err := s.resolveSession(sessionCtx, msg, tenantID, agentID, channelID)
 	if err != nil {
 		return fmt.Errorf("resolve session: %w", err)
 	}
@@ -179,20 +314,17 @@ func (s *Service) HandleMessage(ctx context.Context, msg *IncomingMessage, tenan
 		}
 	}
 
-	// 5. Get the platform adapter
-	adapter, ok := s.GetAdapter(msg.Platform)
-	if !ok {
-		return fmt.Errorf("no adapter for platform: %s", msg.Platform)
+	// 5. Resolve knowledge base IDs from agent config
+	var kbIDs []string
+	if customAgent != nil {
+		kbIDs = customAgent.Config.KnowledgeBases
 	}
 
-	// 6. If the adapter supports streaming and streaming is not disabled, use streaming mode;
-	//    otherwise collect full answer.
-	s.mu.RLock()
-	disabled := s.streamDisabled[msg.Platform]
-	s.mu.RUnlock()
-	if !disabled {
+	// 6. If the adapter supports streaming and output_mode is not "full", use streaming
+	streamDisabled := channel.OutputMode == "full"
+	if !streamDisabled {
 		if streamer, ok := adapter.(StreamSender); ok {
-			return s.handleMessageStream(sessionCtx, msg, session, customAgent, kbIDs, streamer)
+			return s.handleMessageStream(sessionCtx, msg, session, customAgent, kbIDs, streamer, adapter)
 		}
 	}
 
@@ -211,13 +343,14 @@ func (s *Service) HandleMessage(ctx context.Context, msg *IncomingMessage, tenan
 		return fmt.Errorf("send reply: %w", err)
 	}
 
-	logger.Infof(ctx, "[IM] Reply sent: platform=%s user=%s answer_len=%d", msg.Platform, msg.UserID, len(answer))
+	logger.Infof(ctx, "[IM] Reply sent: channel=%s platform=%s user=%s answer_len=%d",
+		channelID, msg.Platform, msg.UserID, len(answer))
 	return nil
 }
 
 // resolveSession finds or creates a ChannelSession for the given IM message.
 // ctx must already carry TenantIDContextKey and TenantInfoContextKey.
-func (s *Service) resolveSession(ctx context.Context, msg *IncomingMessage, tenantID uint64, agentID string) (*ChannelSession, error) {
+func (s *Service) resolveSession(ctx context.Context, msg *IncomingMessage, tenantID uint64, agentID string, imChannelID string) (*ChannelSession, error) {
 	var cs ChannelSession
 	result := s.db.Where("platform = ? AND user_id = ? AND chat_id = ? AND tenant_id = ? AND deleted_at IS NULL",
 		string(msg.Platform), msg.UserID, msg.ChatID, tenantID).
@@ -251,12 +384,13 @@ func (s *Service) resolveSession(ctx context.Context, msg *IncomingMessage, tena
 	// Create the channel-session mapping; use a unique constraint fallback
 	// to handle concurrent creation attempts for the same channel.
 	cs = ChannelSession{
-		Platform:  string(msg.Platform),
-		UserID:    msg.UserID,
-		ChatID:    msg.ChatID,
-		SessionID: createdSession.ID,
-		TenantID:  tenantID,
-		AgentID:   agentID,
+		Platform:    string(msg.Platform),
+		UserID:      msg.UserID,
+		ChatID:      msg.ChatID,
+		SessionID:   createdSession.ID,
+		TenantID:    tenantID,
+		AgentID:     agentID,
+		IMChannelID: imChannelID,
 	}
 	if err := s.db.Create(&cs).Error; err != nil {
 		// If the insert failed due to unique constraint (concurrent request),
@@ -279,12 +413,12 @@ func (s *Service) resolveSession(ctx context.Context, msg *IncomingMessage, tena
 // handleMessageStream runs the QA pipeline and streams answer chunks to the IM platform
 // in real-time via the StreamSender interface. Chunks are batched at streamFlushInterval
 // to avoid API rate-limiting.
-func (s *Service) handleMessageStream(ctx context.Context, msg *IncomingMessage, session *types.Session, customAgent *types.CustomAgent, kbIDs []string, streamer StreamSender) error {
+func (s *Service) handleMessageStream(ctx context.Context, msg *IncomingMessage, session *types.Session, customAgent *types.CustomAgent, kbIDs []string, streamer StreamSender, adapter Adapter) error {
 	// Start the stream on the IM platform (e.g., create Feishu streaming card)
 	streamID, err := streamer.StartStream(ctx, msg)
 	if err != nil {
 		logger.Warnf(ctx, "[IM] StartStream failed, falling back to non-streaming: %v", err)
-		return s.fallbackNonStream(ctx, msg, session, customAgent, kbIDs)
+		return s.fallbackNonStream(ctx, msg, session, customAgent, kbIDs, adapter)
 	}
 
 	// Prepare the QA pipeline
@@ -363,10 +497,11 @@ func (s *Service) handleMessageStream(ctx context.Context, msg *IncomingMessage,
 	requestID := uuid.New().String()
 
 	// Create user message
-	if _, err := s.messageService.CreateMessage(qaCtx, &types.Message{
+	userMsg, err := s.messageService.CreateMessage(qaCtx, &types.Message{
 		SessionID: session.ID, Role: "user", Content: msg.Content,
 		RequestID: requestID, CreatedAt: time.Now(), IsCompleted: true,
-	}); err != nil {
+	})
+	if err != nil {
 		return fmt.Errorf("create user message: %w", err)
 	}
 
@@ -382,10 +517,11 @@ func (s *Service) handleMessageStream(ctx context.Context, msg *IncomingMessage,
 	// Run QA async
 	go func() {
 		var err error
+		req := buildIMQARequest(session, msg.Content, assistantMsg.ID, userMsg.ID, customAgent, kbIDs)
 		if useAgent {
-			err = s.sessionService.AgentQA(qaCtx, session, msg.Content, assistantMsg.ID, "", eventBus, customAgent, kbIDs, nil)
+			err = s.sessionService.AgentQA(qaCtx, req, eventBus)
 		} else {
-			err = s.sessionService.KnowledgeQA(qaCtx, session, msg.Content, kbIDs, nil, assistantMsg.ID, "", false, eventBus, customAgent, false)
+			err = s.sessionService.KnowledgeQA(qaCtx, req, eventBus)
 		}
 		if err != nil {
 			logger.Errorf(ctx, "[IM] QA stream execution error: %v", err)
@@ -457,16 +593,11 @@ loop:
 }
 
 // fallbackNonStream is used when streaming initialization fails.
-func (s *Service) fallbackNonStream(ctx context.Context, msg *IncomingMessage, session *types.Session, customAgent *types.CustomAgent, kbIDs []string) error {
+func (s *Service) fallbackNonStream(ctx context.Context, msg *IncomingMessage, session *types.Session, customAgent *types.CustomAgent, kbIDs []string, adapter Adapter) error {
 	answer, err := s.runQA(ctx, session, msg.Content, customAgent, kbIDs)
 	if err != nil {
 		logger.Errorf(ctx, "[IM] QA fallback failed: %v", err)
 		answer = "抱歉，处理您的问题时出现了异常，请稍后再试。"
-	}
-
-	adapter, ok := s.GetAdapter(msg.Platform)
-	if !ok {
-		return fmt.Errorf("no adapter for platform: %s", msg.Platform)
 	}
 
 	return adapter.SendReply(ctx, msg, &ReplyMessage{Content: answer, IsFinal: true})
@@ -533,7 +664,6 @@ func (s *Service) runQA(ctx context.Context, session *types.Session, query strin
 	if err != nil {
 		return "", fmt.Errorf("create user message: %w", err)
 	}
-	_ = userMsg
 
 	// Create a placeholder assistant message
 	assistantMsg, err := s.messageService.CreateMessage(ctx, &types.Message{
@@ -550,10 +680,11 @@ func (s *Service) runQA(ctx context.Context, session *types.Session, query strin
 	// Run QA async
 	go func() {
 		var err error
+		req := buildIMQARequest(session, query, assistantMsg.ID, userMsg.ID, customAgent, kbIDs)
 		if useAgent {
-			err = s.sessionService.AgentQA(ctx, session, query, assistantMsg.ID, "", eventBus, customAgent, kbIDs, nil)
+			err = s.sessionService.AgentQA(ctx, req, eventBus)
 		} else {
-			err = s.sessionService.KnowledgeQA(ctx, session, query, kbIDs, nil, assistantMsg.ID, "", false, eventBus, customAgent, false)
+			err = s.sessionService.KnowledgeQA(ctx, req, eventBus)
 		}
 		if err != nil {
 			logger.Errorf(ctx, "[IM] QA execution error: %v", err)
@@ -598,4 +729,70 @@ func (s *Service) runQA(ctx context.Context, session *types.Session, query strin
 	}
 
 	return answer, nil
+}
+
+// ── CRUD operations for IM channels ──
+
+// ListChannelsByAgent returns all channels for a given agent.
+func (s *Service) ListChannelsByAgent(agentID string) ([]IMChannel, error) {
+	var channels []IMChannel
+	if err := s.db.Where("agent_id = ? AND deleted_at IS NULL", agentID).
+		Order("created_at DESC").Find(&channels).Error; err != nil {
+		return nil, err
+	}
+	return channels, nil
+}
+
+// CreateChannel creates a new IM channel and optionally starts it.
+func (s *Service) CreateChannel(channel *IMChannel) error {
+	if err := s.db.Create(channel).Error; err != nil {
+		return err
+	}
+	if channel.Enabled {
+		if err := s.StartChannel(channel); err != nil {
+			logger.Warnf(context.Background(), "[IM] Created channel %s but failed to start: %v", channel.ID, err)
+		}
+	}
+	return nil
+}
+
+// UpdateChannel updates a channel and restarts it if needed.
+func (s *Service) UpdateChannel(channel *IMChannel) error {
+	if err := s.db.Save(channel).Error; err != nil {
+		return err
+	}
+	// Restart channel: stop old, start new if enabled
+	s.StopChannel(channel.ID)
+	if channel.Enabled {
+		if err := s.StartChannel(channel); err != nil {
+			logger.Warnf(context.Background(), "[IM] Updated channel %s but failed to restart: %v", channel.ID, err)
+		}
+	}
+	return nil
+}
+
+// DeleteChannel soft-deletes a channel and stops it.
+func (s *Service) DeleteChannel(channelID string) error {
+	s.StopChannel(channelID)
+	return s.db.Where("id = ?", channelID).Delete(&IMChannel{}).Error
+}
+
+// ToggleChannel enables or disables a channel.
+func (s *Service) ToggleChannel(channelID string) (*IMChannel, error) {
+	var ch IMChannel
+	if err := s.db.Where("id = ? AND deleted_at IS NULL", channelID).First(&ch).Error; err != nil {
+		return nil, err
+	}
+	ch.Enabled = !ch.Enabled
+	if err := s.db.Save(&ch).Error; err != nil {
+		return nil, err
+	}
+	if ch.Enabled {
+		if err := s.StartChannel(&ch); err != nil {
+			logger.Warnf(context.Background(), "[IM] Failed to start channel %s after enable: %v", ch.ID, err)
+		}
+	} else {
+		s.StopChannel(channelID)
+	}
+	return &ch, nil
 }

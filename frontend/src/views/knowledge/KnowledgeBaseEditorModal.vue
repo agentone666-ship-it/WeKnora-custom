@@ -150,9 +150,55 @@
                   <GraphSettings
                     v-if="formData"
                     :graph-extract="formData.nodeExtractConfig"
+                    :model-id="formData.modelConfig.llmModelId"
                     :all-models="allModels"
                     @update:graphExtract="handleNodeExtractUpdate"
                   />
+                </div>
+
+                <!-- 多模态配置 -->
+                <div v-if="!isFAQ" v-show="currentSection === 'multimodal'" class="section">
+                  <div v-if="formData" class="kb-multimodal-settings">
+                    <div class="section-header">
+                      <h2>{{ $t('knowledgeEditor.multimodal.title') }}</h2>
+                      <p class="section-description">{{ $t('knowledgeEditor.multimodal.description') }}</p>
+                    </div>
+
+                    <div class="settings-group">
+                      <!-- 多模态开关 -->
+                      <div class="setting-row">
+                        <div class="setting-info">
+                          <label>{{ $t('knowledgeEditor.advanced.multimodal.label') }}</label>
+                          <p class="desc">{{ $t('knowledgeEditor.advanced.multimodal.description') }}</p>
+                        </div>
+                        <div class="setting-control">
+                          <t-switch
+                            v-model="formData.multimodalConfig.enabled"
+                            @change="handleMultimodalToggle"
+                            size="medium"
+                          />
+                        </div>
+                      </div>
+
+                      <!-- VLLM 模型选择（多模态启用时） -->
+                      <div v-if="formData.multimodalConfig.enabled" class="setting-row">
+                        <div class="setting-info">
+                          <label>{{ $t('knowledgeEditor.advanced.multimodal.vllmLabel') }} <span class="required">*</span></label>
+                          <p class="desc">{{ $t('knowledgeEditor.advanced.multimodal.vllmDescription') }}</p>
+                        </div>
+                        <div class="setting-control">
+                          <ModelSelector
+                            model-type="VLLM"
+                            :selected-model-id="formData.multimodalConfig.vllmModelId"
+                            :all-models="allModels"
+                            @update:selected-model-id="handleMultimodalVLLMChange"
+                            @add-model="handleAddVLLMModel"
+                            :placeholder="$t('knowledgeEditor.advanced.multimodal.vllmPlaceholder')"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 </div>
 
                 <!-- 高级设置 -->
@@ -160,10 +206,8 @@
                   <KBAdvancedSettings
                     ref="advancedSettingsRef"
                     v-if="formData"
-                    :multimodal="formData.multimodalConfig"
                     :question-generation="formData.questionGenerationConfig"
                     :all-models="allModels"
-                    @update:multimodal="handleMultimodalUpdate"
                     @update:question-generation="handleQuestionGenerationUpdate"
                   />
                 </div>
@@ -193,7 +237,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
-import { MessagePlugin } from 'tdesign-vue-next'
+import { MessagePlugin, DialogPlugin } from 'tdesign-vue-next'
 import { createKnowledgeBase, getKnowledgeBaseById, listKnowledgeFiles, updateKnowledgeBase } from '@/api/knowledge-base'
 import { updateKBConfig, type KBModelConfigRequest } from '@/api/initialization'
 import { listModels } from '@/api/model'
@@ -203,6 +247,7 @@ import KBParserSettings from './settings/KBParserSettings.vue'
 import KBStorageSettings from './settings/KBStorageSettings.vue'
 import KBChunkingSettings from './settings/KBChunkingSettings.vue'
 import KBAdvancedSettings from './settings/KBAdvancedSettings.vue'
+import ModelSelector from '@/components/ModelSelector.vue'
 import GraphSettings from './settings/GraphSettings.vue'
 import KBShareSettings from './settings/KBShareSettings.vue'
 import { useI18n } from 'vue-i18n'
@@ -229,6 +274,7 @@ const saving = ref(false)
 const loading = ref(false)
 const allModels = ref<any[]>([])
 const hasFiles = ref(false)
+const initialStorageProvider = ref<string>('')
 
 const navItems = computed(() => {
   const items = [
@@ -243,6 +289,7 @@ const navItems = computed(() => {
       { key: 'storage', icon: 'cloud', label: t('knowledgeEditor.sidebar.storage') },
       { key: 'chunking', icon: 'file-copy', label: t('knowledgeEditor.sidebar.chunking') },
       { key: 'graph', icon: 'chart-bubble', label: t('knowledgeEditor.sidebar.graph') },
+      { key: 'multimodal', icon: 'image', label: t('knowledgeEditor.sidebar.multimodal') },
       { key: 'advanced', icon: 'setting', label: t('knowledgeEditor.sidebar.advanced') }
     )
   }
@@ -297,7 +344,7 @@ const initFormData = (type: 'document' | 'faq' = 'document') => {
       chunkOverlap: 100,
       separators: ['\n\n', '\n', '。', '！', '？', ';', '；'],
       parserEngineRules: undefined as any,
-      enableParentChild: false,
+      enableParentChild: true,
       parentChunkSize: 4096,
       childChunkSize: 384
     },
@@ -321,7 +368,7 @@ const initFormData = (type: 'document' | 'faq' = 'document') => {
       }>
     },
     questionGenerationConfig: {
-      enabled: false,
+      enabled: true,
       questionCount: 3
     },
   }
@@ -401,6 +448,7 @@ const loadKBData = async () => {
         questionCount: kb.question_generation_config?.question_count || 3
       },
     }
+    initialStorageProvider.value = formData.value.storageProvider
   } catch (error) {
     console.error('Failed to load knowledge base data:', error)
     MessagePlugin.error(t('knowledgeEditor.messages.loadDataFailed'))
@@ -429,10 +477,20 @@ const handleParserEngineRulesUpdate = (rules: any[]) => {
   }
 }
 
-const handleMultimodalUpdate = (config: any) => {
-  if (formData.value) {
-    formData.value.multimodalConfig = { ...config }
+const handleMultimodalToggle = () => {
+  if (formData.value && !formData.value.multimodalConfig.enabled) {
+    formData.value.multimodalConfig.vllmModelId = ''
   }
+}
+
+const handleMultimodalVLLMChange = (modelId: string) => {
+  if (formData.value) {
+    formData.value.multimodalConfig.vllmModelId = modelId
+  }
+}
+
+const handleAddVLLMModel = () => {
+  uiStore.openSettings('models', 'vllm')
 }
 
 const handleStorageProviderUpdate = (value: string) => {
@@ -478,13 +536,10 @@ const validateForm = (): boolean => {
   }
 
   // 验证多模态配置（如果启用）
-  if (formData.value.multimodalConfig.enabled) {
-    const validation = (advancedSettingsRef.value as any)?.validateMultimodal?.()
-    if (validation && !validation.valid) {
-      MessagePlugin.warning(validation.message || t('knowledgeEditor.messages.multimodalInvalid'))
-      currentSection.value = 'advanced'
-      return false
-    }
+  if (formData.value.multimodalConfig.enabled && !formData.value.multimodalConfig.vllmModelId) {
+    MessagePlugin.warning(t('knowledgeEditor.messages.multimodalInvalid'))
+    currentSection.value = 'multimodal'
+    return false
   }
 
   if (formData.value.type === 'faq' && !formData.value.faqConfig?.indexMode) {
@@ -568,6 +623,34 @@ const handleSubmit = async () => {
     return
   }
 
+  // 编辑模式下，若已有文件且存储引擎发生了变化，弹窗确认
+  if (
+    props.mode === 'edit' &&
+    hasFiles.value &&
+    formData.value &&
+    initialStorageProvider.value &&
+    formData.value.storageProvider !== initialStorageProvider.value
+  ) {
+    const dialog = DialogPlugin.confirm({
+      header: t('common.confirm'),
+      body: t('knowledgeEditor.messages.storageChangeConfirm'),
+      confirmBtn: t('common.confirm'),
+      cancelBtn: t('common.cancel'),
+      onConfirm: () => {
+        dialog.destroy()
+        doSubmit()
+      },
+      onCancel: () => {
+        dialog.destroy()
+      },
+    })
+    return
+  }
+
+  doSubmit()
+}
+
+const doSubmit = async () => {
   saving.value = true
   try {
     const data = buildSubmitData()
@@ -653,6 +736,7 @@ const resetState = () => {
   currentSection.value = 'basic'
   formData.value = null
   hasFiles.value = false
+  initialStorageProvider.value = ''
   saving.value = false
   loading.value = false
 }
@@ -981,6 +1065,81 @@ watch(
         color: var(--td-text-color-placeholder);
       }
     }
+  }
+}
+
+// 多模态配置内联样式（与子组件 KBStorageSettings/KBAdvancedSettings 一致）
+.kb-multimodal-settings {
+  width: 100%;
+
+  .section-header {
+    margin-bottom: 32px;
+
+    h2 {
+      font-size: 20px;
+      font-weight: 600;
+      color: var(--td-text-color-primary);
+      margin: 0 0 8px 0;
+    }
+
+    .section-description {
+      font-size: 14px;
+      color: var(--td-text-color-secondary);
+      margin: 0;
+      line-height: 1.5;
+    }
+  }
+
+  .settings-group {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .setting-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    padding: 20px 0;
+    border-bottom: 1px solid var(--td-component-stroke);
+
+    &:last-child {
+      border-bottom: none;
+    }
+  }
+
+  .setting-info {
+    flex: 1;
+    max-width: 65%;
+    padding-right: 24px;
+
+    label {
+      font-size: 15px;
+      font-weight: 500;
+      color: var(--td-text-color-primary);
+      display: block;
+      margin-bottom: 4px;
+    }
+
+    .desc {
+      font-size: 13px;
+      color: var(--td-text-color-secondary);
+      margin: 0;
+      line-height: 1.5;
+    }
+  }
+
+  .setting-control {
+    flex-shrink: 0;
+    min-width: 280px;
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+  }
+
+  .required {
+    color: var(--td-error-color);
+    margin-left: 2px;
+    font-weight: 500;
   }
 }
 </style>

@@ -35,6 +35,11 @@ export interface CustomAgentConfig {
   // false: 根据 kb_selection_mode 自动检索知识库
   retrieve_kb_only_when_mentioned?: boolean;
 
+  // ===== 图片上传/多模态设置 =====
+  image_upload_enabled?: boolean;    // 是否启用图片上传（默认: false）
+  vlm_model_id?: string;            // VLM模型ID（图片分析用）
+  image_storage_provider?: string;   // 图片存储提供商
+
   // ===== 文件类型限制 =====
   // 支持的文件类型（如 ["csv", "xlsx", "xls"]）
   // 为空表示支持所有文件类型
@@ -169,4 +174,40 @@ export interface PlaceholdersResponse {
 // 获取占位符定义
 export function getPlaceholders() {
   return get<{ data: PlaceholdersResponse }>('/api/v1/agents/placeholders');
+}
+
+// ===== IM渠道 =====
+
+export interface IMChannel {
+  id: string;
+  tenant_id?: number;
+  agent_id: string;
+  platform: 'wecom' | 'feishu';
+  name: string;
+  enabled: boolean;
+  mode: 'webhook' | 'websocket';
+  output_mode: 'stream' | 'full';
+  credentials: Record<string, any>;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export function listIMChannels(agentId: string) {
+  return get<{ data: IMChannel[] }>(`/api/v1/agents/${agentId}/im-channels`);
+}
+
+export function createIMChannel(agentId: string, data: Partial<IMChannel>) {
+  return post<{ data: IMChannel }>(`/api/v1/agents/${agentId}/im-channels`, data);
+}
+
+export function updateIMChannel(id: string, data: Partial<IMChannel>) {
+  return put<{ data: IMChannel }>(`/api/v1/im-channels/${id}`, data);
+}
+
+export function deleteIMChannel(id: string) {
+  return del<{ success: boolean }>(`/api/v1/im-channels/${id}`);
+}
+
+export function toggleIMChannel(id: string) {
+  return post<{ data: IMChannel }>(`/api/v1/im-channels/${id}/toggle`);
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/Tencent/WeKnora/internal/logger"
 	"github.com/Tencent/WeKnora/internal/models/provider"
 	"github.com/Tencent/WeKnora/internal/types"
+	secutils "github.com/Tencent/WeKnora/internal/utils"
 	"github.com/sashabaranov/go-openai"
 )
 
@@ -75,7 +76,46 @@ func (c *RemoteAPIChat) ConvertMessages(messages []Message) []openai.ChatComplet
 			Role: msg.Role,
 		}
 
-		if msg.Content != "" {
+		// 优先处理多内容消息（包含图片等）
+		if len(msg.MultiContent) > 0 {
+			openaiMsg.MultiContent = make([]openai.ChatMessagePart, 0, len(msg.MultiContent))
+			for _, part := range msg.MultiContent {
+				switch part.Type {
+				case "text":
+					openaiMsg.MultiContent = append(openaiMsg.MultiContent, openai.ChatMessagePart{
+						Type: openai.ChatMessagePartTypeText,
+						Text: part.Text,
+					})
+				case "image_url":
+					if part.ImageURL != nil {
+						openaiMsg.MultiContent = append(openaiMsg.MultiContent, openai.ChatMessagePart{
+							Type: openai.ChatMessagePartTypeImageURL,
+							ImageURL: &openai.ChatMessageImageURL{
+								URL:    part.ImageURL.URL,
+								Detail: openai.ImageURLDetail(part.ImageURL.Detail),
+							},
+						})
+					}
+				}
+			}
+		} else if len(msg.Images) > 0 && msg.Role == "user" {
+			parts := make([]openai.ChatMessagePart, 0, len(msg.Images)+1)
+			for _, imgURL := range msg.Images {
+				resolved := resolveImageURLForLLM(imgURL)
+				parts = append(parts, openai.ChatMessagePart{
+					Type: openai.ChatMessagePartTypeImageURL,
+					ImageURL: &openai.ChatMessageImageURL{
+						URL:    resolved,
+						Detail: openai.ImageURLDetailAuto,
+					},
+				})
+			}
+			parts = append(parts, openai.ChatMessagePart{
+				Type: openai.ChatMessagePartTypeText,
+				Text: msg.Content,
+			})
+			openaiMsg.MultiContent = parts
+		} else if msg.Content != "" {
 			openaiMsg.Content = msg.Content
 		}
 
@@ -180,7 +220,7 @@ func (c *RemoteAPIChat) BuildChatCompletionRequest(messages []Message, opts *Cha
 // logRequest 记录请求日志
 func (c *RemoteAPIChat) logRequest(ctx context.Context, req any, isStream bool) {
 	if jsonData, err := json.MarshalIndent(req, "", "  "); err == nil {
-		logger.Infof(ctx, "[LLM Request] model=%s, stream=%v, request:\n%s", c.modelName, isStream, string(jsonData))
+		logger.Infof(ctx, "[LLM Request] model=%s, stream=%v, request:\n%s", c.modelName, isStream, secutils.CompactImageDataURLForLog(string(jsonData)))
 	}
 }
 
@@ -208,7 +248,15 @@ func (c *RemoteAPIChat) Chat(ctx context.Context, messages []Message, opts *Chat
 
 	resp, err := c.client.CreateChatCompletion(ctx, req)
 	if err != nil {
-		return nil, fmt.Errorf("create chat completion: %w", err)
+		if isMultimodalNotSupportedError(err) {
+			logger.Warnf(ctx, "[LLM Request] Model %s does not support multimodal, retrying without images", c.modelName)
+			cleaned := stripImagesFromMessages(messages)
+			req = c.BuildChatCompletionRequest(cleaned, opts, false)
+			resp, err = c.client.CreateChatCompletion(ctx, req)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("create chat completion: %w", err)
+		}
 	}
 
 	return c.parseCompletionResponse(&resp)
@@ -344,8 +392,16 @@ func (c *RemoteAPIChat) ChatStream(ctx context.Context, messages []Message, opts
 
 	stream, err := c.client.CreateChatCompletionStream(ctx, req)
 	if err != nil {
-		close(streamChan)
-		return nil, fmt.Errorf("create chat completion stream: %w", err)
+		if isMultimodalNotSupportedError(err) {
+			logger.Warnf(ctx, "[LLM Stream] Model %s does not support multimodal, retrying without images", c.modelName)
+			cleaned := stripImagesFromMessages(messages)
+			req = c.BuildChatCompletionRequest(cleaned, opts, true)
+			stream, err = c.client.CreateChatCompletionStream(ctx, req)
+		}
+		if err != nil {
+			close(streamChan)
+			return nil, fmt.Errorf("create chat completion stream: %w", err)
+		}
 	}
 
 	go c.processStream(ctx, stream, streamChan)
