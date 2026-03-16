@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"strconv"
 	"strings"
@@ -664,7 +665,8 @@ func (h *KnowledgeHandler) DownloadKnowledgeFile(c *gin.Context) {
 	// Set response headers for file download
 	c.Header("Content-Description", "File Transfer")
 	c.Header("Content-Transfer-Encoding", "binary")
-	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%s", filename))
+	cd := mime.FormatMediaType("attachment", map[string]string{"filename": filename})
+	c.Header("Content-Disposition", cd)
 	c.Header("Content-Type", "application/octet-stream")
 	c.Header("Expires", "0")
 	c.Header("Cache-Control", "must-revalidate")
@@ -765,7 +767,7 @@ func (h *KnowledgeHandler) PreviewKnowledgeFile(c *gin.Context) {
 
 	contentType := mimeTypeByExt(filename)
 	c.Header("Content-Type", contentType)
-	c.Header("Content-Disposition", fmt.Sprintf("inline; filename=%s", filename))
+	c.Header("Content-Disposition", mime.FormatMediaType("inline", map[string]string{"filename": filename}))
 	c.Header("Cache-Control", "private, max-age=3600")
 
 	c.Stream(func(w io.Writer) bool {

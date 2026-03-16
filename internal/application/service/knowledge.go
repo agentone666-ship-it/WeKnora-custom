@@ -2425,11 +2425,7 @@ func (s *knowledgeService) GetKnowledgeFile(ctx context.Context, id string) (io.
 		if meta != nil {
 			content = meta.Content
 		}
-		// Sanitize title: strip characters that are invalid or dangerous in HTTP headers / filenames.
-		safeName := strings.NewReplacer(
-			"\n", "", "\r", "", "/", "-", "\\", "-", "\"", "'",
-		).Replace(knowledge.Title)
-		filename := safeName + ".md"
+		filename := sanitizeManualDownloadFilename(knowledge.Title)
 		return io.NopCloser(strings.NewReader(content)), filename, nil
 	}
 
@@ -6748,6 +6744,20 @@ func ensureManualFileName(title string) string {
 		return trimmed
 	}
 	return trimmed + manualFileExtension
+}
+
+// sanitizeManualDownloadFilename converts a knowledge title into a safe .md
+// download filename. Characters that are illegal or dangerous in HTTP header
+// values and file-system paths are removed or replaced; a blank result falls
+// back to "untitled".
+func sanitizeManualDownloadFilename(title string) string {
+	safeName := strings.NewReplacer(
+		"\n", "", "\r", "", "/", "-", "\\", "-", "\"", "'",
+	).Replace(title)
+	if strings.TrimSpace(safeName) == "" {
+		safeName = "untitled"
+	}
+	return safeName + manualFileExtension
 }
 
 func (s *knowledgeService) triggerManualProcessing(ctx context.Context,
