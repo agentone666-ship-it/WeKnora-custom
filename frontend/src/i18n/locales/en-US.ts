@@ -3419,6 +3419,7 @@ export default {
       strategy: 'Strategy',
     },
     syncHistory: 'Sync History',
+    refreshLogs: 'Refresh logs',
     noLogs: 'No sync records yet',
     logStatus: {
       running: 'Syncing',
