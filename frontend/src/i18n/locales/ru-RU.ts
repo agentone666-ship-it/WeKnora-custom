@@ -2877,8 +2877,7 @@ export default {
     },
     im: {
       title: 'Интеграция IM',
-      description: 'Подключите агента к платформам мгновенных сообщений, таким как WeCom, Feishu, Slack, Telegram, DingTalk и Mattermost',
-      wecom: 'WeCom',
+      description: 'Подключите агента к платформам мгновенных сообщений, таким как Feishu, Slack, Telegram, DingTalk и Mattermost',
       feishu: 'Feishu',
       slack: 'Slack',
       telegram: 'Telegram',
@@ -2898,7 +2897,6 @@ export default {
       empty: 'Нет IM каналов. Нажмите кнопку ниже, чтобы добавить один.',
       unnamed: 'Неименованный канал',
       docLink: 'Руководство по интеграции',
-      wecomConsole: 'Консоль WeCom',
       feishuConsole: 'Платформа Feishu',
       slackConsole: 'Консоль Slack API',
       telegramConsole: 'Telegram BotFather',
@@ -3389,7 +3387,6 @@ export default {
       yuque: 'Yuque (Юйцюэ)',
       github: 'GitHub',
       web_crawler: 'Веб-краулер',
-      wecom_doc: 'WeCom Документы',
     },
     connectorDesc: {
       feishu: 'Синхронизация документов, таблиц и файлов из Feishu Wiki',
@@ -3398,7 +3395,6 @@ export default {
       yuque: 'Синхронизация документов из баз знаний Yuque',
       github: 'Синхронизация документов и вики из репозиториев GitHub',
       web_crawler: 'Сканирование веб-сайтов через Sitemap',
-      wecom_doc: 'Синхронизация документов из WeCom (корпоративный WeChat)',
     },
     field: {
       appId: 'App ID',
@@ -3409,8 +3405,6 @@ export default {
       apiToken: 'API Token',
       personalToken: 'Personal Access Token',
       sitemapUrl: 'Sitemap URL',
-      corpId: 'Corp ID',
-      corpSecret: 'Corp Secret',
     },
     comingSoon: 'Скоро',
     docHint: 'Получить учётные данные можно здесь:',
