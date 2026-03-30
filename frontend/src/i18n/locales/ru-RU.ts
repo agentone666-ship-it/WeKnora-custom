@@ -3387,6 +3387,7 @@ export default {
       yuque: 'Yuque (Юйцюэ)',
       github: 'GitHub',
       web_crawler: 'Веб-краулер',
+      wecom_doc: 'WeCom Документы',
     },
     connectorDesc: {
       feishu: 'Синхронизация документов, таблиц и файлов из Feishu Wiki',
@@ -3395,6 +3396,7 @@ export default {
       yuque: 'Синхронизация документов из баз знаний Yuque',
       github: 'Синхронизация документов и вики из репозиториев GitHub',
       web_crawler: 'Сканирование веб-сайтов через Sitemap',
+      wecom_doc: 'Синхронизация документов из WeCom (корпоративный WeChat)',
     },
     field: {
       appId: 'App ID',
@@ -3405,6 +3407,8 @@ export default {
       apiToken: 'API Token',
       personalToken: 'Personal Access Token',
       sitemapUrl: 'Sitemap URL',
+      corpId: 'Corp ID',
+      corpSecret: 'Corp Secret',
     },
     comingSoon: 'Скоро',
     docHint: 'Получить учётные данные можно здесь:',
