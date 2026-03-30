@@ -3404,6 +3404,8 @@ export default {
     syncDeletions: 'Sync deletions (remove knowledge when deleted at source)',
     createAndSync: 'Create & Sync Now',
     createSuccess: 'Data source created',
+    createAndSyncSuccess: 'Data source created and sync task submitted',
+    createButSyncFailed: 'Data source created, but failed to trigger sync',
     updateSuccess: 'Data source updated',
     saveFailed: 'Failed to save',
     step: {
