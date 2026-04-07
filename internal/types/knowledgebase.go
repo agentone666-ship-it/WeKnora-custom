@@ -14,10 +14,6 @@ const (
 	// KnowledgeBaseTypeDocument represents the document knowledge base type
 	KnowledgeBaseTypeDocument = "document"
 	KnowledgeBaseTypeFAQ      = "faq"
-	// KnowledgeBaseTypeWiki represents the wiki knowledge base type.
-	// Wiki KBs use LLM to build and maintain a persistent, interlinked wiki
-	// from ingested documents instead of just raw RAG chunks.
-	KnowledgeBaseTypeWiki = "wiki"
 )
 
 // FAQIndexMode represents the FAQ index mode: only index questions or index questions and answers
@@ -115,6 +111,8 @@ type KnowledgeBaseConfig struct {
 	ImageProcessingConfig ImageProcessingConfig `yaml:"image_processing_config" json:"image_processing_config"`
 	// FAQ configuration (only for FAQ type knowledge bases)
 	FAQConfig *FAQConfig `yaml:"faq_config"              json:"faq_config"`
+	// Wiki configuration (only for wiki-enabled knowledge bases)
+	WikiConfig *WikiConfig `yaml:"wiki_config"             json:"wiki_config"`
 }
 
 // ParserEngineRule maps a set of file types to a specific parser engine.
@@ -491,8 +489,14 @@ func (kb *KnowledgeBase) EnsureDefaults() {
 	if kb.Type != KnowledgeBaseTypeFAQ {
 		kb.FAQConfig = nil
 	}
-	if kb.Type != KnowledgeBaseTypeWiki {
-		kb.WikiConfig = nil
+	// Set defaults for Wiki (wiki is an add-on to document KBs, not a separate type)
+	if kb.IsWikiEnabled() {
+		if kb.WikiConfig.WikiLanguage == "" {
+			kb.WikiConfig.WikiLanguage = "auto"
+		}
+		if !kb.WikiConfig.AutoIngest {
+			kb.WikiConfig.AutoIngest = true
+		}
 	}
 	// Set defaults for FAQ
 	if kb.Type == KnowledgeBaseTypeFAQ {
@@ -510,18 +514,12 @@ func (kb *KnowledgeBase) EnsureDefaults() {
 			kb.FAQConfig.QuestionIndexMode = FAQQuestionIndexModeCombined
 		}
 	}
-	// Set defaults for Wiki
-	if kb.Type == KnowledgeBaseTypeWiki {
-		if kb.WikiConfig == nil {
-			kb.WikiConfig = &WikiConfig{
-				AutoIngest: true,
-				WikiLanguage: "auto",
-			}
-		}
-		if kb.WikiConfig.WikiLanguage == "" {
-			kb.WikiConfig.WikiLanguage = "auto"
-		}
-	}
+}
+
+// IsWikiEnabled checks if the wiki feature is enabled for this knowledge base.
+// Wiki is an add-on to document-type KBs, not a separate KB type.
+func (kb *KnowledgeBase) IsWikiEnabled() bool {
+	return kb != nil && kb.WikiConfig != nil && kb.WikiConfig.Enabled
 }
 
 // IsMultimodalEnabled 判断多模态是否启用（兼容新老版本配置）

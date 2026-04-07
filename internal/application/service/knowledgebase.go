@@ -294,6 +294,9 @@ func (s *knowledgeBaseService) UpdateKnowledgeBase(ctx context.Context,
 		if config.FAQConfig != nil {
 			kb.FAQConfig = config.FAQConfig
 		}
+		if config.WikiConfig != nil {
+			kb.WikiConfig = config.WikiConfig
+		}
 	}
 	kb.UpdatedAt = time.Now()
 	kb.EnsureDefaults()

@@ -11,7 +11,7 @@ export function listKnowledgeBases(params?: { agent_id?: string }) {
 export function createKnowledgeBase(data: { 
   name: string; 
   description?: string; 
-  type?: 'document' | 'faq' | 'wiki';
+  type?: 'document' | 'faq';
   chunking_config?: any;
   embedding_model_id?: string;
   summary_model_id?: string;
@@ -28,6 +28,13 @@ export function createKnowledgeBase(data: {
   };
   extract_config?: any;
   faq_config?: { index_mode: string; question_index_mode?: string };
+  wiki_config?: {
+    enabled: boolean;
+    auto_ingest?: boolean;
+    synthesis_model_id?: string;
+    wiki_language?: string;
+    max_pages_per_ingest?: number;
+  };
 }) {
   return post(`/api/v1/knowledge-bases`, data);
 }
@@ -39,7 +46,22 @@ export function getKnowledgeBaseById(id: string, options?: { agent_id?: string }
   return get(qs ? `/api/v1/knowledge-bases/${id}?${qs}` : `/api/v1/knowledge-bases/${id}`);
 }
 
-export function updateKnowledgeBase(id: string, data: { name: string; description?: string; config: any }) {
+export function updateKnowledgeBase(id: string, data: { 
+  name: string; 
+  description?: string; 
+  config?: {
+    chunking_config?: any;
+    image_processing_config?: any;
+    faq_config?: any;
+    wiki_config?: {
+      enabled: boolean;
+      auto_ingest?: boolean;
+      synthesis_model_id?: string;
+      wiki_language?: string;
+      max_pages_per_ingest?: number;
+    };
+  }
+}) {
   return put(`/api/v1/knowledge-bases/${id}` , data);
 }
 
