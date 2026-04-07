@@ -150,6 +150,7 @@ func BuildContainer(container *dig.Container) *dig.Container {
 	must(container.Provide(service.NewWebSearchStateService))
 	must(container.Provide(repository.NewDataSourceRepository))
 	must(container.Provide(repository.NewSyncLogRepository))
+	must(container.Provide(repository.NewWikiPageRepository))
 
 	// MCP manager for managing MCP client connections
 	logger.Debugf(ctx, "[Container] Registering MCP manager...")
@@ -182,6 +183,9 @@ func BuildContainer(container *dig.Container) *dig.Container {
 	must(container.Provide(service.NewMCPServiceService))
 	must(container.Provide(service.NewCustomAgentService))
 	must(container.Provide(memoryService.NewMemoryService))
+	must(container.Provide(service.NewWikiPageService))
+	must(container.Provide(service.NewWikiIngestService, dig.Name("wikiIngest")))
+	must(container.Provide(service.NewWikiLintService))
 
 	// Web search service (needed by AgentService)
 	logger.Debugf(ctx, "[Container] Registering web search registry and providers...")
@@ -250,6 +254,7 @@ func BuildContainer(container *dig.Container) *dig.Container {
 	must(container.Invoke(chatpipeline.NewPluginExtractEntity))
 	must(container.Invoke(chatpipeline.NewPluginSearchEntity))
 	must(container.Invoke(chatpipeline.NewPluginSearchParallel))
+	must(container.Invoke(chatpipeline.NewPluginWikiBoost))
 	must(container.Invoke(chatpipeline.NewMemoryPlugin))
 	logger.Debugf(ctx, "[Container] Chat pipeline plugins registered")
 
@@ -279,6 +284,8 @@ func BuildContainer(container *dig.Container) *dig.Container {
 
 	// Data source handler
 	must(container.Provide(handler.NewDataSourceHandler))
+	// Wiki page handler
+	must(container.Provide(handler.NewWikiPageHandler))
 	// IM integration
 	logger.Debugf(ctx, "[Container] Registering IM integration...")
 	must(container.Provide(imPkg.NewService))

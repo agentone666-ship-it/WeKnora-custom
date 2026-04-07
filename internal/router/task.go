@@ -24,6 +24,7 @@ type AsynqTaskParams struct {
 	DataTableSummary     interfaces.TaskHandler `name:"dataTableSummary"`
 	ImageMultimodal      interfaces.TaskHandler `name:"imageMultimodal"`
 	KnowledgePostProcess interfaces.TaskHandler `name:"knowledgePostProcess"`
+	WikiIngest           interfaces.TaskHandler `name:"wikiIngest"`
 }
 
 func getAsynqRedisClientOpt() *asynq.RedisClientOpt {
@@ -115,6 +116,9 @@ func RunAsynqServer(params AsynqTaskParams) *asynq.ServeMux {
 
 	// Register data source sync handler
 	mux.HandleFunc(types.TypeDataSourceSync, params.DataSourceService.ProcessSync)
+
+	// Register wiki ingest handler
+	mux.HandleFunc(types.TypeWikiIngest, params.WikiIngest.Handle)
 
 	go func() {
 		// Start the server

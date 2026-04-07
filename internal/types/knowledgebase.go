@@ -14,6 +14,10 @@ const (
 	// KnowledgeBaseTypeDocument represents the document knowledge base type
 	KnowledgeBaseTypeDocument = "document"
 	KnowledgeBaseTypeFAQ      = "faq"
+	// KnowledgeBaseTypeWiki represents the wiki knowledge base type.
+	// Wiki KBs use LLM to build and maintain a persistent, interlinked wiki
+	// from ingested documents instead of just raw RAG chunks.
+	KnowledgeBaseTypeWiki = "wiki"
 )
 
 // FAQIndexMode represents the FAQ index mode: only index questions or index questions and answers
@@ -79,6 +83,8 @@ type KnowledgeBase struct {
 	FAQConfig *FAQConfig `yaml:"faq_config"              json:"faq_config"              gorm:"column:faq_config;type:json"`
 	// QuestionGenerationConfig stores question generation configuration for document knowledge bases
 	QuestionGenerationConfig *QuestionGenerationConfig `yaml:"question_generation_config" json:"question_generation_config" gorm:"column:question_generation_config;type:json"`
+	// WikiConfig stores wiki-specific configuration (only for wiki type knowledge bases)
+	WikiConfig *WikiConfig `yaml:"wiki_config"             json:"wiki_config"             gorm:"column:wiki_config;type:json"`
 	// Whether this knowledge base is pinned to the top of the list
 	IsPinned bool `yaml:"is_pinned"               json:"is_pinned"               gorm:"default:false"`
 	// Time when the knowledge base was pinned (nil if not pinned)
@@ -481,22 +487,40 @@ func (kb *KnowledgeBase) EnsureDefaults() {
 	if kb.Type == "" {
 		kb.Type = KnowledgeBaseTypeDocument
 	}
+	// Clear type-specific configs that don't belong
 	if kb.Type != KnowledgeBaseTypeFAQ {
 		kb.FAQConfig = nil
-		return
 	}
-	if kb.FAQConfig == nil {
-		kb.FAQConfig = &FAQConfig{
-			IndexMode:         FAQIndexModeQuestionAnswer,
-			QuestionIndexMode: FAQQuestionIndexModeCombined,
+	if kb.Type != KnowledgeBaseTypeWiki {
+		kb.WikiConfig = nil
+	}
+	// Set defaults for FAQ
+	if kb.Type == KnowledgeBaseTypeFAQ {
+		if kb.FAQConfig == nil {
+			kb.FAQConfig = &FAQConfig{
+				IndexMode:         FAQIndexModeQuestionAnswer,
+				QuestionIndexMode: FAQQuestionIndexModeCombined,
+			}
+			return
 		}
-		return
+		if kb.FAQConfig.IndexMode == "" {
+			kb.FAQConfig.IndexMode = FAQIndexModeQuestionAnswer
+		}
+		if kb.FAQConfig.QuestionIndexMode == "" {
+			kb.FAQConfig.QuestionIndexMode = FAQQuestionIndexModeCombined
+		}
 	}
-	if kb.FAQConfig.IndexMode == "" {
-		kb.FAQConfig.IndexMode = FAQIndexModeQuestionAnswer
-	}
-	if kb.FAQConfig.QuestionIndexMode == "" {
-		kb.FAQConfig.QuestionIndexMode = FAQQuestionIndexModeCombined
+	// Set defaults for Wiki
+	if kb.Type == KnowledgeBaseTypeWiki {
+		if kb.WikiConfig == nil {
+			kb.WikiConfig = &WikiConfig{
+				AutoIngest: true,
+				WikiLanguage: "auto",
+			}
+		}
+		if kb.WikiConfig.WikiLanguage == "" {
+			kb.WikiConfig.WikiLanguage = "auto"
+		}
 	}
 }
 

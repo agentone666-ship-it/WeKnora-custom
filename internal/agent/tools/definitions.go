@@ -22,6 +22,12 @@ const (
 	// Skills-related tools (only available when skills are enabled)
 	ToolExecuteSkillScript = "execute_skill_script"
 	ToolReadSkill          = "read_skill"
+	// Wiki-related tools (only available when wiki KBs are in scope)
+	ToolWikiReadPage  = "wiki_read_page"
+	ToolWikiWritePage = "wiki_write_page"
+	ToolWikiSearch    = "wiki_search"
+	ToolWikiReadIndex = "wiki_read_index"
+	ToolWikiLint      = "wiki_lint"
 )
 
 // AvailableTool defines a simple tool metadata used by settings APIs.
@@ -48,6 +54,11 @@ func AvailableToolDefinitions() []AvailableTool {
 		{Name: ToolReadSkill, Label: "读取技能", Description: "按需读取技能内容以学习专业能力"},
 		{Name: ToolExecuteSkillScript, Label: "执行技能脚本", Description: "在沙箱环境中执行技能脚本"},
 		{Name: ToolFinalAnswer, Label: "提交最终回答", Description: "提交最终回答给用户"},
+		{Name: ToolWikiReadPage, Label: "读取Wiki页面", Description: "读取指定的Wiki页面内容"},
+		{Name: ToolWikiWritePage, Label: "写入Wiki页面", Description: "创建或更新Wiki页面"},
+		{Name: ToolWikiSearch, Label: "搜索Wiki", Description: "在Wiki中搜索页面"},
+		{Name: ToolWikiReadIndex, Label: "读取Wiki索引", Description: "读取Wiki索引目录"},
+		{Name: ToolWikiLint, Label: "Wiki健康检查", Description: "检查Wiki健康状况"},
 	}
 }
 

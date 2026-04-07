@@ -30,6 +30,7 @@ import {
   reparseKnowledge,
 } from "@/api/knowledge-base/index";
 import FAQEntryManager from './components/FAQEntryManager.vue';
+import WikiBrowser from './wiki/WikiBrowser.vue';
 import { listMoveTargets, moveKnowledge, getKnowledgeMoveProgress } from '@/api/knowledge-base';
 import { useI18n } from 'vue-i18n';
 import { formatStringDate, kbFileTypeVerification } from '@/utils';
@@ -44,6 +45,7 @@ const uploading = ref(false);
 const kbLoading = ref(false);
 const docListLoading = ref(true);
 const isFAQ = computed(() => (kbInfo.value?.type || '') === 'faq');
+const isWiki = computed(() => (kbInfo.value?.type || '') === 'wiki');
 const missingStorageEngine = computed(() => {
   if (!kbInfo.value || isFAQ.value) return false
   const spc = kbInfo.value.storage_provider_config
@@ -1530,7 +1532,12 @@ async function createNewSession(value: string): Promise<void> {
 </script>
 
 <template>
-  <template v-if="!isFAQ">
+  <template v-if="isWiki">
+    <div class="wiki-manager-wrapper" style="padding: 0;">
+      <WikiBrowser v-if="kbId" :knowledge-base-id="kbId" />
+    </div>
+  </template>
+  <template v-else-if="!isFAQ">
     <div class="knowledge-layout">
       <div class="document-header">
         <div class="document-header-title">

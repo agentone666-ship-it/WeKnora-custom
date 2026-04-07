@@ -11,7 +11,7 @@ export function listKnowledgeBases(params?: { agent_id?: string }) {
 export function createKnowledgeBase(data: { 
   name: string; 
   description?: string; 
-  type?: 'document' | 'faq';
+  type?: 'document' | 'faq' | 'wiki';
   chunking_config?: any;
   embedding_model_id?: string;
   summary_model_id?: string;

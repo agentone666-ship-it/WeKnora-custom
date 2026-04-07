@@ -83,7 +83,7 @@ func (s *KnowledgePostProcessService) Handle(ctx context.Context, task *asynq.Ta
 	if knowledge.ParseStatus == types.ParseStatusProcessing {
 		knowledge.ParseStatus = types.ParseStatusCompleted
 		knowledge.UpdatedAt = time.Now()
-		
+
 		// Setup summary status
 		if len(textChunks) > 0 {
 			knowledge.SummaryStatus = types.SummaryStatusPending
@@ -115,6 +115,11 @@ func (s *KnowledgePostProcessService) Handle(ctx context.Context, task *asynq.Ta
 		}
 	}
 
+	// 6. Spawn Wiki Ingest Task for wiki-type knowledge bases
+	if kb.Type == types.KnowledgeBaseTypeWiki && len(textChunks) > 0 {
+		EnqueueWikiIngest(ctx, s.taskEnqueuer, payload.TenantID, payload.KnowledgeBaseID, payload.KnowledgeID)
+		logger.Infof(ctx, "[KnowledgePostProcess] Enqueued wiki ingest task for %s", payload.KnowledgeID)
+	}
 	return nil
 }
 

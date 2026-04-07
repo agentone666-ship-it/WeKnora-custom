@@ -40,6 +40,7 @@ type agentService struct {
 	chunkService          interfaces.ChunkService
 	duckdb                *sql.DB
 	webSearchStateService interfaces.WebSearchStateService
+	wikiPageService       interfaces.WikiPageService
 }
 
 // NewAgentService creates a new agent service
@@ -57,6 +58,7 @@ func NewAgentService(
 	webSearchService interfaces.WebSearchService,
 	duckdb *sql.DB,
 	webSearchStateService interfaces.WebSearchStateService,
+	wikiPageService interfaces.WikiPageService,
 ) interfaces.AgentService {
 	return &agentService{
 		cfg:                   cfg,
@@ -72,6 +74,7 @@ func NewAgentService(
 		webSearchService:      webSearchService,
 		duckdb:                duckdb,
 		webSearchStateService: webSearchStateService,
+		wikiPageService:       wikiPageService,
 	}
 }
 
@@ -366,6 +369,27 @@ func (s *agentService) registerTools(
 		allowedTools = append(allowedTools, tools.ToolWebFetch)
 	}
 
+	// If any search target is a wiki KB, add wiki tools automatically
+	var wikiKBIDs []string
+	var wikiTenantID uint64
+	for _, target := range config.SearchTargets {
+		kb, err := s.knowledgeBaseService.GetKnowledgeBaseByIDOnly(ctx, target.KnowledgeBaseID)
+		if err == nil && kb.Type == types.KnowledgeBaseTypeWiki {
+			wikiKBIDs = append(wikiKBIDs, kb.ID)
+			wikiTenantID = kb.TenantID
+		}
+	}
+	if len(wikiKBIDs) > 0 {
+		allowedTools = append(allowedTools,
+			tools.ToolWikiReadPage,
+			tools.ToolWikiWritePage,
+			tools.ToolWikiSearch,
+			tools.ToolWikiReadIndex,
+			tools.ToolWikiLint,
+		)
+		logger.Infof(ctx, "Wiki KBs detected (%d), wiki tools added", len(wikiKBIDs))
+	}
+
 	logger.Infof(ctx, "Registering tools: %v, webSearchEnabled: %v", allowedTools, config.WebSearchEnabled)
 	allowedTools = append(allowedTools, tools.ToolFinalAnswer)
 	// Register each allowed tool
@@ -425,6 +449,19 @@ func (s *agentService) registerTools(
 		case tools.ToolFinalAnswer:
 			toolToRegister = tools.NewFinalAnswerTool()
 			logger.Infof(ctx, "Registered final_answer tool")
+
+		// Wiki tools — only registered when wiki KBs are detected
+		case tools.ToolWikiReadPage:
+			toolToRegister = tools.NewWikiReadPageTool(s.wikiPageService, wikiKBIDs)
+		case tools.ToolWikiWritePage:
+			toolToRegister = tools.NewWikiWritePageTool(s.wikiPageService, wikiKBIDs, wikiTenantID)
+		case tools.ToolWikiSearch:
+			toolToRegister = tools.NewWikiSearchTool(s.wikiPageService, wikiKBIDs)
+		case tools.ToolWikiReadIndex:
+			toolToRegister = tools.NewWikiReadIndexTool(s.wikiPageService, wikiKBIDs)
+		case tools.ToolWikiLint:
+			toolToRegister = tools.NewWikiLintTool(s.wikiPageService, wikiKBIDs)
+
 		default:
 			logger.Warnf(ctx, "Unknown tool: %s", toolName)
 		}
