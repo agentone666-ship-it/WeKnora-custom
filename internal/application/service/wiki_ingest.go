@@ -920,49 +920,6 @@ func (s *wikiIngestService) upsertExtractedPages(
 	return affected, nil
 }
 
-// detectSynthesisOpportunities checks if there are enough pages to suggest synthesis.
-// Pure heuristic — no LLM call, just counts pages by type and returns suggestion strings.
-func (s *wikiIngestService) detectSynthesisOpportunities(ctx context.Context, payload WikiIngestPayload) []string {
-	resp, err := s.wikiService.ListPages(ctx, &types.WikiPageListRequest{
-		KnowledgeBaseID: payload.KnowledgeBaseID,
-		PageSize:        500,
-		SortBy:          "page_type",
-		SortOrder:       "asc",
-	})
-	if err != nil {
-		return nil
-	}
-
-	// Count pages by type, collect example titles
-	typeCounts := make(map[string]int)
-	typeExamples := make(map[string][]string)
-	for _, p := range resp.Pages {
-		if p.PageType == types.WikiPageTypeIndex || p.PageType == types.WikiPageTypeLog {
-			continue
-		}
-		typeCounts[p.PageType]++
-		if len(typeExamples[p.PageType]) < 5 {
-			typeExamples[p.PageType] = append(typeExamples[p.PageType], p.Title)
-		}
-	}
-
-	var suggestions []string
-
-	if count := typeCounts[types.WikiPageTypeEntity]; count >= 3 {
-		examples := strings.Join(typeExamples[types.WikiPageTypeEntity], ", ")
-		suggestions = append(suggestions,
-			fmt.Sprintf("Synthesis opportunity: %d entity pages (e.g. %s) could be synthesized into a comparison or overview page", count, examples))
-	}
-
-	if count := typeCounts[types.WikiPageTypeConcept]; count >= 3 {
-		examples := strings.Join(typeExamples[types.WikiPageTypeConcept], ", ")
-		suggestions = append(suggestions,
-			fmt.Sprintf("Synthesis opportunity: %d concept pages (e.g. %s) could be synthesized into a thematic overview", count, examples))
-	}
-
-	return suggestions
-}
-
 // rebuildIndexPage regenerates the index page from all existing pages
 func (s *wikiIngestService) rebuildIndexPage(ctx context.Context, chatModel chat.Chat, payload WikiIngestPayload, lang string) error {
 	// List all pages
