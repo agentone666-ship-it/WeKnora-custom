@@ -51,6 +51,15 @@
 
     <!-- Pages List -->
     <div v-if="activeTab === 'pages'" class="wiki-pages-list">
+      <!-- Recent Activity -->
+      <div v-if="logContent" class="wiki-recent-activity">
+        <div class="wiki-recent-activity-header" @click="showLog = !showLog">
+          <strong>Recent Activity</strong>
+          <span class="wiki-toggle">{{ showLog ? '▼' : '▶' }}</span>
+        </div>
+        <div v-if="showLog" class="wiki-recent-activity-content" v-html="renderedLog"></div>
+      </div>
+
       <div
         v-for="page in pages"
         :key="page.id"
@@ -128,6 +137,7 @@ import {
   getWikiPage,
   getWikiGraph,
   getWikiStats,
+  getWikiLog,
   searchWikiPages,
   type WikiPage,
   type WikiGraphData,
@@ -146,6 +156,22 @@ const activeTab = ref<'pages' | 'viewer' | 'graph'>('pages')
 const searchQuery = ref('')
 const filterType = ref('')
 const graphRef = ref<HTMLElement | null>(null)
+const logContent = ref<string>('')
+const showLog = ref(false)
+
+// Render log content as simple HTML (last 5 entries)
+const renderedLog = computed(() => {
+  if (!logContent.value) return ''
+  // Take last ~5 entries (split by ## headings)
+  const entries = logContent.value.split(/(?=^## )/m).filter(e => e.trim())
+  const recent = entries.slice(-5).reverse()
+  let html = recent.join('\n')
+  html = html.replace(/^## (.+)$/gm, '<h4>$1</h4>')
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+  html = html.replace(/^- (.+)$/gm, '<li>$1</li>')
+  html = html.replace(/\n/g, '<br>')
+  return html
+})
 
 // Simple markdown-to-HTML rendering (replace wiki links with clickable ones)
 const renderedContent = computed(() => {
@@ -185,6 +211,17 @@ async function loadStats() {
     stats.value = (res as any).data || res as any
   } catch (e) {
     console.error('Failed to load wiki stats:', e)
+  }
+}
+
+async function loadLog() {
+  try {
+    const res = await getWikiLog(props.knowledgeBaseId)
+    const page = (res as any).data || res as any
+    logContent.value = page?.content || ''
+  } catch (e) {
+    // Log page may not exist yet
+    logContent.value = ''
   }
 }
 
@@ -244,6 +281,7 @@ function formatDate(dateStr: string) {
 onMounted(() => {
   loadPages()
   loadStats()
+  loadLog()
 })
 </script>
 
@@ -373,6 +411,45 @@ onMounted(() => {
   text-align: center;
   padding: 40px;
   color: #999;
+}
+.wiki-recent-activity {
+  margin-bottom: 16px;
+  border: 1px solid #e8e8e8;
+  border-radius: 8px;
+  overflow: hidden;
+}
+.wiki-recent-activity-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 16px;
+  background: #fafafa;
+  cursor: pointer;
+  font-size: 14px;
+}
+.wiki-recent-activity-header:hover {
+  background: #f0f0f0;
+}
+.wiki-toggle {
+  font-size: 10px;
+  color: #999;
+}
+.wiki-recent-activity-content {
+  padding: 12px 16px;
+  font-size: 13px;
+  color: #555;
+  max-height: 300px;
+  overflow-y: auto;
+  line-height: 1.6;
+}
+.wiki-recent-activity-content :deep(h4) {
+  font-size: 14px;
+  margin: 8px 0 4px;
+  color: #333;
+}
+.wiki-recent-activity-content :deep(li) {
+  margin-left: 16px;
+  list-style: disc;
 }
 .wiki-page-viewer {
   max-width: 800px;

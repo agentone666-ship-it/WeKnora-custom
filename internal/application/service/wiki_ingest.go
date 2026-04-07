@@ -132,7 +132,6 @@ func (s *wikiIngestService) ProcessWikiIngest(ctx context.Context, t *asynq.Task
 		content = string([]rune(content)[:maxContentForWiki])
 	}
 
-
 	// Get human-readable language name for LLM prompts
 	// Reuses language mapping from middleware infrastructure (supports 9+ languages)
 	// Maps locale codes like "zh", "en" to names like "Chinese (Simplified)", "English"
@@ -175,7 +174,7 @@ func (s *wikiIngestService) ProcessWikiIngest(ctx context.Context, t *asynq.Task
 			Slug:            summarySlug,
 			Title:           docTitle + " - Summary",
 			PageType:        types.WikiPageTypeSummary,
-			Status:          types.WikiPageStatusPublished,
+			Status:          types.WikiPageStatusDraft,
 			Content:         summaryContent,
 			Summary:         truncateString(summaryContent, 200),
 			SourceRefs:      types.StringArray{payload.KnowledgeID},
@@ -205,6 +204,9 @@ func (s *wikiIngestService) ProcessWikiIngest(ctx context.Context, t *asynq.Task
 
 	// Step 5: Append to log page with synthesis suggestions
 	s.appendLogEntry(ctx, payload, docTitle, pagesAffected, synthesisSuggestions)
+
+	// Step 6: Publish all draft pages created during this ingest
+	s.publishDraftPages(ctx, payload.KnowledgeBaseID, pagesAffected)
 
 	logger.Infof(ctx, "wiki ingest: completed for knowledge %s, %d pages affected",
 		payload.KnowledgeID, len(pagesAffected))
@@ -257,6 +259,12 @@ func (s *wikiIngestService) extractEntitiesAndConcepts(
 	}
 
 	var affected []string
+
+	// Deduplicate entities against existing wiki pages (LLM-based)
+	result.Entities = s.deduplicateItems(ctx, chatModel, result.Entities, types.WikiPageTypeEntity, payload.KnowledgeBaseID)
+
+	// Deduplicate concepts against existing wiki pages (LLM-based)
+	result.Concepts = s.deduplicateItems(ctx, chatModel, result.Concepts, types.WikiPageTypeConcept, payload.KnowledgeBaseID)
 
 	// Upsert entity pages
 	entitySlugs, err := s.upsertExtractedPages(ctx, chatModel, result.Entities, types.WikiPageTypeEntity, docTitle, lang, payload)
@@ -328,7 +336,7 @@ func (s *wikiIngestService) upsertExtractedPages(
 				Slug:            item.Slug,
 				Title:           item.Name,
 				PageType:        pageType,
-				Status:          types.WikiPageStatusPublished,
+				Status:          types.WikiPageStatusDraft,
 				Content:         pageContent,
 				Summary:         item.Description,
 				SourceRefs:      types.StringArray{payload.KnowledgeID},
@@ -455,6 +463,98 @@ func (s *wikiIngestService) appendLogEntry(ctx context.Context, payload WikiInge
 	if _, err := s.wikiService.UpdatePage(ctx, logPage); err != nil {
 		logger.Warnf(ctx, "wiki ingest: failed to update log page: %v", err)
 	}
+}
+
+// publishDraftPages transitions draft pages to published status after ingest completes.
+// This ensures users don't see half-built pages during the ingest process.
+func (s *wikiIngestService) publishDraftPages(ctx context.Context, kbID string, slugs []string) {
+	for _, slug := range slugs {
+		page, err := s.wikiService.GetPageBySlug(ctx, kbID, slug)
+		if err != nil || page == nil {
+			continue
+		}
+		if page.Status == types.WikiPageStatusDraft {
+			page.Status = types.WikiPageStatusPublished
+			if _, err := s.wikiService.UpdatePage(ctx, page); err != nil {
+				logger.Warnf(ctx, "wiki ingest: failed to publish page %s: %v", slug, err)
+			}
+		}
+	}
+}
+
+// deduplicateItems uses LLM to identify new items that refer to the same entity/concept
+// as existing wiki pages, and remaps their slugs so upsertExtractedPages merges them.
+func (s *wikiIngestService) deduplicateItems(
+	ctx context.Context,
+	chatModel chat.Chat,
+	items []extractedItem,
+	pageType string,
+	kbID string,
+) []extractedItem {
+	if len(items) == 0 {
+		return items
+	}
+
+	// Get existing pages of the same type
+	resp, err := s.wikiService.ListPages(ctx, &types.WikiPageListRequest{
+		KnowledgeBaseID: kbID,
+		PageType:        pageType,
+		PageSize:        2000,
+	})
+	if err != nil || resp == nil || len(resp.Pages) == 0 {
+		return items // No existing pages → nothing to deduplicate against
+	}
+
+	// Build existing pages listing
+	var existingBuf strings.Builder
+	for _, p := range resp.Pages {
+		fmt.Fprintf(&existingBuf, "- slug: %s | title: %s\n", p.Slug, p.Title)
+	}
+
+	// Build new items listing
+	var newBuf strings.Builder
+	for _, item := range items {
+		fmt.Fprintf(&newBuf, "- slug: %s | name: %s\n", item.Slug, item.Name)
+	}
+
+	// Call LLM for deduplication
+	dedupeJSON, err := s.generateWithTemplate(ctx, chatModel, agent.WikiDeduplicationPrompt, map[string]string{
+		"NewItems":      newBuf.String(),
+		"ExistingPages": existingBuf.String(),
+	})
+	if err != nil {
+		logger.Warnf(ctx, "wiki ingest: deduplication LLM call failed: %v", err)
+		return items
+	}
+
+	// Parse response
+	dedupeJSON = strings.TrimSpace(dedupeJSON)
+	dedupeJSON = strings.TrimPrefix(dedupeJSON, "```json")
+	dedupeJSON = strings.TrimPrefix(dedupeJSON, "```")
+	dedupeJSON = strings.TrimSuffix(dedupeJSON, "```")
+	dedupeJSON = strings.TrimSpace(dedupeJSON)
+
+	var dedupeResult struct {
+		Merges map[string]string `json:"merges"`
+	}
+	if err := json.Unmarshal([]byte(dedupeJSON), &dedupeResult); err != nil {
+		logger.Warnf(ctx, "wiki ingest: failed to parse dedup JSON: %v", err)
+		return items
+	}
+
+	if len(dedupeResult.Merges) == 0 {
+		return items
+	}
+
+	// Remap slugs for matched items
+	for i, item := range items {
+		if existingSlug, ok := dedupeResult.Merges[item.Slug]; ok {
+			logger.Infof(ctx, "wiki ingest: dedup merge %s → %s", item.Slug, existingSlug)
+			items[i].Slug = existingSlug
+		}
+	}
+
+	return items
 }
 
 // generateWithTemplate executes a prompt template and calls the LLM

@@ -125,3 +125,65 @@ const WikiLogEntryTemplate = `## [{{.Date}}] {{.Operation}} | {{.Title}}
 - **Pages affected**: {{.PagesAffected}}
 - **Summary**: {{.Summary}}
 `
+
+// WikiAgentSystemPromptAddendum is appended to the Agent system prompt when
+// wiki knowledge bases are detected among the search targets.
+// It tells the LLM how and when to use wiki tools.
+const WikiAgentSystemPromptAddendum = `
+### Wiki Knowledge Base Guidelines
+
+You have access to a **Wiki Knowledge Base** — a persistent, interlinked collection of LLM-generated Markdown pages. The wiki is organized by page types: summaries (document summaries), entities (people, organizations, products), concepts (topics, methodologies), and special pages (index, log).
+
+#### Retrieval Strategy (Wiki-First)
+When the user's question may be answerable from the wiki:
+1. **Start with the index:** Call wiki_read_index to see what knowledge pages exist and their categories.
+2. **Search if needed:** Call wiki_search with keywords to find relevant pages.
+3. **Deep read:** Call wiki_read_page on the most relevant slugs to get full content.
+4. **Follow links:** Wiki pages contain [[slug]] cross-references. Follow them to gather related context (1-2 hops).
+5. **Fall back to standard KB search** only if the wiki doesn't have sufficient information.
+
+#### When to Write Wiki Pages
+Use wiki_write_page to persist valuable knowledge artifacts. Write a page when:
+- You produce a **cross-document synthesis** that combines insights from multiple sources (use page_type "synthesis")
+- You generate a **comparison or evaluation** of entities, approaches, or concepts (use page_type "comparison")
+- The user explicitly asks you to save analysis to the wiki
+
+**Do NOT** write wiki pages for:
+- Simple factual answers that don't add new insight
+- Conversational responses (greetings, clarifications)
+- Content that already exists in an existing wiki page (update it instead)
+
+#### Page Content Guidelines
+- Write in Markdown with proper heading hierarchy
+- Use [[entity/slug]] and [[concept/slug]] syntax to link to other wiki pages
+- Include a one-line summary in the first paragraph (used for index listings)
+- Cite source documents when possible
+- Keep pages focused: one topic/entity/concept per page
+
+#### Log Page
+The wiki has a log page (slug: "log") that records all ingest and update activity. Read it when the user asks about recent changes, update history, or what's new in the knowledge base.
+`
+
+// WikiDeduplicationPrompt asks the LLM to identify duplicate entities/concepts
+// between newly extracted items and existing wiki pages.
+const WikiDeduplicationPrompt = `You are a deduplication system. Given a list of newly extracted items and a list of existing wiki pages, determine which new items refer to the same entity or concept as an existing page.
+
+## Newly Extracted Items
+{{.NewItems}}
+
+## Existing Wiki Pages
+{{.ExistingPages}}
+
+## Instructions
+For each newly extracted item, check if it refers to the same real-world entity or concept as any existing page. Consider:
+- Name variations (e.g. "Acme Corp" vs "Acme Corporation", "RAG" vs "Retrieval-Augmented Generation")
+- Abbreviations and full names
+- Translations (e.g. "苹果公司" vs "Apple Inc.")
+- Minor spelling/formatting differences
+
+Return a JSON object with a "merges" map. The key is the NEW item's slug, the value is the EXISTING page's slug that it should merge into. Only include items that have a match.
+
+If no items match any existing pages, return: {"merges": {}}
+
+Output ONLY valid JSON. Example:
+{"merges": {"entity/acme-corporation": "entity/acme-corp", "concept/rag": "concept/retrieval-augmented-generation"}}`

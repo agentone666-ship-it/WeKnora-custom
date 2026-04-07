@@ -117,6 +117,15 @@ func (s *agentService) CreateAgentEngine(
 		systemPromptTemplate = config.ResolveSystemPrompt(config.WebSearchEnabled)
 	}
 
+	// 4.5 Append wiki guidelines if any search target is a wiki KB
+	for _, target := range config.SearchTargets {
+		kb, err := s.knowledgeBaseService.GetKnowledgeBaseByIDOnly(ctx, target.KnowledgeBaseID)
+		if err == nil && kb != nil && kb.Type == types.KnowledgeBaseTypeWiki {
+			systemPromptTemplate += "\n" + agent.WikiAgentSystemPromptAddendum
+			break
+		}
+	}
+
 	// 5. Create engine
 	engine := agent.NewAgentEngine(
 		config, chatModel, toolRegistry, eventBus,

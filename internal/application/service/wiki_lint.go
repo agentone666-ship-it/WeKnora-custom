@@ -147,7 +147,7 @@ func (s *WikiLintService) RunLint(ctx context.Context, kbID string) (*WikiLintRe
 				Severity:    SeverityWarning,
 				PageSlug:    page.Slug,
 				Description: fmt.Sprintf("Page '%s' has very little content (%d chars)", page.Title, len(content)),
-				AutoFixable: false,
+				AutoFixable: true,
 			})
 		}
 	}
@@ -288,6 +288,21 @@ func (s *WikiLintService) AutoFix(ctx context.Context, kbID string) (int, error)
 			brokenSlug := strings.Split(parts[1], "]]")[0]
 			// Remove the [[broken-link]] from content
 			page.Content = strings.ReplaceAll(page.Content, "[["+brokenSlug+"]]", brokenSlug)
+			if _, err := s.wikiService.UpdatePage(ctx, page); err == nil {
+				fixed++
+			}
+
+		case LintIssueEmptyContent:
+			// Archive pages with very little content instead of deleting
+			page, err := s.wikiService.GetPageBySlug(ctx, kbID, issue.PageSlug)
+			if err != nil {
+				continue
+			}
+			// Don't archive index or log pages
+			if page.PageType == types.WikiPageTypeIndex || page.PageType == types.WikiPageTypeLog {
+				continue
+			}
+			page.Status = types.WikiPageStatusArchived
 			if _, err := s.wikiService.UpdatePage(ctx, page); err == nil {
 				fixed++
 			}
