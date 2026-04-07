@@ -423,11 +423,11 @@ func (s *wikiIngestService) ProcessWikiIngest(ctx context.Context, t *asynq.Task
 	// Step 4: Append to log page
 	s.appendLogEntry(ctx, payload, "ingest", docTitle, pagesAffected, "")
 
-	// Step 6: Cross-link injection — scan all affected pages and inject [[wiki-links]]
+	// Step 5: Cross-link injection — scan all affected pages and inject [[wiki-links]]
 	// for mentions of other wiki page titles. Pure text matching, no LLM call.
 	s.injectCrossLinks(ctx, payload.KnowledgeBaseID, pagesAffected)
 
-	// Step 7: Publish all draft pages created during this ingest
+	// Step 6: Publish all draft pages created during this ingest
 	s.publishDraftPages(ctx, payload.KnowledgeBaseID, pagesAffected)
 
 	// Step 7: Handle stale pages — pages that previously referenced this document
