@@ -1836,6 +1836,8 @@ export default {
       graphEmpty: 'Загрузка графа...',
       logTitle: 'Журнал активности',
       graphNoData: 'Нет данных графа. Сначала загрузите документы.',
+      showArrows: 'Показать стрелки',
+      hideArrows: 'Скрыть стрелки',
       healthCheck: 'Проверка здоровья',
     },
     buttons: {

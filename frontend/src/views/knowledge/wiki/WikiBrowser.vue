@@ -223,6 +223,8 @@ const graphRef = ref<HTMLElement | null>(null)
 const loading = ref(false)
 const graphLoading = ref(false)
 const graphReady = ref(false)
+const showArrows = ref(true)
+const graphEdgeEls = ref<{ line: SVGLineElement; bidir: boolean }[]>([])
 const collapsedGroups = reactive<Record<string, boolean>>({})
 const graphDrawerVisible = ref(false)
 const graphDrawerPage = ref<WikiPage | null>(null)
@@ -423,9 +425,24 @@ async function doSearch() {
   finally { loading.value = false }
 }
 
+function toggleArrows() {
+  showArrows.value = !showArrows.value
+  for (const e of graphEdgeEls.value) {
+    if (showArrows.value) {
+      e.line.setAttribute('marker-end', 'url(#arrow-end)')
+      if (e.bidir) e.line.setAttribute('marker-start', 'url(#arrow-start)')
+    } else {
+      e.line.removeAttribute('marker-end')
+      e.line.removeAttribute('marker-start')
+    }
+  }
+}
+
 function formatDate(dateStr: string) {
   if (!dateStr) return ''
-  return new Date(dateStr).toLocaleDateString()
+  const d = new Date(dateStr)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
 
 // Convert slug like "entity/acme-corp" to a readable label "acme-corp"
@@ -521,15 +538,86 @@ function renderGraph() {
   // Node radius based on link count
   function nodeRadius(n: GNode) { return Math.max(6, Math.min(18, 6 + n.linkCount * 1.5)) }
 
-  // Create SVG elements for edges
-  const edgeEls: { line: SVGLineElement; source: string; target: string }[] = []
+  // Define arrow markers in SVG <defs>
+  const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs')
+
+  // Single-direction arrow (at end)
+  const markerEnd = document.createElementNS('http://www.w3.org/2000/svg', 'marker')
+  markerEnd.setAttribute('id', 'arrow-end')
+  markerEnd.setAttribute('viewBox', '0 0 10 6')
+  markerEnd.setAttribute('refX', '10')
+  markerEnd.setAttribute('refY', '3')
+  markerEnd.setAttribute('markerWidth', '8')
+  markerEnd.setAttribute('markerHeight', '6')
+  markerEnd.setAttribute('orient', 'auto')
+  const arrowPath = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+  arrowPath.setAttribute('d', 'M0,0 L10,3 L0,6')
+  arrowPath.setAttribute('fill', '#c0c4cc')
+  markerEnd.appendChild(arrowPath)
+  defs.appendChild(markerEnd)
+
+  // Bidirectional: arrow at start (reverse)
+  const markerStart = document.createElementNS('http://www.w3.org/2000/svg', 'marker')
+  markerStart.setAttribute('id', 'arrow-start')
+  markerStart.setAttribute('viewBox', '0 0 10 6')
+  markerStart.setAttribute('refX', '0')
+  markerStart.setAttribute('refY', '3')
+  markerStart.setAttribute('markerWidth', '8')
+  markerStart.setAttribute('markerHeight', '6')
+  markerStart.setAttribute('orient', 'auto')
+  const arrowPathStart = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+  arrowPathStart.setAttribute('d', 'M10,0 L0,3 L10,6')
+  arrowPathStart.setAttribute('fill', '#c0c4cc')
+  markerStart.appendChild(arrowPathStart)
+  defs.appendChild(markerStart)
+
+  // Highlighted arrows
+  for (const id of ['arrow-end-hl', 'arrow-start-hl']) {
+    const m = document.createElementNS('http://www.w3.org/2000/svg', 'marker')
+    m.setAttribute('id', id)
+    m.setAttribute('viewBox', '0 0 10 6')
+    m.setAttribute('refX', id.includes('end') ? '10' : '0')
+    m.setAttribute('refY', '3')
+    m.setAttribute('markerWidth', '8')
+    m.setAttribute('markerHeight', '6')
+    m.setAttribute('orient', 'auto')
+    const p = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+    p.setAttribute('d', id.includes('end') ? 'M0,0 L10,3 L0,6' : 'M10,0 L0,3 L10,6')
+    p.setAttribute('fill', '#0052d9')
+    m.appendChild(p)
+    defs.appendChild(m)
+  }
+
+  svg.appendChild(defs)
+
+  // Detect bidirectional edges (A→B and B→A both exist)
+  const edgePairSet = new Set<string>()
   for (const edge of data.edges) {
+    edgePairSet.add(`${edge.source}→${edge.target}`)
+  }
+
+  // Create SVG elements for edges (deduplicate bidirectional into single line with double arrows)
+  type EdgeEl = { line: SVGLineElement; source: string; target: string; bidir: boolean }
+  const edgeEls: EdgeEl[] = []
+  const processedPairs = new Set<string>()
+
+  for (const edge of data.edges) {
+    const pairKey = [edge.source, edge.target].sort().join('↔')
+    if (processedPairs.has(pairKey)) continue
+    processedPairs.add(pairKey)
+
+    const bidir = edgePairSet.has(`${edge.target}→${edge.source}`)
+
     const line = document.createElementNS('http://www.w3.org/2000/svg', 'line')
     line.setAttribute('stroke', '#c0c4cc')
     line.setAttribute('stroke-width', '1.2')
     line.setAttribute('stroke-opacity', '0.4')
+    line.setAttribute('marker-end', 'url(#arrow-end)')
+    if (bidir) {
+      line.setAttribute('marker-start', 'url(#arrow-start)')
+    }
     edgeG.appendChild(line)
-    edgeEls.push({ line, source: edge.source, target: edge.target })
+    edgeEls.push({ line, source: edge.source, target: edge.target, bidir })
   }
 
   // Create SVG elements for nodes
@@ -642,10 +730,7 @@ function renderGraph() {
       const s = nodeMap.get(e.source)
       const t = nodeMap.get(e.target)
       if (s && t) {
-        e.line.setAttribute('x1', String(s.x))
-        e.line.setAttribute('y1', String(s.y))
-        e.line.setAttribute('x2', String(t.x))
-        e.line.setAttribute('y2', String(t.y))
+        setEdgePositions(e.line, s, t, nodeRadius)
       }
     }
 
@@ -660,23 +745,43 @@ function renderGraph() {
     const s = nodeMap.get(e.source)
     const t = nodeMap.get(e.target)
     if (s && t) {
-      e.line.setAttribute('x1', String(s.x)); e.line.setAttribute('y1', String(s.y))
-      e.line.setAttribute('x2', String(t.x)); e.line.setAttribute('y2', String(t.y))
+      setEdgePositions(e.line, s, t, nodeRadius)
     }
   }
 
   // Draw legend
   drawLegend(svg, width)
 
+  // Store edge refs for arrow toggle
+  graphEdgeEls.value = edgeEls.map(e => ({ line: e.line, bidir: e.bidir }))
+
   graphAnimFrame = requestAnimationFrame(tick)
   graphReady.value = true
+}
+
+// Set edge line positions, shortened to stop at node circle boundary so arrows are visible
+function setEdgePositions(line: SVGLineElement, s: GNode, t: GNode, nodeRadius: (n: GNode) => number) {
+  const dx = t.x - s.x
+  const dy = t.y - s.y
+  const dist = Math.sqrt(dx * dx + dy * dy) || 1
+  const ux = dx / dist
+  const uy = dy / dist
+
+  // Shorten each end by the node radius + arrow margin
+  const rS = nodeRadius(s) + 4
+  const rT = nodeRadius(t) + 4
+
+  line.setAttribute('x1', String(s.x + ux * rS))
+  line.setAttribute('y1', String(s.y + uy * rS))
+  line.setAttribute('x2', String(t.x - ux * rT))
+  line.setAttribute('y2', String(t.y - uy * rT))
 }
 
 // ─── Drag ───
 function setupDrag(
   g: SVGGElement, node: GNode,
   nodeMap: Map<string, GNode>,
-  edgeEls: { line: SVGLineElement; source: string; target: string }[],
+  edgeEls: { line: SVGLineElement; source: string; target: string; bidir: boolean }[],
   nodeEls: { g: SVGGElement; circle: SVGCircleElement; text: SVGTextElement; node: GNode }[],
   nodeRadius: (n: GNode) => number,
 ) {
@@ -720,10 +825,11 @@ function setupDrag(
     g.setAttribute('transform', `translate(${node.x},${node.y})`)
     // Update connected edges immediately
     for (const edge of edgeEls) {
-      const s = (edge.source === node.slug) ? node : undefined
-      const t = (edge.target === node.slug) ? node : undefined
-      if (s) { edge.line.setAttribute('x1', String(s.x)); edge.line.setAttribute('y1', String(s.y)) }
-      if (t) { edge.line.setAttribute('x2', String(t.x)); edge.line.setAttribute('y2', String(t.y)) }
+      if (edge.source === node.slug || edge.target === node.slug) {
+        const sn = nodeMap.get(edge.source)
+        const tn = nodeMap.get(edge.target)
+        if (sn && tn) setEdgePositions(edge.line, sn, tn, nodeRadius)
+      }
     }
   }
 
@@ -798,7 +904,7 @@ function applyHighlight(
   slug: string,
   adjacency: Map<string, Set<string>>,
   nodeEls: { g: SVGGElement; circle: SVGCircleElement; text: SVGTextElement; node: GNode }[],
-  edgeEls: { line: SVGLineElement; source: string; target: string }[],
+  edgeEls: { line: SVGLineElement; source: string; target: string; bidir: boolean }[],
 ) {
   const neighbors = adjacency.get(slug) || new Set()
   for (const { g, circle, node } of nodeEls) {
@@ -816,23 +922,25 @@ function applyHighlight(
     if (e.source === slug || e.target === slug) {
       e.line.setAttribute('stroke-opacity', '0.9')
       e.line.setAttribute('stroke-width', '2')
-      e.line.setAttribute('stroke', nodeColorMap[
-        (e.source === slug ? edgeEls : edgeEls).length ? '' : ''
-      ] || '#0052d9')
-      // Color the edge with the active node's color
-      e.line.setAttribute('stroke', nodeColorMap[
+      const hlColor = nodeColorMap[
         nodeEls.find(n => n.node.slug === slug)?.node.type || ''
-      ] || '#0052d9')
+      ] || '#0052d9'
+      e.line.setAttribute('stroke', hlColor)
+      e.line.setAttribute('marker-end', 'url(#arrow-end-hl)')
+      if (e.bidir) e.line.setAttribute('marker-start', 'url(#arrow-start-hl)')
     } else {
       e.line.setAttribute('stroke-opacity', '0.08')
       e.line.setAttribute('stroke-width', '1')
+      e.line.setAttribute('marker-end', 'url(#arrow-end)')
+      if (e.bidir) e.line.setAttribute('marker-start', 'url(#arrow-start)')
+      else e.line.removeAttribute('marker-start')
     }
   }
 }
 
 function clearHighlight(
   nodeEls: { g: SVGGElement; circle: SVGCircleElement; text: SVGTextElement; node: GNode }[],
-  edgeEls: { line: SVGLineElement; source: string; target: string }[],
+  edgeEls: { line: SVGLineElement; source: string; target: string; bidir: boolean }[],
 ) {
   for (const { g, circle, node } of nodeEls) {
     circle.setAttribute('r', String(Math.max(6, Math.min(18, 6 + node.linkCount * 1.5))))
@@ -843,6 +951,9 @@ function clearHighlight(
     e.line.setAttribute('stroke', '#c0c4cc')
     e.line.setAttribute('stroke-width', '1.2')
     e.line.setAttribute('stroke-opacity', '0.4')
+    e.line.setAttribute('marker-end', 'url(#arrow-end)')
+    if (e.bidir) e.line.setAttribute('marker-start', 'url(#arrow-start)')
+    else e.line.removeAttribute('marker-start')
   }
 }
 
@@ -885,6 +996,50 @@ function drawLegend(svg: SVGSVGElement, width: number) {
 
     y += 22
   }
+
+  // Divider line
+  y += 4
+  const divider = document.createElementNS('http://www.w3.org/2000/svg', 'line')
+  divider.setAttribute('x1', '-2'); divider.setAttribute('x2', '118')
+  divider.setAttribute('y1', String(y)); divider.setAttribute('y2', String(y))
+  divider.setAttribute('stroke', 'var(--td-component-stroke)')
+  divider.setAttribute('stroke-width', '1')
+  legendG.appendChild(divider)
+  y += 12
+
+  // Arrow toggle row
+  const arrowRow = document.createElementNS('http://www.w3.org/2000/svg', 'g')
+  arrowRow.style.cursor = 'pointer'
+
+  // Arrow icon (small →)
+  const arrowIcon = document.createElementNS('http://www.w3.org/2000/svg', 'text')
+  arrowIcon.setAttribute('x', '3'); arrowIcon.setAttribute('y', String(y + 3))
+  arrowIcon.setAttribute('font-size', '13')
+  arrowIcon.setAttribute('fill', showArrows.value ? 'var(--td-brand-color)' : 'var(--td-text-color-placeholder)')
+  arrowIcon.textContent = '→'
+  arrowRow.appendChild(arrowIcon)
+
+  const arrowLabel = document.createElementNS('http://www.w3.org/2000/svg', 'text')
+  arrowLabel.setAttribute('x', '18'); arrowLabel.setAttribute('y', String(y + 4))
+  arrowLabel.setAttribute('font-size', '11')
+  arrowLabel.setAttribute('fill', showArrows.value ? 'var(--td-brand-color)' : 'var(--td-text-color-secondary)')
+  arrowLabel.textContent = showArrows.value
+    ? t('knowledgeEditor.wikiBrowser.hideArrows')
+    : t('knowledgeEditor.wikiBrowser.showArrows')
+  arrowRow.appendChild(arrowLabel)
+
+  arrowRow.addEventListener('click', () => {
+    toggleArrows()
+    // Update label & color after toggle
+    arrowLabel.textContent = showArrows.value
+      ? t('knowledgeEditor.wikiBrowser.hideArrows')
+      : t('knowledgeEditor.wikiBrowser.showArrows')
+    arrowLabel.setAttribute('fill', showArrows.value ? 'var(--td-brand-color)' : 'var(--td-text-color-secondary)')
+    arrowIcon.setAttribute('fill', showArrows.value ? 'var(--td-brand-color)' : 'var(--td-text-color-placeholder)')
+  })
+
+  legendG.appendChild(arrowRow)
+  y += 16
 
   bg.setAttribute('height', String(y + 4))
   svg.appendChild(legendG)

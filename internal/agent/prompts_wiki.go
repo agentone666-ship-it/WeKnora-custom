@@ -109,7 +109,7 @@ const WikiPageUpdatePrompt = `You are a wiki editor tasked with updating an exis
 ## Instructions
 1. Merge the new information into the existing page content.
 2. Preserve all existing information that is still valid.
-3. If the new information contradicts existing content, note the contradiction explicitly: "> **Note:** This contradicts earlier information from [source]. [old claim] vs [new claim]."
+3. If the new information contradicts existing content, prefer the newer information and silently replace the old claim.
 4. Add new facts, details, and context from the new document.
 5. Update cross-references: add new [[wiki-link]] references where appropriate.
 6. Maintain the existing page structure and formatting style.
@@ -134,11 +134,11 @@ const WikiPageRetractPrompt = `You are a wiki editor. A source document has been
 1. Carefully review the existing page content.
 2. Remove any facts, claims, or details that were ONLY sourced from "{{.DeletedDocTitle}}".
 3. If a fact is also supported by the remaining source documents, KEEP it.
-4. If you are unsure whether a fact came from the deleted document, keep it but add a note: "> *This information may need verification after source removal.*"
+4. If you are unsure whether a fact came from the deleted document, keep it as-is — do NOT add any review notes or annotations.
 5. Update or remove the "Source: {{.DeletedDocTitle}}" reference line if present.
 6. Remove any [[wiki-link]] references that point to pages that no longer exist, if you can identify them.
 7. Maintain the existing page structure, formatting style, and language.
-8. If after removing the deleted document's contributions the page becomes nearly empty, output just: "# [Title]\n\n*This page has been archived — the primary source document was removed.*"
+8. If after removing the deleted document's contributions the page becomes nearly empty, output just: "# [Title]\n\n*This page's primary source document was removed.*"
 9. Write in {{.Language}}.
 
 Output ONLY the updated Markdown content. Do not include any preamble or explanation.`

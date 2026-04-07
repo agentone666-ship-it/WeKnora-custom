@@ -1284,7 +1284,7 @@ func (s *knowledgeService) cleanupWikiOnKnowledgeDelete(ctx context.Context, kbI
 		}
 	}
 
-	var archivedSlugs []string
+	var deletedSlugs []string
 	var retractSlugs []string
 	for _, page := range pages {
 		// Skip index/log system pages
@@ -1296,18 +1296,16 @@ func (s *knowledgeService) cleanupWikiOnKnowledgeDelete(ctx context.Context, kbI
 		remaining := removeSourceRef(page.SourceRefs, knowledgeID)
 
 		if len(remaining) == 0 {
-			// No other sources → archive the page
-			page.Status = types.WikiPageStatusArchived
-			page.SourceRefs = remaining
-			if _, err := s.wikiService.UpdatePage(ctx, page); err != nil {
-				logger.Warnf(ctx, "wiki cleanup: failed to archive page %s: %v", page.Slug, err)
+			// No other sources → delete the page entirely
+			if err := s.wikiService.DeletePage(ctx, kbID, page.Slug); err != nil {
+				logger.Warnf(ctx, "wiki cleanup: failed to delete page %s: %v", page.Slug, err)
 			} else {
-				archivedSlugs = append(archivedSlugs, page.Slug)
+				deletedSlugs = append(deletedSlugs, page.Slug)
 			}
 		} else {
 			// Other sources remain → remove source ref and queue LLM content retraction
 			page.SourceRefs = remaining
-			if _, err := s.wikiService.UpdatePage(ctx, page); err != nil {
+			if err := s.wikiService.UpdatePageMeta(ctx, page); err != nil {
 				logger.Warnf(ctx, "wiki cleanup: failed to update source refs for page %s: %v", page.Slug, err)
 			} else {
 				retractSlugs = append(retractSlugs, page.Slug)
@@ -1315,9 +1313,9 @@ func (s *knowledgeService) cleanupWikiOnKnowledgeDelete(ctx context.Context, kbI
 		}
 	}
 
-	if len(archivedSlugs) > 0 {
-		logger.Infof(ctx, "wiki cleanup: archived %d pages after knowledge %s deletion: %v",
-			len(archivedSlugs), knowledgeID, archivedSlugs)
+	if len(deletedSlugs) > 0 {
+		logger.Infof(ctx, "wiki cleanup: deleted %d pages after knowledge %s deletion: %v",
+			len(deletedSlugs), knowledgeID, deletedSlugs)
 	}
 
 	// Enqueue async LLM retraction for multi-source pages
@@ -1334,6 +1332,11 @@ func (s *knowledgeService) cleanupWikiOnKnowledgeDelete(ctx context.Context, kbI
 		})
 		logger.Infof(ctx, "wiki cleanup: enqueued retract task for %d pages: %v", len(retractSlugs), retractSlugs)
 	}
+
+	// Rebuild index page to reflect deleted pages
+	if len(deletedSlugs) > 0 {
+		s.rebuildWikiIndexSimple(ctx, kbID, docTitle, deletedSlugs)
+	}
 }
 
 // removeSourceRef removes entries from source_refs that match a knowledge ID.
@@ -1348,6 +1351,67 @@ func removeSourceRef(refs types.StringArray, knowledgeID string) types.StringArr
 		result = append(result, ref)
 	}
 	return result
+}
+
+// rebuildWikiIndexSimple regenerates the index page from current page listing
+// and appends a deletion log entry. Does NOT use LLM — generates a simple
+// structured listing. Used during document deletion when LLM is not available.
+func (s *knowledgeService) rebuildWikiIndexSimple(ctx context.Context, kbID, docTitle string, deletedSlugs []string) {
+	// Rebuild index
+	resp, err := s.wikiService.ListPages(ctx, &types.WikiPageListRequest{
+		KnowledgeBaseID: kbID,
+		PageSize:        500,
+		SortBy:          "page_type",
+		SortOrder:       "asc",
+	})
+	if err != nil || resp == nil {
+		return
+	}
+
+	var indexContent strings.Builder
+	indexContent.WriteString("# Wiki Index\n\n")
+
+	currentType := ""
+	for _, p := range resp.Pages {
+		if p.PageType == types.WikiPageTypeIndex || p.PageType == types.WikiPageTypeLog {
+			continue
+		}
+		if p.Status == types.WikiPageStatusArchived {
+			continue
+		}
+		if p.PageType != currentType {
+			currentType = p.PageType
+			label := currentType
+			if len(label) > 0 {
+				label = strings.ToUpper(label[:1]) + label[1:]
+			}
+			fmt.Fprintf(&indexContent, "\n## %s\n\n", label)
+		}
+		fmt.Fprintf(&indexContent, "- [[%s]] — %s\n", p.Slug, p.Summary)
+	}
+
+	indexPage, _ := s.wikiService.GetIndex(ctx, kbID)
+	if indexPage != nil {
+		indexPage.Content = indexContent.String()
+		if _, err := s.wikiService.UpdatePage(ctx, indexPage); err != nil {
+			logger.Warnf(ctx, "wiki cleanup: failed to rebuild index: %v", err)
+		}
+	}
+
+	// Append log entry
+	logPage, _ := s.wikiService.GetLog(ctx, kbID)
+	if logPage != nil {
+		entry := fmt.Sprintf("\n## [%s] delete | %s\n- **Pages deleted**: %d (%s)\n",
+			time.Now().UTC().Format("2006-01-02 15:04"),
+			docTitle,
+			len(deletedSlugs),
+			strings.Join(deletedSlugs, ", "),
+		)
+		logPage.Content = logPage.Content + entry
+		if _, err := s.wikiService.UpdatePage(ctx, logPage); err != nil {
+			logger.Warnf(ctx, "wiki cleanup: failed to update log: %v", err)
+		}
+	}
 }
 
 // DeleteKnowledgeList deletes a knowledge entry and all related resources

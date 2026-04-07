@@ -2139,6 +2139,8 @@ export default {
       graphEmpty: "加载图谱中...",
       logTitle: '操作日志',
       graphNoData: '暂无图谱数据，请先上传文档',
+      showArrows: '显示箭头',
+      hideArrows: '隐藏箭头',
       healthCheck: "健康检查",
     },
     buttons: {

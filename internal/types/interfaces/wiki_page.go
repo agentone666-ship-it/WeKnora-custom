@@ -16,7 +16,12 @@ type WikiPageService interface {
 
 	// UpdatePage updates an existing wiki page, re-parses links,
 	// updates bidirectional references, increments version, and re-syncs chunks.
+	// Use for content changes visible to the user.
 	UpdatePage(ctx context.Context, page *types.WikiPage) (*types.WikiPage, error)
+
+	// UpdatePageMeta updates only metadata (status, source_refs) without
+	// incrementing version or re-parsing links. Use for publish/archive/source ref changes.
+	UpdatePageMeta(ctx context.Context, page *types.WikiPage) error
 
 	// GetPageBySlug retrieves a wiki page by its slug within a knowledge base.
 	GetPageBySlug(ctx context.Context, kbID string, slug string) (*types.WikiPage, error)
@@ -56,8 +61,11 @@ type WikiPageRepository interface {
 	// Create inserts a new wiki page record.
 	Create(ctx context.Context, page *types.WikiPage) error
 
-	// Update updates an existing wiki page record.
+	// Update updates an existing wiki page record (increments version — content changes).
 	Update(ctx context.Context, page *types.WikiPage) error
+
+	// UpdateMeta updates only metadata fields (links, status, source_refs) without version bump.
+	UpdateMeta(ctx context.Context, page *types.WikiPage) error
 
 	// GetByID retrieves a wiki page by its unique ID.
 	GetByID(ctx context.Context, id string) (*types.WikiPage, error)

@@ -13,6 +13,9 @@ import (
 // ErrWikiPageNotFound is returned when a wiki page is not found
 var ErrWikiPageNotFound = errors.New("wiki page not found")
 
+// ErrWikiPageConflict is returned when an optimistic lock conflict is detected
+var ErrWikiPageConflict = errors.New("wiki page version conflict")
+
 // wikiPageRepository implements the WikiPageRepository interface
 type wikiPageRepository struct {
 	db *gorm.DB
@@ -28,9 +31,46 @@ func (r *wikiPageRepository) Create(ctx context.Context, page *types.WikiPage) e
 	return r.db.WithContext(ctx).Create(page).Error
 }
 
-// Update updates an existing wiki page record
+// Update updates an existing wiki page record with optimistic locking.
+// Increments version — use only for content changes visible to the user.
+// The caller must set page.Version to the expected current version.
 func (r *wikiPageRepository) Update(ctx context.Context, page *types.WikiPage) error {
-	result := r.db.WithContext(ctx).Save(page)
+	expectedVersion := page.Version
+	page.Version = expectedVersion + 1
+
+	result := r.db.WithContext(ctx).
+		Model(page).
+		Where("id = ? AND version = ?", page.ID, expectedVersion).
+		Updates(page)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		// Could be not found or version conflict — check which
+		var count int64
+		r.db.WithContext(ctx).Model(&types.WikiPage{}).Where("id = ?", page.ID).Count(&count)
+		if count == 0 {
+			return ErrWikiPageNotFound
+		}
+		return ErrWikiPageConflict
+	}
+	return nil
+}
+
+// UpdateMeta updates only metadata fields (links, status, source_refs) WITHOUT
+// incrementing the version number. Used for internal bookkeeping operations
+// like link maintenance, status changes, and source ref updates.
+func (r *wikiPageRepository) UpdateMeta(ctx context.Context, page *types.WikiPage) error {
+	result := r.db.WithContext(ctx).
+		Model(page).
+		Where("id = ?", page.ID).
+		Updates(map[string]interface{}{
+			"in_links":    page.InLinks,
+			"out_links":   page.OutLinks,
+			"status":      page.Status,
+			"source_refs": page.SourceRefs,
+			"updated_at":  page.UpdatedAt,
+		})
 	if result.Error != nil {
 		return result.Error
 	}

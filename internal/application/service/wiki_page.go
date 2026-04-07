@@ -87,7 +87,7 @@ func (s *wikiPageService) UpdatePage(ctx context.Context, page *types.WikiPage) 
 
 	oldOutLinks := existing.OutLinks
 
-	// Update fields
+	// Update fields (version is incremented by the repository's optimistic lock)
 	existing.Title = page.Title
 	existing.Content = page.Content
 	existing.Summary = page.Summary
@@ -95,7 +95,6 @@ func (s *wikiPageService) UpdatePage(ctx context.Context, page *types.WikiPage) 
 	existing.SourceRefs = page.SourceRefs
 	existing.PageMetadata = page.PageMetadata
 	existing.Status = page.Status
-	existing.Version++
 	existing.UpdatedAt = time.Now()
 
 	// Re-parse outbound links
@@ -115,6 +114,12 @@ func (s *wikiPageService) UpdatePage(ctx context.Context, page *types.WikiPage) 
 	}
 
 	return existing, nil
+}
+
+// UpdatePageMeta updates only metadata (status, source_refs) without version bump or link re-parse.
+func (s *wikiPageService) UpdatePageMeta(ctx context.Context, page *types.WikiPage) error {
+	page.UpdatedAt = time.Now()
+	return s.repo.UpdateMeta(ctx, page)
 }
 
 // GetPageBySlug retrieves a wiki page by its slug
@@ -325,10 +330,10 @@ func (s *wikiPageService) RebuildLinks(ctx context.Context, kbID string) error {
 		}
 	}
 
-	// Save all pages
+	// Save all pages (link rebuild is metadata-only, no version bump)
 	for _, p := range pages {
 		p.UpdatedAt = time.Now()
-		if err := s.repo.Update(ctx, p); err != nil {
+		if err := s.repo.UpdateMeta(ctx, p); err != nil {
 			logger.Warnf(ctx, "wiki: failed to update links for page %s: %v", p.Slug, err)
 		}
 	}
@@ -383,7 +388,7 @@ func (s *wikiPageService) updateInLinks(ctx context.Context, kbID string, source
 		if !containsString(targetPage.InLinks, sourceSlug) {
 			targetPage.InLinks = append(targetPage.InLinks, sourceSlug)
 			targetPage.UpdatedAt = time.Now()
-			if err := s.repo.Update(ctx, targetPage); err != nil {
+			if err := s.repo.UpdateMeta(ctx, targetPage); err != nil {
 				logger.Warnf(ctx, "wiki: failed to update in_links for %s: %v", targetSlug, err)
 			}
 		}
@@ -401,7 +406,7 @@ func (s *wikiPageService) removeInLinks(ctx context.Context, kbID string, source
 		if len(newInLinks) != len(targetPage.InLinks) {
 			targetPage.InLinks = newInLinks
 			targetPage.UpdatedAt = time.Now()
-			if err := s.repo.Update(ctx, targetPage); err != nil {
+			if err := s.repo.UpdateMeta(ctx, targetPage); err != nil {
 				logger.Warnf(ctx, "wiki: failed to update in_links for %s: %v", targetSlug, err)
 			}
 		}

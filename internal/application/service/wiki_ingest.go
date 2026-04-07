@@ -15,12 +15,64 @@ import (
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
 	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
+	"github.com/redis/go-redis/v9"
 )
 
 const (
 	// maxContentForWiki limits the document content sent to LLM for wiki generation
 	maxContentForWiki = 32768
 )
+
+// wikiKBLock provides distributed per-KB locking for wiki operations using Redis.
+// Ensures that concurrent ingest/retract tasks for the SAME knowledge base
+// run sequentially across all instances, preventing race conditions on shared wiki pages.
+// Different KBs can still run in parallel.
+const (
+	wikiLockPrefix = "wiki:lock:"
+	wikiLockTTL    = 30 * time.Minute // max time a single ingest/retract can hold the lock
+	wikiLockRetry  = 500 * time.Millisecond
+)
+
+func acquireWikiLock(ctx context.Context, redisClient *redis.Client, kbID string) (string, error) {
+	if redisClient == nil {
+		return "", nil // No Redis (Lite mode) — no distributed lock, rely on single-instance
+	}
+	lockKey := wikiLockPrefix + kbID
+	lockValue := uuid.New().String()
+
+	deadline := time.Now().Add(wikiLockTTL) // don't wait longer than the lock TTL itself
+	for time.Now().Before(deadline) {
+		ok, err := redisClient.SetNX(ctx, lockKey, lockValue, wikiLockTTL).Result()
+		if err != nil {
+			return "", fmt.Errorf("wiki lock: redis error: %w", err)
+		}
+		if ok {
+			return lockValue, nil
+		}
+		// Another task holds the lock — wait and retry
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(wikiLockRetry):
+		}
+	}
+	return "", fmt.Errorf("wiki lock: timeout acquiring lock for KB %s", kbID)
+}
+
+func releaseWikiLock(ctx context.Context, redisClient *redis.Client, kbID, lockValue string) {
+	if redisClient == nil || lockValue == "" {
+		return
+	}
+	lockKey := wikiLockPrefix + kbID
+	// Only release if we still own the lock (atomic check-and-delete via Lua)
+	script := redis.NewScript(`
+		if redis.call("GET", KEYS[1]) == ARGV[1] then
+			return redis.call("DEL", KEYS[1])
+		end
+		return 0
+	`)
+	script.Run(ctx, redisClient, []string{lockKey}, lockValue)
+}
 
 // WikiIngestPayload is the asynq task payload for wiki ingest
 type WikiIngestPayload struct {
@@ -47,6 +99,7 @@ type wikiIngestService struct {
 	chunkRepo    interfaces.ChunkRepository
 	modelService interfaces.ModelService
 	task         interfaces.TaskEnqueuer
+	redisClient  *redis.Client // nil in Lite mode (no Redis)
 }
 
 // NewWikiIngestService creates a new wiki ingest service
@@ -56,6 +109,7 @@ func NewWikiIngestService(
 	chunkRepo interfaces.ChunkRepository,
 	modelService interfaces.ModelService,
 	task interfaces.TaskEnqueuer,
+	redisClient *redis.Client,
 ) interfaces.TaskHandler {
 	return &wikiIngestService{
 		wikiService:  wikiService,
@@ -63,6 +117,7 @@ func NewWikiIngestService(
 		chunkRepo:    chunkRepo,
 		modelService: modelService,
 		task:         task,
+		redisClient:  redisClient,
 	}
 }
 
@@ -99,8 +154,33 @@ func EnqueueWikiRetract(ctx context.Context, task interfaces.TaskEnqueuer, paylo
 	}
 }
 
-// Handle implements interfaces.TaskHandler for asynq task processing
+// Handle implements interfaces.TaskHandler for asynq task processing.
+// Acquires a distributed per-KB lock (Redis) to serialize wiki operations
+// within the same knowledge base, preventing race conditions.
+// Different KBs run fully in parallel.
 func (s *wikiIngestService) Handle(ctx context.Context, t *asynq.Task) error {
+	// Extract KB ID from payload for locking
+	var kbID string
+	switch t.Type() {
+	case types.TypeWikiRetract:
+		var p WikiRetractPayload
+		if err := json.Unmarshal(t.Payload(), &p); err == nil {
+			kbID = p.KnowledgeBaseID
+		}
+	default:
+		var p WikiIngestPayload
+		if err := json.Unmarshal(t.Payload(), &p); err == nil {
+			kbID = p.KnowledgeBaseID
+		}
+	}
+
+	// Acquire distributed lock for this KB (blocks until available or timeout)
+	lockValue, err := acquireWikiLock(ctx, s.redisClient, kbID)
+	if err != nil {
+		return fmt.Errorf("wiki: failed to acquire KB lock: %w", err)
+	}
+	defer releaseWikiLock(ctx, s.redisClient, kbID, lockValue)
+
 	switch t.Type() {
 	case types.TypeWikiRetract:
 		return s.ProcessWikiRetract(ctx, t)
@@ -197,6 +277,9 @@ func (s *wikiIngestService) ProcessWikiRetract(ctx context.Context, t *asynq.Tas
 		TenantID:        payload.TenantID,
 		KnowledgeBaseID: payload.KnowledgeBaseID,
 	}, payload.DocTitle+" [DELETED]", payload.PageSlugs, nil)
+
+	// Clean up dead links pointing to archived/deleted pages
+	s.cleanDeadLinks(ctx, payload.KnowledgeBaseID)
 
 	return nil
 }
@@ -343,7 +426,11 @@ func (s *wikiIngestService) ProcessWikiIngest(ctx context.Context, t *asynq.Task
 	// Step 5: Append to log page with synthesis suggestions
 	s.appendLogEntry(ctx, payload, docTitle, pagesAffected, synthesisSuggestions)
 
-	// Step 6: Publish all draft pages created during this ingest
+	// Step 6: Cross-link injection — scan all affected pages and inject [[wiki-links]]
+	// for mentions of other wiki page titles. Pure text matching, no LLM call.
+	s.injectCrossLinks(ctx, payload.KnowledgeBaseID, pagesAffected)
+
+	// Step 7: Publish all draft pages created during this ingest
 	s.publishDraftPages(ctx, payload.KnowledgeBaseID, pagesAffected)
 
 	// Step 7: Handle stale pages — pages that previously referenced this document
@@ -355,6 +442,195 @@ func (s *wikiIngestService) ProcessWikiIngest(ctx context.Context, t *asynq.Task
 		payload.KnowledgeID, len(pagesAffected))
 
 	return nil
+}
+
+// cleanDeadLinks removes [[wiki-links]] that point to archived or deleted pages.
+// Scans all published pages, checks each out_link, and removes references to
+// pages that no longer exist or are archived. No LLM call — pure text cleanup.
+func (s *wikiIngestService) cleanDeadLinks(ctx context.Context, kbID string) {
+	resp, err := s.wikiService.ListPages(ctx, &types.WikiPageListRequest{
+		KnowledgeBaseID: kbID,
+		PageSize:        500,
+	})
+	if err != nil || resp == nil {
+		return
+	}
+
+	// Build set of live (non-archived, non-system) slugs
+	liveSlugs := make(map[string]bool)
+	for _, p := range resp.Pages {
+		if p.Status != types.WikiPageStatusArchived {
+			liveSlugs[p.Slug] = true
+		}
+	}
+
+	var cleaned int
+	for _, p := range resp.Pages {
+		if p.Status == types.WikiPageStatusArchived {
+			continue
+		}
+		if p.PageType == types.WikiPageTypeIndex || p.PageType == types.WikiPageTypeLog {
+			continue
+		}
+
+		content := p.Content
+		changed := false
+
+		// Find all [[slug]] references and remove dead ones
+		for _, outSlug := range p.OutLinks {
+			if liveSlugs[outSlug] {
+				continue // link is alive
+			}
+			// Dead link — remove the [[slug]] from content, keep the display text if any
+			linkPattern := "[[" + outSlug + "]]"
+			if strings.Contains(content, linkPattern) {
+				// Replace [[dead-slug]] with just the slug's readable part
+				parts := strings.Split(outSlug, "/")
+				readableName := parts[len(parts)-1]
+				readableName = strings.ReplaceAll(readableName, "-", " ")
+				content = strings.ReplaceAll(content, linkPattern, readableName)
+				changed = true
+			}
+		}
+
+		if changed {
+			p.Content = content
+			if _, err := s.wikiService.UpdatePage(ctx, p); err != nil {
+				logger.Warnf(ctx, "wiki: failed to clean dead links in page %s: %v", p.Slug, err)
+			} else {
+				cleaned++
+			}
+		}
+	}
+
+	if cleaned > 0 {
+		logger.Infof(ctx, "wiki: cleaned dead links in %d pages", cleaned)
+	}
+}
+
+// injectCrossLinks scans affected pages and injects [[wiki-links]] for mentions
+// of other wiki page titles in the content. Pure text replacement, no LLM call.
+// Only processes entity/concept/synthesis/comparison pages (not index/log/summary).
+func (s *wikiIngestService) injectCrossLinks(ctx context.Context, kbID string, affectedSlugs []string) {
+	// Build a title→slug lookup from ALL pages in this KB
+	resp, err := s.wikiService.ListPages(ctx, &types.WikiPageListRequest{
+		KnowledgeBaseID: kbID,
+		PageSize:        500,
+	})
+	if err != nil || resp == nil || len(resp.Pages) < 2 {
+		return
+	}
+
+	type pageRef struct {
+		slug  string
+		title string
+	}
+	var allRefs []pageRef
+	for _, p := range resp.Pages {
+		if p.PageType == types.WikiPageTypeIndex || p.PageType == types.WikiPageTypeLog {
+			continue
+		}
+		if p.Title != "" {
+			allRefs = append(allRefs, pageRef{slug: p.Slug, title: p.Title})
+		}
+	}
+	if len(allRefs) == 0 {
+		return
+	}
+
+	// Sort by title length descending — match longer names first to avoid
+	// partial matches (e.g. "北京邮电大学" before "北京")
+	for i := 0; i < len(allRefs); i++ {
+		for j := i + 1; j < len(allRefs); j++ {
+			if len([]rune(allRefs[j].title)) > len([]rune(allRefs[i].title)) {
+				allRefs[i], allRefs[j] = allRefs[j], allRefs[i]
+			}
+		}
+	}
+
+	// Process only the pages we just created/updated
+	affectedSet := make(map[string]bool, len(affectedSlugs))
+	for _, s := range affectedSlugs {
+		affectedSet[s] = true
+	}
+
+	var updated int
+	for _, p := range resp.Pages {
+		if !affectedSet[p.Slug] {
+			continue
+		}
+		// Skip system pages and summary (summary already has links from the prompt)
+		if p.PageType == types.WikiPageTypeIndex || p.PageType == types.WikiPageTypeLog || p.PageType == types.WikiPageTypeSummary {
+			continue
+		}
+
+		content := p.Content
+		changed := false
+
+		for _, ref := range allRefs {
+			// Don't self-link
+			if ref.slug == p.Slug {
+				continue
+			}
+			// Skip if already linked with this slug
+			if strings.Contains(content, "[["+ref.slug+"]]") {
+				continue
+			}
+			// Replace title mentions with [[slug]] link
+			// Only replace if the title appears as a standalone term (not inside an existing link)
+			if strings.Contains(content, ref.title) {
+				// Replace first occurrence only (avoid over-linking)
+				content = replaceFirstOutsideLinks(content, ref.title, ref.title+" [["+ref.slug+"]]")
+				changed = true
+			}
+		}
+
+		if changed {
+			p.Content = content
+			if _, err := s.wikiService.UpdatePage(ctx, p); err != nil {
+				logger.Warnf(ctx, "wiki ingest: cross-link injection failed for %s: %v", p.Slug, err)
+			} else {
+				updated++
+			}
+		}
+	}
+
+	if updated > 0 {
+		logger.Infof(ctx, "wiki ingest: injected cross-links in %d pages", updated)
+	}
+}
+
+// replaceFirstOutsideLinks replaces the first occurrence of `old` with `new` in s,
+// but only if it's not already inside a [[...]] wiki link.
+func replaceFirstOutsideLinks(s, old, newStr string) string {
+	idx := 0
+	for {
+		pos := strings.Index(s[idx:], old)
+		if pos < 0 {
+			return s // not found
+		}
+		absPos := idx + pos
+
+		// Check if this occurrence is inside a [[ ... ]] link
+		// Look backwards for [[ without encountering ]]
+		insideLink := false
+		for i := absPos - 1; i >= 0 && i >= absPos-200; i-- {
+			if i > 0 && s[i-1:i+1] == "]]" {
+				break // closed link before us
+			}
+			if i > 0 && s[i-1:i+1] == "[[" {
+				insideLink = true
+				break
+			}
+		}
+
+		if !insideLink {
+			return s[:absPos] + newStr + s[absPos+len(old):]
+		}
+
+		// Skip this match, try next
+		idx = absPos + len(old)
+	}
 }
 
 // getExistingPageSlugsForKnowledge returns all page slugs that currently reference
@@ -438,16 +714,14 @@ func (s *wikiIngestService) retractStalePages(
 		}
 
 		if len(remaining) == 0 {
-			// No other sources → archive
-			page.Status = types.WikiPageStatusArchived
-			page.SourceRefs = remaining
-			if _, err := s.wikiService.UpdatePage(ctx, page); err != nil {
-				logger.Warnf(ctx, "wiki ingest: failed to archive stale page %s: %v", slug, err)
+			// No other sources → delete the page
+			if err := s.wikiService.DeletePage(ctx, payload.KnowledgeBaseID, slug); err != nil {
+				logger.Warnf(ctx, "wiki ingest: failed to delete stale page %s: %v", slug, err)
 			}
 		} else {
 			// Multi-source → remove ref, queue retract
 			page.SourceRefs = remaining
-			if _, err := s.wikiService.UpdatePage(ctx, page); err != nil {
+			if err := s.wikiService.UpdatePageMeta(ctx, page); err != nil {
 				logger.Warnf(ctx, "wiki ingest: failed to update stale page %s: %v", slug, err)
 			} else {
 				retractSlugs = append(retractSlugs, slug)
@@ -773,7 +1047,7 @@ func (s *wikiIngestService) publishDraftPages(ctx context.Context, kbID string, 
 		}
 		if page.Status == types.WikiPageStatusDraft {
 			page.Status = types.WikiPageStatusPublished
-			if _, err := s.wikiService.UpdatePage(ctx, page); err != nil {
+			if err := s.wikiService.UpdatePageMeta(ctx, page); err != nil {
 				logger.Warnf(ctx, "wiki ingest: failed to publish page %s: %v", slug, err)
 			}
 		}

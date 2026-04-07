@@ -2156,6 +2156,8 @@ export default {
       graphEmpty: "그래프 로딩 중...",
       logTitle: '활동 로그',
       graphNoData: '그래프 데이터가 없습니다. 먼저 문서를 업로드하세요.',
+      showArrows: '화살표 표시',
+      hideArrows: '화살표 숨기기',
       healthCheck: "상태 점검",
     },
     buttons: {

@@ -1633,6 +1633,8 @@ export default {
       graphEmpty: 'Loading graph...',
       logTitle: 'Activity Log',
       graphNoData: 'No graph data yet. Upload documents first.',
+      showArrows: 'Show arrows',
+      hideArrows: 'Hide arrows',
       healthCheck: 'Health Check',
     },
     buttons: {
