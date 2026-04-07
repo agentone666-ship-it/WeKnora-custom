@@ -14,6 +14,7 @@ const (
 	// KnowledgeBaseTypeDocument represents the document knowledge base type
 	KnowledgeBaseTypeDocument = "document"
 	KnowledgeBaseTypeFAQ      = "faq"
+	KnowledgeBaseTypeWiki     = "wiki"
 )
 
 // FAQIndexMode represents the FAQ index mode: only index questions or index questions and answers
@@ -489,15 +490,8 @@ func (kb *KnowledgeBase) EnsureDefaults() {
 	if kb.Type != KnowledgeBaseTypeFAQ {
 		kb.FAQConfig = nil
 	}
-	// Set defaults for Wiki (wiki is an add-on to document KBs, not a separate type)
-	if kb.IsWikiEnabled() {
-		if kb.WikiConfig.WikiLanguage == "" {
-			kb.WikiConfig.WikiLanguage = "auto"
-		}
-		if !kb.WikiConfig.AutoIngest {
-			kb.WikiConfig.AutoIngest = true
-		}
-	}
+	// Wiki defaults are handled at creation time, not in EnsureDefaults,
+	// because AutoIngest is a user-configurable toggle (not a missing-field default).
 	// Set defaults for FAQ
 	if kb.Type == KnowledgeBaseTypeFAQ {
 		if kb.FAQConfig == nil {

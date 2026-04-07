@@ -82,6 +82,8 @@ type knowledgeService struct {
 	// In-memory fallbacks for Lite mode (no Redis)
 	memFAQProgress      sync.Map // taskID -> *types.FAQImportProgress
 	memFAQRunningImport sync.Map // kbID -> *runningFAQImportInfo
+	wikiRepo            interfaces.WikiPageRepository
+	wikiService         interfaces.WikiPageService
 }
 
 const (
@@ -110,6 +112,8 @@ func NewKnowledgeService(
 	redisClient *redis.Client,
 	kbShareService interfaces.KBShareService,
 	imageResolver *docparser.ImageResolver,
+	wikiRepo interfaces.WikiPageRepository,
+	wikiService interfaces.WikiPageService,
 ) (interfaces.KnowledgeService, error) {
 	return &knowledgeService{
 		config:         config,
@@ -130,6 +134,8 @@ func NewKnowledgeService(
 		redisClient:    redisClient,
 		kbShareService: kbShareService,
 		imageResolver:  imageResolver,
+		wikiRepo:       wikiRepo,
+		wikiService:    wikiService,
 	}, nil
 }
 
@@ -1233,11 +1239,115 @@ func (s *knowledgeService) DeleteKnowledge(ctx context.Context, id string) error
 		return nil
 	})
 
+	// Clean up wiki pages that reference this knowledge
+	if kb != nil && kb.IsWikiEnabled() {
+		wg.Go(func() error {
+			s.cleanupWikiOnKnowledgeDelete(ctx, knowledge.KnowledgeBaseID, knowledge.ID)
+			return nil
+		})
+	}
+
 	if err = wg.Wait(); err != nil {
 		return err
 	}
 	// Delete the knowledge entry itself from the database
 	return s.repo.DeleteKnowledge(ctx, ctx.Value(types.TenantIDContextKey).(uint64), id)
+}
+
+// cleanupWikiOnKnowledgeDelete handles wiki pages when a source document is deleted.
+// - Pages with only this source ref → archived (kept for audit, hidden from normal views)
+// - Pages with multiple source refs → source ref removed, page stays published
+// - Index and log pages are rebuilt afterward
+func (s *knowledgeService) cleanupWikiOnKnowledgeDelete(ctx context.Context, kbID, knowledgeID string) {
+	// Find all wiki pages referencing this knowledge ID
+	pages, err := s.wikiRepo.ListBySourceRef(ctx, kbID, knowledgeID)
+	if err != nil {
+		logger.Warnf(ctx, "wiki cleanup: failed to list pages by source ref %s: %v", knowledgeID, err)
+		return
+	}
+	if len(pages) == 0 {
+		return
+	}
+
+	// Extract doc title from source refs for retract prompt
+	docTitle := knowledgeID
+	for _, page := range pages {
+		for _, ref := range page.SourceRefs {
+			prefix := knowledgeID + "|"
+			if strings.HasPrefix(ref, prefix) {
+				docTitle = ref[len(prefix):]
+				break
+			}
+		}
+		if docTitle != knowledgeID {
+			break
+		}
+	}
+
+	var archivedSlugs []string
+	var retractSlugs []string
+	for _, page := range pages {
+		// Skip index/log system pages
+		if page.PageType == types.WikiPageTypeIndex || page.PageType == types.WikiPageTypeLog {
+			continue
+		}
+
+		// Check if this is the only source ref (match by prefix "knowledgeID|" or exact "knowledgeID")
+		remaining := removeSourceRef(page.SourceRefs, knowledgeID)
+
+		if len(remaining) == 0 {
+			// No other sources → archive the page
+			page.Status = types.WikiPageStatusArchived
+			page.SourceRefs = remaining
+			if _, err := s.wikiService.UpdatePage(ctx, page); err != nil {
+				logger.Warnf(ctx, "wiki cleanup: failed to archive page %s: %v", page.Slug, err)
+			} else {
+				archivedSlugs = append(archivedSlugs, page.Slug)
+			}
+		} else {
+			// Other sources remain → remove source ref and queue LLM content retraction
+			page.SourceRefs = remaining
+			if _, err := s.wikiService.UpdatePage(ctx, page); err != nil {
+				logger.Warnf(ctx, "wiki cleanup: failed to update source refs for page %s: %v", page.Slug, err)
+			} else {
+				retractSlugs = append(retractSlugs, page.Slug)
+			}
+		}
+	}
+
+	if len(archivedSlugs) > 0 {
+		logger.Infof(ctx, "wiki cleanup: archived %d pages after knowledge %s deletion: %v",
+			len(archivedSlugs), knowledgeID, archivedSlugs)
+	}
+
+	// Enqueue async LLM retraction for multi-source pages
+	if len(retractSlugs) > 0 {
+		lang, _ := types.LanguageFromContext(ctx)
+		tenantID, _ := types.TenantIDFromContext(ctx)
+		EnqueueWikiRetract(ctx, s.task, WikiRetractPayload{
+			TenantID:        tenantID,
+			KnowledgeBaseID: kbID,
+			KnowledgeID:     knowledgeID,
+			DocTitle:        docTitle,
+			Language:        lang,
+			PageSlugs:       retractSlugs,
+		})
+		logger.Infof(ctx, "wiki cleanup: enqueued retract task for %d pages: %v", len(retractSlugs), retractSlugs)
+	}
+}
+
+// removeSourceRef removes entries from source_refs that match a knowledge ID.
+// Handles both old format ("knowledgeID") and new format ("knowledgeID|title").
+func removeSourceRef(refs types.StringArray, knowledgeID string) types.StringArray {
+	var result types.StringArray
+	prefix := knowledgeID + "|"
+	for _, ref := range refs {
+		if ref == knowledgeID || strings.HasPrefix(ref, prefix) {
+			continue
+		}
+		result = append(result, ref)
+	}
+	return result
 }
 
 // DeleteKnowledgeList deletes a knowledge entry and all related resources
@@ -1379,6 +1489,17 @@ func (s *knowledgeService) DeleteKnowledgeList(ctx context.Context, ids []string
 		if err := s.graphEngine.DelGraph(ctx, namespaces); err != nil {
 			logger.GetLogger(ctx).WithField("error", err).Errorf("DeleteKnowledge delete knowledge graph failed")
 			return err
+		}
+		return nil
+	})
+
+	// Clean up wiki pages that reference deleted knowledge
+	wg.Go(func() error {
+		for _, knowledge := range knowledgeList {
+			kb, _ := s.kbService.GetKnowledgeBaseByID(ctx, knowledge.KnowledgeBaseID)
+			if kb != nil && kb.IsWikiEnabled() {
+				s.cleanupWikiOnKnowledgeDelete(ctx, knowledge.KnowledgeBaseID, knowledge.ID)
+			}
 		}
 		return nil
 	})

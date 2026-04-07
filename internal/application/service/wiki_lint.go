@@ -73,7 +73,7 @@ func (s *WikiLintService) RunLint(ctx context.Context, kbID string) (*WikiLintRe
 	if err != nil {
 		return nil, fmt.Errorf("get KB: %w", err)
 	}
-	if kb.Type != types.KnowledgeBaseTypeWiki {
+	if !kb.IsWikiEnabled() {
 		return nil, fmt.Errorf("KB %s is not a wiki type", kbID)
 	}
 

@@ -120,7 +120,7 @@ func (s *agentService) CreateAgentEngine(
 	// 4.5 Append wiki guidelines if any search target is a wiki KB
 	for _, target := range config.SearchTargets {
 		kb, err := s.knowledgeBaseService.GetKnowledgeBaseByIDOnly(ctx, target.KnowledgeBaseID)
-		if err == nil && kb != nil && kb.Type == types.KnowledgeBaseTypeWiki {
+		if err == nil && kb != nil && kb.IsWikiEnabled() {
 			systemPromptTemplate += "\n" + agent.WikiAgentSystemPromptAddendum
 			break
 		}
@@ -383,7 +383,7 @@ func (s *agentService) registerTools(
 	var wikiTenantID uint64
 	for _, target := range config.SearchTargets {
 		kb, err := s.knowledgeBaseService.GetKnowledgeBaseByIDOnly(ctx, target.KnowledgeBaseID)
-		if err == nil && kb.Type == types.KnowledgeBaseTypeWiki {
+		if err == nil && kb.IsWikiEnabled() {
 			wikiKBIDs = append(wikiKBIDs, kb.ID)
 			wikiTenantID = kb.TenantID
 		}

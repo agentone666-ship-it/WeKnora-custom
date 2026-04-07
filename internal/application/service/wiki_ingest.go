@@ -18,9 +18,6 @@ import (
 )
 
 const (
-	// TypeWikiIngest is the asynq task type for wiki ingest
-	TypeWikiIngest = "wiki:ingest"
-
 	// maxContentForWiki limits the document content sent to LLM for wiki generation
 	maxContentForWiki = 32768
 )
@@ -30,6 +27,17 @@ type WikiIngestPayload struct {
 	TenantID        uint64 `json:"tenant_id"`
 	KnowledgeBaseID string `json:"knowledge_base_id"`
 	KnowledgeID     string `json:"knowledge_id"`
+	Language        string `json:"language,omitempty"` // locale code, e.g. "zh-CN"
+}
+
+// WikiRetractPayload is the asynq task payload for wiki content retraction
+type WikiRetractPayload struct {
+	TenantID        uint64   `json:"tenant_id"`
+	KnowledgeBaseID string   `json:"knowledge_base_id"`
+	KnowledgeID     string   `json:"knowledge_id"`
+	DocTitle        string   `json:"doc_title"`
+	Language        string   `json:"language,omitempty"`
+	PageSlugs       []string `json:"page_slugs"` // pages to retract content from
 }
 
 // wikiIngestService handles the LLM-powered wiki generation pipeline
@@ -60,25 +68,137 @@ func NewWikiIngestService(
 
 // EnqueueWikiIngest enqueues an async wiki ingest task
 func EnqueueWikiIngest(ctx context.Context, task interfaces.TaskEnqueuer, tenantID uint64, kbID, knowledgeID string) {
+	lang, _ := types.LanguageFromContext(ctx)
 	payload := WikiIngestPayload{
 		TenantID:        tenantID,
 		KnowledgeBaseID: kbID,
 		KnowledgeID:     knowledgeID,
+		Language:        lang,
 	}
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
 		logger.Errorf(ctx, "wiki ingest: failed to marshal payload: %v", err)
 		return
 	}
-	t := asynq.NewTask(TypeWikiIngest, payloadBytes, asynq.Queue("low"), asynq.MaxRetry(2))
+	t := asynq.NewTask(types.TypeWikiIngest, payloadBytes, asynq.Queue("low"), asynq.MaxRetry(2))
 	if _, err := task.Enqueue(t); err != nil {
 		logger.Warnf(ctx, "wiki ingest: failed to enqueue task: %v", err)
 	}
 }
 
+// EnqueueWikiRetract enqueues an async wiki content retraction task
+func EnqueueWikiRetract(ctx context.Context, task interfaces.TaskEnqueuer, payload WikiRetractPayload) {
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		logger.Errorf(ctx, "wiki retract: failed to marshal payload: %v", err)
+		return
+	}
+	t := asynq.NewTask(types.TypeWikiRetract, payloadBytes, asynq.Queue("low"), asynq.MaxRetry(2))
+	if _, err := task.Enqueue(t); err != nil {
+		logger.Warnf(ctx, "wiki retract: failed to enqueue task: %v", err)
+	}
+}
+
 // Handle implements interfaces.TaskHandler for asynq task processing
 func (s *wikiIngestService) Handle(ctx context.Context, t *asynq.Task) error {
-	return s.ProcessWikiIngest(ctx, t)
+	switch t.Type() {
+	case types.TypeWikiRetract:
+		return s.ProcessWikiRetract(ctx, t)
+	default:
+		return s.ProcessWikiIngest(ctx, t)
+	}
+}
+
+// ProcessWikiRetract uses LLM to remove deleted document's contributions from wiki pages
+func (s *wikiIngestService) ProcessWikiRetract(ctx context.Context, t *asynq.Task) error {
+	var payload WikiRetractPayload
+	if err := json.Unmarshal(t.Payload(), &payload); err != nil {
+		return fmt.Errorf("wiki retract: unmarshal payload: %w", err)
+	}
+
+	logger.Infof(ctx, "wiki retract: starting for knowledge %s (%s), %d pages",
+		payload.KnowledgeID, payload.DocTitle, len(payload.PageSlugs))
+
+	// Inject context values
+	ctx = context.WithValue(ctx, types.TenantIDContextKey, payload.TenantID)
+	if payload.Language != "" {
+		ctx = context.WithValue(ctx, types.LanguageContextKey, payload.Language)
+	}
+
+	// Get KB and synthesis model
+	kb, err := s.kbService.GetKnowledgeBaseByIDOnly(ctx, payload.KnowledgeBaseID)
+	if err != nil {
+		return fmt.Errorf("wiki retract: get KB: %w", err)
+	}
+	synthesisModelID := kb.WikiConfig.SynthesisModelID
+	if synthesisModelID == "" {
+		synthesisModelID = kb.SummaryModelID
+	}
+	if synthesisModelID == "" {
+		return fmt.Errorf("wiki retract: no synthesis model for KB %s", kb.ID)
+	}
+	chatModel, err := s.modelService.GetChatModel(ctx, synthesisModelID)
+	if err != nil {
+		return fmt.Errorf("wiki retract: get chat model: %w", err)
+	}
+
+	lang := types.LanguageNameFromContext(ctx)
+
+	for _, slug := range payload.PageSlugs {
+		page, err := s.wikiService.GetPageBySlug(ctx, payload.KnowledgeBaseID, slug)
+		if err != nil || page == nil {
+			continue
+		}
+
+		// Build remaining sources list
+		var remainingSources string
+		for _, ref := range page.SourceRefs {
+			pipeIdx := strings.Index(ref, "|")
+			if pipeIdx > 0 {
+				remainingSources += "- " + ref[pipeIdx+1:] + "\n"
+			} else {
+				remainingSources += "- " + ref + "\n"
+			}
+		}
+		if remainingSources == "" {
+			remainingSources = "(no other sources)"
+		}
+
+		// Call LLM to retract content
+		updatedContent, err := s.generateWithTemplate(ctx, chatModel, agent.WikiPageRetractPrompt, map[string]string{
+			"ExistingContent":  page.Content,
+			"DeletedDocTitle":  payload.DocTitle,
+			"RemainingSources": remainingSources,
+			"Language":         lang,
+		})
+		if err != nil {
+			logger.Warnf(ctx, "wiki retract: LLM call failed for page %s: %v", slug, err)
+			continue
+		}
+
+		page.Content = updatedContent
+		if _, err := s.wikiService.UpdatePage(ctx, page); err != nil {
+			logger.Warnf(ctx, "wiki retract: failed to update page %s: %v", slug, err)
+		} else {
+			logger.Infof(ctx, "wiki retract: updated page %s after removing content from '%s'", slug, payload.DocTitle)
+		}
+	}
+
+	// Rebuild index page to reflect changes
+	if err := s.rebuildIndexPage(ctx, chatModel, WikiIngestPayload{
+		TenantID:        payload.TenantID,
+		KnowledgeBaseID: payload.KnowledgeBaseID,
+	}, lang); err != nil {
+		logger.Warnf(ctx, "wiki retract: rebuild index failed: %v", err)
+	}
+
+	// Append log entry
+	s.appendLogEntry(ctx, WikiIngestPayload{
+		TenantID:        payload.TenantID,
+		KnowledgeBaseID: payload.KnowledgeBaseID,
+	}, payload.DocTitle+" [DELETED]", payload.PageSlugs, nil)
+
+	return nil
 }
 
 // ProcessWikiIngest processes a wiki ingest task (asynq handler)
@@ -90,12 +210,20 @@ func (s *wikiIngestService) ProcessWikiIngest(ctx context.Context, t *asynq.Task
 
 	logger.Infof(ctx, "wiki ingest: starting for knowledge %s in KB %s", payload.KnowledgeID, payload.KnowledgeBaseID)
 
-	// Get KB and validate it's a wiki type
+	// Inject tenant ID into context — asynq tasks don't have it from middleware
+	ctx = context.WithValue(ctx, types.TenantIDContextKey, payload.TenantID)
+
+	// Inject language into context — captured from the original HTTP request at enqueue time
+	if payload.Language != "" {
+		ctx = context.WithValue(ctx, types.LanguageContextKey, payload.Language)
+	}
+
+	// Get KB and validate it's wiki-enabled
 	kb, err := s.kbService.GetKnowledgeBaseByIDOnly(ctx, payload.KnowledgeBaseID)
 	if err != nil {
 		return fmt.Errorf("wiki ingest: get KB: %w", err)
 	}
-	if kb.Type != types.KnowledgeBaseTypeWiki {
+	if !kb.IsWikiEnabled() {
 		return fmt.Errorf("wiki ingest: KB %s is not wiki type", kb.ID)
 	}
 	if kb.WikiConfig == nil || !kb.WikiConfig.AutoIngest {
@@ -132,10 +260,8 @@ func (s *wikiIngestService) ProcessWikiIngest(ctx context.Context, t *asynq.Task
 		content = string([]rune(content)[:maxContentForWiki])
 	}
 
-	// Get human-readable language name for LLM prompts
-	// Reuses language mapping from middleware infrastructure (supports 9+ languages)
-	// Maps locale codes like "zh", "en" to names like "Chinese (Simplified)", "English"
-	lang := types.LanguageLocaleName(kb.WikiConfig.WikiLanguage)
+	// Get human-readable language name for LLM prompts from middleware context
+	lang := types.LanguageNameFromContext(ctx)
 
 	// Get document title from first chunk's knowledge info
 	docTitle := payload.KnowledgeID
@@ -155,14 +281,34 @@ func (s *wikiIngestService) ProcessWikiIngest(ctx context.Context, t *asynq.Task
 	var pagesAffected []string
 	var synthesisSuggestions []string
 
-	// Step 1: Generate summary page
+	// Format source ref as "knowledgeID|docTitle" for frontend display
+	sourceRef := fmt.Sprintf("%s|%s", payload.KnowledgeID, docTitle)
+
+	// Snapshot: existing page slugs that reference this knowledge ID (before extraction)
+	// Used later to detect pages that are no longer relevant after document update
+	oldPageSlugs := s.getExistingPageSlugsForKnowledge(ctx, payload.KnowledgeBaseID, payload.KnowledgeID)
+
+	// Step 1: Extract entities and concepts FIRST (so we know the slugs for summary links)
+	extractedPages, extractedSlugs, err := s.extractEntitiesAndConcepts(ctx, chatModel, content, docTitle, lang, payload, sourceRef, oldPageSlugs)
+	if err != nil {
+		logger.Warnf(ctx, "wiki ingest: knowledge extraction failed: %v", err)
+	} else {
+		pagesAffected = append(pagesAffected, extractedPages...)
+	}
+
+	// Step 2: Generate summary page (with extracted slugs for accurate [[wiki-links]])
 	summarySlug := fmt.Sprintf("summary/%s", slugify(docTitle))
+	var slugListing string
+	for _, slug := range extractedSlugs {
+		slugListing += fmt.Sprintf("- [[%s]]\n", slug)
+	}
 	summaryContent, err := s.generateWithTemplate(ctx, chatModel, agent.WikiSummaryPrompt, map[string]string{
-		"Title":    docTitle,
-		"FileName": docTitle,
-		"FileType": "document",
-		"Content":  content,
-		"Language": lang,
+		"Title":          docTitle,
+		"FileName":       docTitle,
+		"FileType":       "document",
+		"Content":        content,
+		"Language":       lang,
+		"ExtractedSlugs": slugListing,
 	})
 	if err != nil {
 		logger.Errorf(ctx, "wiki ingest: generate summary failed: %v", err)
@@ -177,21 +323,13 @@ func (s *wikiIngestService) ProcessWikiIngest(ctx context.Context, t *asynq.Task
 			Status:          types.WikiPageStatusDraft,
 			Content:         summaryContent,
 			Summary:         truncateString(summaryContent, 200),
-			SourceRefs:      types.StringArray{payload.KnowledgeID},
+			SourceRefs:      types.StringArray{sourceRef},
 		})
 		if err != nil {
 			logger.Warnf(ctx, "wiki ingest: create summary page failed: %v", err)
 		} else {
 			pagesAffected = append(pagesAffected, summarySlug)
 		}
-	}
-
-	// Step 2: Extract entities and concepts in a single LLM call, then create/update pages
-	extractedPages, err := s.extractEntitiesAndConcepts(ctx, chatModel, content, docTitle, lang, payload)
-	if err != nil {
-		logger.Warnf(ctx, "wiki ingest: knowledge extraction failed: %v", err)
-	} else {
-		pagesAffected = append(pagesAffected, extractedPages...)
 	}
 
 	// Step 3: Detect synthesis opportunities (no LLM call, pure heuristic)
@@ -208,10 +346,126 @@ func (s *wikiIngestService) ProcessWikiIngest(ctx context.Context, t *asynq.Task
 	// Step 6: Publish all draft pages created during this ingest
 	s.publishDraftPages(ctx, payload.KnowledgeBaseID, pagesAffected)
 
+	// Step 7: Handle stale pages — pages that previously referenced this document
+	// but are no longer produced by the updated extraction. This handles the
+	// "document updated and some entities/concepts were removed" scenario.
+	s.retractStalePages(ctx, payload, oldPageSlugs, pagesAffected, docTitle, lang)
+
 	logger.Infof(ctx, "wiki ingest: completed for knowledge %s, %d pages affected",
 		payload.KnowledgeID, len(pagesAffected))
 
 	return nil
+}
+
+// getExistingPageSlugsForKnowledge returns all page slugs that currently reference
+// a given knowledge ID in their source_refs. Used to snapshot state before re-ingest.
+func (s *wikiIngestService) getExistingPageSlugsForKnowledge(ctx context.Context, kbID, knowledgeID string) map[string]bool {
+	resp, err := s.wikiService.ListPages(ctx, &types.WikiPageListRequest{
+		KnowledgeBaseID: kbID,
+		PageSize:        500,
+	})
+	if err != nil || resp == nil {
+		return nil
+	}
+
+	slugs := make(map[string]bool)
+	prefix := knowledgeID + "|"
+	for _, p := range resp.Pages {
+		if p.PageType == types.WikiPageTypeIndex || p.PageType == types.WikiPageTypeLog {
+			continue
+		}
+		for _, ref := range p.SourceRefs {
+			if ref == knowledgeID || strings.HasPrefix(ref, prefix) {
+				slugs[p.Slug] = true
+				break
+			}
+		}
+	}
+	return slugs
+}
+
+// retractStalePages handles pages that were previously linked to this document
+// but are no longer produced by the updated extraction.
+// - Single-source stale pages → archived
+// - Multi-source stale pages → enqueue LLM retract to clean content
+func (s *wikiIngestService) retractStalePages(
+	ctx context.Context,
+	payload WikiIngestPayload,
+	oldSlugs map[string]bool,
+	newSlugs []string,
+	docTitle, lang string,
+) {
+	if len(oldSlugs) == 0 {
+		return
+	}
+
+	// Build set of newly affected slugs (including summary)
+	newSet := make(map[string]bool, len(newSlugs))
+	for _, s := range newSlugs {
+		newSet[s] = true
+	}
+
+	// Stale = was in old set but not in new set
+	var staleSlugs []string
+	for slug := range oldSlugs {
+		if !newSet[slug] {
+			staleSlugs = append(staleSlugs, slug)
+		}
+	}
+	if len(staleSlugs) == 0 {
+		return
+	}
+
+	logger.Infof(ctx, "wiki ingest: %d stale pages detected after document update: %v", len(staleSlugs), staleSlugs)
+
+	var retractSlugs []string
+	sourceRef := fmt.Sprintf("%s|%s", payload.KnowledgeID, docTitle)
+	prefix := payload.KnowledgeID + "|"
+
+	for _, slug := range staleSlugs {
+		page, err := s.wikiService.GetPageBySlug(ctx, payload.KnowledgeBaseID, slug)
+		if err != nil || page == nil {
+			continue
+		}
+
+		// Remove this doc's source ref
+		var remaining types.StringArray
+		for _, ref := range page.SourceRefs {
+			if ref == payload.KnowledgeID || ref == sourceRef || strings.HasPrefix(ref, prefix) {
+				continue
+			}
+			remaining = append(remaining, ref)
+		}
+
+		if len(remaining) == 0 {
+			// No other sources → archive
+			page.Status = types.WikiPageStatusArchived
+			page.SourceRefs = remaining
+			if _, err := s.wikiService.UpdatePage(ctx, page); err != nil {
+				logger.Warnf(ctx, "wiki ingest: failed to archive stale page %s: %v", slug, err)
+			}
+		} else {
+			// Multi-source → remove ref, queue retract
+			page.SourceRefs = remaining
+			if _, err := s.wikiService.UpdatePage(ctx, page); err != nil {
+				logger.Warnf(ctx, "wiki ingest: failed to update stale page %s: %v", slug, err)
+			} else {
+				retractSlugs = append(retractSlugs, slug)
+			}
+		}
+	}
+
+	// Enqueue LLM retraction for multi-source stale pages
+	if len(retractSlugs) > 0 {
+		EnqueueWikiRetract(ctx, s.task, WikiRetractPayload{
+			TenantID:        payload.TenantID,
+			KnowledgeBaseID: payload.KnowledgeBaseID,
+			KnowledgeID:     payload.KnowledgeID,
+			DocTitle:        docTitle,
+			Language:        payload.Language,
+			PageSlugs:       retractSlugs,
+		})
+	}
 }
 
 // extractedItem represents a single extracted entity or concept
@@ -229,20 +483,37 @@ type combinedExtraction struct {
 }
 
 // extractEntitiesAndConcepts performs a single LLM call to extract both entities and concepts,
-// then upserts pages for each. Returns the list of affected page slugs.
+// then upserts pages for each. Returns the list of affected page slugs and all extracted slugs (for linking).
+// oldPageSlugs contains slugs from the previous version of this document — passed to LLM for slug stability.
 func (s *wikiIngestService) extractEntitiesAndConcepts(
 	ctx context.Context,
 	chatModel chat.Chat,
 	content, docTitle, lang string,
 	payload WikiIngestPayload,
-) ([]string, error) {
+	sourceRef string,
+	oldPageSlugs map[string]bool,
+) ([]string, []string, error) {
+	// Build previous slugs listing for the prompt
+	var prevSlugsText string
+	if len(oldPageSlugs) > 0 {
+		var sb strings.Builder
+		for slug := range oldPageSlugs {
+			fmt.Fprintf(&sb, "- %s\n", slug)
+		}
+		prevSlugsText = sb.String()
+	} else {
+		prevSlugsText = "(none — this is a new document)"
+	}
+
 	// Single LLM call for both entities and concepts
 	extractionJSON, err := s.generateWithTemplate(ctx, chatModel, agent.WikiKnowledgeExtractPrompt, map[string]string{
-		"Title":   docTitle,
-		"Content": content,
+		"Title":         docTitle,
+		"Content":       content,
+		"Language":      lang,
+		"PreviousSlugs": prevSlugsText,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("combined extraction failed: %w", err)
+		return nil, nil, fmt.Errorf("combined extraction failed: %w", err)
 	}
 
 	// Clean JSON - strip markdown code blocks if present
@@ -255,7 +526,20 @@ func (s *wikiIngestService) extractEntitiesAndConcepts(
 	var result combinedExtraction
 	if err := json.Unmarshal([]byte(extractionJSON), &result); err != nil {
 		logger.Warnf(ctx, "wiki ingest: failed to parse combined extraction JSON: %v\nRaw: %s", err, truncateString(extractionJSON, 500))
-		return nil, fmt.Errorf("parse combined extraction JSON: %w", err)
+		return nil, nil, fmt.Errorf("parse combined extraction JSON: %w", err)
+	}
+
+	// Collect all extracted slugs (before dedup remapping) for summary linking
+	var allSlugs []string
+	for _, item := range result.Entities {
+		if item.Slug != "" {
+			allSlugs = append(allSlugs, item.Slug)
+		}
+	}
+	for _, item := range result.Concepts {
+		if item.Slug != "" {
+			allSlugs = append(allSlugs, item.Slug)
+		}
 	}
 
 	var affected []string
@@ -266,8 +550,21 @@ func (s *wikiIngestService) extractEntitiesAndConcepts(
 	// Deduplicate concepts against existing wiki pages (LLM-based)
 	result.Concepts = s.deduplicateItems(ctx, chatModel, result.Concepts, types.WikiPageTypeConcept, payload.KnowledgeBaseID)
 
+	// Update allSlugs after dedup (use final slugs)
+	allSlugs = allSlugs[:0]
+	for _, item := range result.Entities {
+		if item.Slug != "" {
+			allSlugs = append(allSlugs, item.Slug)
+		}
+	}
+	for _, item := range result.Concepts {
+		if item.Slug != "" {
+			allSlugs = append(allSlugs, item.Slug)
+		}
+	}
+
 	// Upsert entity pages
-	entitySlugs, err := s.upsertExtractedPages(ctx, chatModel, result.Entities, types.WikiPageTypeEntity, docTitle, lang, payload)
+	entitySlugs, err := s.upsertExtractedPages(ctx, chatModel, result.Entities, types.WikiPageTypeEntity, docTitle, lang, payload, sourceRef)
 	if err != nil {
 		logger.Warnf(ctx, "wiki ingest: entity upsert failed: %v", err)
 	} else {
@@ -275,14 +572,14 @@ func (s *wikiIngestService) extractEntitiesAndConcepts(
 	}
 
 	// Upsert concept pages
-	conceptSlugs, err := s.upsertExtractedPages(ctx, chatModel, result.Concepts, types.WikiPageTypeConcept, docTitle, lang, payload)
+	conceptSlugs, err := s.upsertExtractedPages(ctx, chatModel, result.Concepts, types.WikiPageTypeConcept, docTitle, lang, payload, sourceRef)
 	if err != nil {
 		logger.Warnf(ctx, "wiki ingest: concept upsert failed: %v", err)
 	} else {
 		affected = append(affected, conceptSlugs...)
 	}
 
-	return affected, nil
+	return affected, allSlugs, nil
 }
 
 // upsertExtractedPages creates or updates wiki pages from pre-extracted items.
@@ -293,6 +590,7 @@ func (s *wikiIngestService) upsertExtractedPages(
 	pageType string,
 	docTitle, lang string,
 	payload WikiIngestPayload,
+	sourceRef string,
 ) ([]string, error) {
 	var affected []string
 	for _, item := range items {
@@ -317,7 +615,7 @@ func (s *wikiIngestService) upsertExtractedPages(
 
 			existing.Content = updatedContent
 			existing.Summary = item.Description
-			existing.SourceRefs = appendUnique(existing.SourceRefs, payload.KnowledgeID)
+			existing.SourceRefs = appendUnique(existing.SourceRefs, sourceRef)
 
 			if _, err := s.wikiService.UpdatePage(ctx, existing); err != nil {
 				logger.Warnf(ctx, "wiki ingest: save updated page %s failed: %v", item.Slug, err)
@@ -339,7 +637,7 @@ func (s *wikiIngestService) upsertExtractedPages(
 				Status:          types.WikiPageStatusDraft,
 				Content:         pageContent,
 				Summary:         item.Description,
-				SourceRefs:      types.StringArray{payload.KnowledgeID},
+				SourceRefs:      types.StringArray{sourceRef},
 			}); err != nil {
 				logger.Warnf(ctx, "wiki ingest: create page %s failed: %v", item.Slug, err)
 				continue

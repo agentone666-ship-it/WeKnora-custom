@@ -45,7 +45,11 @@ const uploading = ref(false);
 const kbLoading = ref(false);
 const docListLoading = ref(true);
 const isFAQ = computed(() => (kbInfo.value?.type || '') === 'faq');
-const isWiki = computed(() => (kbInfo.value?.type || '') === 'wiki');
+const isWiki = computed(() => !!kbInfo.value?.wiki_config?.enabled);
+const validTabs = ['documents', 'wiki', 'graph'] as const
+type KbTab = typeof validTabs[number]
+const initTab = validTabs.includes(route.query.tab as any) ? (route.query.tab as KbTab) : 'documents'
+const activeKbTab = ref<KbTab>(initTab);
 const missingStorageEngine = computed(() => {
   if (!kbInfo.value || isFAQ.value) return false
   const spc = kbInfo.value.storage_provider_config
@@ -606,6 +610,17 @@ const loadKnowledgeList = async () => {
 };
 
 // 监听路由参数变化，重新获取知识库内容
+// Sync activeKbTab to URL query so it survives page refresh
+watch(activeKbTab, (tab) => {
+  const query = { ...route.query }
+  if (tab === 'documents') {
+    delete query.tab
+  } else {
+    query.tab = tab
+  }
+  router.replace({ query })
+})
+
 watch(() => kbId.value, (newKbId, oldKbId) => {
   if (newKbId && newKbId !== oldKbId) {
     tagSearchQuery.value = '';
@@ -833,6 +848,12 @@ const closeDoc = () => {
 const openCardDetails = (item: KnowledgeCard) => {
   isCardDetails.value = true;
   getCardDetails(item);
+};
+
+// Open source document preview from WikiBrowser
+const openSourceDoc = (knowledgeId: string) => {
+  isCardDetails.value = true;
+  getCardDetails({ id: knowledgeId });
 };
 
 // 悬停知识卡片时跟随鼠标显示详情气泡
@@ -1532,12 +1553,7 @@ async function createNewSession(value: string): Promise<void> {
 </script>
 
 <template>
-  <template v-if="isWiki">
-    <div class="wiki-manager-wrapper" style="padding: 0;">
-      <WikiBrowser v-if="kbId" :knowledge-base-id="kbId" />
-    </div>
-  </template>
-  <template v-else-if="!isFAQ">
+  <template v-if="!isFAQ">
     <div class="knowledge-layout">
       <div class="document-header">
         <div class="document-header-title">
@@ -1584,7 +1600,23 @@ async function createNewSession(value: string): Promise<void> {
                 </template>
               </button>
               <t-icon name="chevron-right" class="breadcrumb-separator" />
-              <span class="breadcrumb-current">{{ $t('knowledgeEditor.document.title') }}</span>
+              <template v-if="isWiki">
+                <span
+                  :class="['breadcrumb-tab', { active: activeKbTab === 'documents' }]"
+                  @click="activeKbTab = 'documents'"
+                >{{ $t('knowledgeEditor.wikiBrowser.tabDocuments') }}</span>
+                <span class="breadcrumb-tab-sep">/</span>
+                <span
+                  :class="['breadcrumb-tab', { active: activeKbTab === 'wiki' }]"
+                  @click="activeKbTab = 'wiki'"
+                >Wiki</span>
+                <span class="breadcrumb-tab-sep">/</span>
+                <span
+                  :class="['breadcrumb-tab', { active: activeKbTab === 'graph' }]"
+                  @click="activeKbTab = 'graph'"
+                >{{ $t('knowledgeEditor.wikiBrowser.tabGraph') }}</span>
+              </template>
+              <span v-else class="breadcrumb-current">{{ $t('knowledgeEditor.document.title') }}</span>
             </h2>
             <!-- 身份与最后更新：紧凑单行，置于标题行右侧，悬停显示权限说明 -->
             <div v-if="kbInfo && !authStore.isLiteMode" class="kb-access-meta">
@@ -1635,7 +1667,13 @@ async function createNewSession(value: string): Promise<void> {
           </p>
         </div>
       </div>
-      
+
+      <!-- Wiki Browser / Graph (shown when wiki or graph tab is active) -->
+      <div v-if="isWiki && (activeKbTab === 'wiki' || activeKbTab === 'graph')" class="wiki-main-area">
+        <WikiBrowser v-if="kbId" :knowledge-base-id="kbId" :view="activeKbTab === 'graph' ? 'graph' : 'browser'" @open-source-doc="openSourceDoc" />
+      </div>
+
+      <template v-if="activeKbTab === 'documents' || !isWiki">
       <input
         ref="uploadInputRef"
         type="file"
@@ -2181,10 +2219,13 @@ async function createNewSession(value: string): Promise<void> {
               <div class="url-input-tip">{{ $t('knowledgeBase.urlTip') }}</div>
             </div>
           </t-dialog>
-          
-          <DocContent :visible="isCardDetails" :details="details" @closeDoc="closeDoc" @getDoc="getDoc"></DocContent>
+
         </div>
       </div>
+      </template>
+
+      <!-- DocContent drawer (shared by documents tab and wiki source refs) -->
+      <DocContent :visible="isCardDetails" :details="details" @closeDoc="closeDoc" @getDoc="getDoc"></DocContent>
     </div>
   </template>
   <template v-else>
@@ -2218,6 +2259,35 @@ async function createNewSession(value: string): Promise<void> {
   min-width: 0;
   padding: 24px 32px 32px;
   box-sizing: border-box;
+}
+
+// Breadcrumb tab switch (文档/Wiki in breadcrumb)
+.breadcrumb-tab {
+  cursor: pointer;
+  color: var(--td-text-color-placeholder);
+  font-weight: 400;
+  transition: color 0.15s;
+
+  &:hover {
+    color: var(--td-text-color-primary);
+  }
+
+  &.active {
+    color: var(--td-brand-color);
+    font-weight: 600;
+  }
+}
+
+.breadcrumb-tab-sep {
+  margin: 0 6px;
+  color: var(--td-text-color-disabled);
+  font-weight: 400;
+}
+
+.wiki-main-area {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 
 // 与列表页一致：浅灰底圆角区，左侧筛选为白底卡片

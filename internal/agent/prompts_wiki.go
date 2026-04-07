@@ -15,11 +15,14 @@ const WikiSummaryPrompt = `You are a wiki editor. Given the following document c
 ## Document Content
 {{.Content}}
 
+## Available Wiki Pages (use these exact slugs for links)
+{{.ExtractedSlugs}}
+
 ## Instructions
 1. Write a comprehensive summary of the document in Markdown format.
 2. Include the key facts, arguments, and conclusions.
 3. Use proper heading hierarchy (## for sections, ### for subsections).
-4. Where relevant, use [[wiki-link]] syntax to reference entities and concepts that might have their own wiki pages. Use lowercase slugs with hyphens, e.g. [[entity/company-name]] or [[concept/machine-learning]].
+4. Use [[wiki-link]] syntax to reference the available wiki pages listed above. Use the EXACT slugs provided — do NOT invent new slugs.
 5. At the end, include a "## Key Takeaways" section with bullet points.
 6. Write in {{.Language}}.
 7. Keep the summary concise but thorough (500-1500 words depending on document length).
@@ -37,24 +40,35 @@ const WikiKnowledgeExtractPrompt = `You are a knowledge extraction system. Analy
 ## Document Content
 {{.Content}}
 
+## Previously Extracted Slugs (from earlier version of this document)
+{{.PreviousSlugs}}
+
 ## Instructions
 Return a JSON object with two arrays: "entities" and "concepts".
+**IMPORTANT: Write ALL names, descriptions, and details in {{.Language}}.**
+
+### Slug Continuity Rules
+If a "Previously Extracted Slugs" list is provided above, you MUST follow these rules:
+- If an entity or concept from the previous extraction still exists in the current document, **reuse its exact slug** from the previous list. Do NOT generate a new slug for the same thing.
+- If an entity or concept no longer appears in the document, **do NOT include it** in the output.
+- Only generate new slugs for entities/concepts that are genuinely new (not present in the previous list).
+- This ensures slug stability across document updates.
 
 ### Entities (people, organizations, products, places, technologies, events, etc.)
 Each entity should have:
-- "name": The entity name (human-readable)
-- "slug": URL-friendly slug, format "entity/<lowercase-hyphenated-name>"
-- "description": A one-sentence description based on what the document says
-- "details": A 2-5 sentence summary of key facts from the document
+- "name": The entity name in {{.Language}} (human-readable)
+- "slug": URL-friendly slug, format "entity/<lowercase-hyphenated-name>" (use romanized/pinyin form for non-Latin names). **Reuse previous slug if the entity was extracted before.**
+- "description": A one-sentence description in {{.Language}} based on what the document says
+- "details": A 2-5 sentence summary in {{.Language}} of key facts from the document
 
 Only include entities that are substantively discussed (mentioned at least twice or described in detail). Do NOT include generic terms.
 
 ### Concepts (topics, themes, methodologies, theories, etc.)
 Each concept should have:
-- "name": The concept name (human-readable)
-- "slug": URL-friendly slug, format "concept/<lowercase-hyphenated-name>"
-- "description": A one-sentence definition or description
-- "details": A 2-5 sentence explanation as discussed in the document
+- "name": The concept name in {{.Language}} (human-readable)
+- "slug": URL-friendly slug, format "concept/<lowercase-hyphenated-name>" (use romanized/pinyin form for non-Latin names). **Reuse previous slug if the concept was extracted before.**
+- "description": A one-sentence definition or description in {{.Language}}
+- "details": A 2-5 sentence explanation in {{.Language}} as discussed in the document
 
 Only include concepts that are substantively discussed. Skip trivial or overly generic concepts.
 
@@ -101,6 +115,31 @@ const WikiPageUpdatePrompt = `You are a wiki editor tasked with updating an exis
 6. Maintain the existing page structure and formatting style.
 7. Add a source reference to the new document at the bottom.
 8. Write in {{.Language}}.
+
+Output ONLY the updated Markdown content. Do not include any preamble or explanation.`
+
+// WikiPageRetractPrompt removes information contributed by a deleted document from an existing wiki page.
+const WikiPageRetractPrompt = `You are a wiki editor. A source document has been DELETED from the knowledge base. You must update the existing wiki page to remove any information that came exclusively from this deleted document.
+
+## Existing Page Content
+{{.ExistingContent}}
+
+## Deleted Document Title
+{{.DeletedDocTitle}}
+
+## Remaining Source Documents
+{{.RemainingSources}}
+
+## Instructions
+1. Carefully review the existing page content.
+2. Remove any facts, claims, or details that were ONLY sourced from "{{.DeletedDocTitle}}".
+3. If a fact is also supported by the remaining source documents, KEEP it.
+4. If you are unsure whether a fact came from the deleted document, keep it but add a note: "> *This information may need verification after source removal.*"
+5. Update or remove the "Source: {{.DeletedDocTitle}}" reference line if present.
+6. Remove any [[wiki-link]] references that point to pages that no longer exist, if you can identify them.
+7. Maintain the existing page structure, formatting style, and language.
+8. If after removing the deleted document's contributions the page becomes nearly empty, output just: "# [Title]\n\n*This page has been archived — the primary source document was removed.*"
+9. Write in {{.Language}}.
 
 Output ONLY the updated Markdown content. Do not include any preamble or explanation.`
 

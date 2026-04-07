@@ -53,7 +53,7 @@ func (p *PluginWikiBoost) OnEvent(
 	hasWikiKB := false
 	for _, target := range chatManage.SearchTargets {
 		kb, err := p.kbService.GetKnowledgeBaseByIDOnly(ctx, target.KnowledgeBaseID)
-		if err == nil && kb.Type == types.KnowledgeBaseTypeWiki {
+		if err == nil && kb.IsWikiEnabled() {
 			hasWikiKB = true
 			break
 		}

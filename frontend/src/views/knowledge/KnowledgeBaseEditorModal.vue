@@ -49,7 +49,6 @@
                         >
                           <t-radio-button value="document">{{ $t('knowledgeEditor.basic.typeDocument') }}</t-radio-button>
                           <t-radio-button value="faq">{{ $t('knowledgeEditor.basic.typeFAQ') }}</t-radio-button>
-                          <t-radio-button value="wiki">{{ $t('knowledgeEditor.basic.typeWiki') }}</t-radio-button>
                         </t-radio-group>
                         <p class="form-tip">{{ $t('knowledgeEditor.basic.typeDescription') }}</p>
                       </div>
@@ -122,48 +121,73 @@
                 </div>
 
                 <!-- Wiki 配置 -->
-                <div v-if="isWiki && formData" v-show="currentSection === 'wiki'" class="section">
-                  <div class="section-content">
+                <div v-if="!isFAQ && formData" v-show="currentSection === 'wiki'" class="section">
+                  <div v-if="formData" class="kb-multimodal-settings">
                     <div class="section-header">
-                      <h3 class="section-title">{{ $t('knowledgeEditor.wiki.title') }}</h3>
-                      <p class="section-desc">{{ $t('knowledgeEditor.wiki.description') }}</p>
+                      <h2>{{ $t('knowledgeEditor.wiki.title') }}</h2>
+                      <p class="section-description">{{ $t('knowledgeEditor.wiki.description') }}</p>
                     </div>
-                    <div class="section-body">
-                      <div class="form-item">
-                        <label class="form-label">{{ $t('knowledgeEditor.wiki.autoIngestLabel') }}</label>
-                        <t-switch v-model="formData.wikiConfig.autoIngest" size="medium" />
-                        <p class="form-tip">{{ $t('knowledgeEditor.wiki.autoIngestTip') }}</p>
+
+                    <div class="settings-group">
+                      <!-- Wiki 开关 -->
+                      <div class="setting-row">
+                        <div class="setting-info">
+                          <label>{{ $t('knowledgeEditor.wiki.enableLabel') }}</label>
+                          <p class="desc">{{ $t('knowledgeEditor.wiki.enableTip') }}</p>
+                        </div>
+                        <div class="setting-control">
+                          <t-switch v-model="formData.wikiConfig.enabled" size="medium" />
+                        </div>
                       </div>
-                      <div class="form-item">
-                        <label class="form-label">{{ $t('knowledgeEditor.wiki.synthesisModelLabel') }}</label>
-                        <ModelSelector
-                          model-type="LLM"
-                          :selected-model-id="formData.wikiConfig.synthesisModelId"
-                          :all-models="allModels"
-                          @update:selected-model-id="(val: string) => { if (formData) formData.wikiConfig.synthesisModelId = val }"
-                          :placeholder="$t('knowledgeEditor.wiki.synthesisModelPlaceholder')"
-                        />
-                        <p class="form-tip">{{ $t('knowledgeEditor.wiki.synthesisModelTip') }}</p>
-                      </div>
-                      <div class="form-item">
-                        <label class="form-label">{{ $t('knowledgeEditor.wiki.languageLabel') }}</label>
-                        <t-radio-group v-model="formData.wikiConfig.wikiLanguage">
-                          <t-radio-button value="auto">Auto</t-radio-button>
-                          <t-radio-button value="zh">中文</t-radio-button>
-                          <t-radio-button value="en">English</t-radio-button>
-                        </t-radio-group>
-                      </div>
-                      <div class="form-item">
-                        <label class="form-label">{{ $t('knowledgeEditor.wiki.maxPagesLabel') }}</label>
-                        <t-input-number v-model="formData.wikiConfig.maxPagesPerIngest" :min="0" :max="50" />
-                        <p class="form-tip">{{ $t('knowledgeEditor.wiki.maxPagesTip') }}</p>
-                      </div>
+
+                      <!-- 以下仅在 wiki 开启时显示 -->
+                      <template v-if="formData.wikiConfig.enabled">
+                        <!-- 自动 Ingest -->
+                        <div class="setting-row">
+                          <div class="setting-info">
+                            <label>{{ $t('knowledgeEditor.wiki.autoIngestLabel') }}</label>
+                            <p class="desc">{{ $t('knowledgeEditor.wiki.autoIngestTip') }}</p>
+                          </div>
+                          <div class="setting-control">
+                            <t-switch v-model="formData.wikiConfig.autoIngest" size="medium" />
+                          </div>
+                        </div>
+
+                        <!-- 合成模型 -->
+                        <div class="setting-row">
+                          <div class="setting-info">
+                            <label>{{ $t('knowledgeEditor.wiki.synthesisModelLabel') }}</label>
+                            <p class="desc">{{ $t('knowledgeEditor.wiki.synthesisModelTip') }}</p>
+                          </div>
+                          <div class="setting-control">
+                            <ModelSelector
+                              model-type="KnowledgeQA"
+                              :selected-model-id="formData.wikiConfig.synthesisModelId"
+                              :all-models="allModels"
+                              @update:selected-model-id="(val: string) => { if (formData) formData.wikiConfig.synthesisModelId = val }"
+                              @add-model="handleAddWikiModel"
+                              :placeholder="$t('knowledgeEditor.wiki.synthesisModelPlaceholder')"
+                            />
+                          </div>
+                        </div>
+
+                        <!-- 单次最大页面数 -->
+                        <div class="setting-row">
+                          <div class="setting-info">
+                            <label>{{ $t('knowledgeEditor.wiki.maxPagesLabel') }}</label>
+                            <p class="desc">{{ $t('knowledgeEditor.wiki.maxPagesTip') }}</p>
+                          </div>
+                          <div class="setting-control">
+                            <t-input-number v-model="formData.wikiConfig.maxPagesPerIngest" :min="0" :max="50" />
+                          </div>
+                        </div>
+                      </template>
                     </div>
                   </div>
                 </div>
 
                 <!-- 解析引擎 -->
-                <div v-if="!isFAQ && !isWiki && formData" v-show="currentSection === 'parser'" class="section">
+                <div v-if="!isFAQ && formData" v-show="currentSection === 'parser'" class="section">
                   <KBParserSettings
                     :parser-engine-rules="formData.chunkingConfig.parserEngineRules"
                     @update:parser-engine-rules="handleParserEngineRulesUpdate"
@@ -171,7 +195,7 @@
                 </div>
 
                 <!-- 存储引擎 -->
-                <div v-if="!isFAQ && !isWiki && formData" v-show="currentSection === 'storage'" class="section">
+                <div v-if="!isFAQ && formData" v-show="currentSection === 'storage'" class="section">
                   <KBStorageSettings
                     :storage-provider="formData.storageProvider"
                     :has-files="mode === 'edit' && hasFiles"
@@ -180,7 +204,7 @@
                 </div>
 
                 <!-- 分块设置 -->
-                <div v-if="!isFAQ && !isWiki" v-show="currentSection === 'chunking'" class="section">
+                <div v-if="!isFAQ" v-show="currentSection === 'chunking'" class="section">
                   <KBChunkingSettings
                     v-if="formData"
                     :config="formData.chunkingConfig"
@@ -189,7 +213,7 @@
                 </div>
 
                 <!-- 图谱设置 -->
-                <div v-if="!isFAQ && !isWiki" v-show="currentSection === 'graph'" class="section">
+                <div v-if="!isFAQ" v-show="currentSection === 'graph'" class="section">
                   <GraphSettings
                     v-if="formData"
                     :graph-extract="formData.nodeExtractConfig"
@@ -200,7 +224,7 @@
                 </div>
 
                 <!-- 多模态配置 -->
-                <div v-if="!isFAQ && !isWiki" v-show="currentSection === 'multimodal'" class="section">
+                <div v-if="!isFAQ" v-show="currentSection === 'multimodal'" class="section">
                   <div v-if="formData" class="kb-multimodal-settings">
                     <div class="section-header">
                       <h2>{{ $t('knowledgeEditor.multimodal.title') }}</h2>
@@ -245,7 +269,7 @@
                 </div>
 
                 <!-- 音频处理（ASR）设置 -->
-                <div v-if="!isFAQ && !isWiki" v-show="currentSection === 'asr'" class="section">
+                <div v-if="!isFAQ" v-show="currentSection === 'asr'" class="section">
                   <div v-if="formData" class="kb-multimodal-settings">
                     <div class="section-header">
                       <h2>{{ $t('knowledgeEditor.asr.title') }}</h2>
@@ -289,7 +313,7 @@
                 </div>
 
                 <!-- 高级设置 -->
-                <div v-if="!isFAQ && !isWiki" v-show="currentSection === 'advanced'" class="section">
+                <div v-if="!isFAQ" v-show="currentSection === 'advanced'" class="section">
                   <KBAdvancedSettings
                     ref="advancedSettingsRef"
                     v-if="formData"
@@ -355,7 +379,7 @@ const props = defineProps<{
   visible: boolean
   mode: 'create' | 'edit'
   kbId?: string
-  initialType?: 'document' | 'faq' | 'wiki'
+  initialType?: 'document' | 'faq'
 }>()
 
 // Emits
@@ -379,8 +403,6 @@ const navItems = computed(() => {
   ]
   if (formData.value?.type === 'faq') {
     items.push({ key: 'faq', icon: 'help-circle', label: t('knowledgeEditor.sidebar.faq') })
-  } else if (formData.value?.type === 'wiki') {
-    items.push({ key: 'wiki', icon: 'catalog', label: t('knowledgeEditor.sidebar.wiki') })
   } else {
     items.push(
       { key: 'parser', icon: 'file-search', label: t('settings.parserEngine') },
@@ -389,6 +411,7 @@ const navItems = computed(() => {
       { key: 'storage', icon: 'cloud', label: t('knowledgeEditor.sidebar.storage') },
       { key: 'chunking', icon: 'file-copy', label: t('knowledgeEditor.sidebar.chunking') },
       { key: 'graph', icon: 'chart-bubble', label: t('knowledgeEditor.sidebar.graph') },
+      { key: 'wiki', icon: 'catalog', label: t('knowledgeEditor.sidebar.wiki') },
       { key: 'advanced', icon: 'setting', label: t('knowledgeEditor.sidebar.advanced') }
     )
     if (props.mode === 'edit' && props.kbId) {
@@ -408,7 +431,6 @@ const advancedSettingsRef = ref<InstanceType<typeof KBAdvancedSettings>>()
 // 表单数据
 const formData = ref<any>(null)
 const isFAQ = computed(() => formData.value?.type === 'faq')
-const isWiki = computed(() => formData.value?.type === 'wiki')
 
 watch(
   () => formData.value?.type,
@@ -421,21 +443,14 @@ watch(
       if (!['basic', 'models', 'faq'].includes(currentSection.value)) {
         currentSection.value = 'faq'
       }
-    } else if (newType === 'wiki') {
-      if (!formData.value.wikiConfig) {
-        formData.value.wikiConfig = { autoIngest: true, synthesisModelId: '', wikiLanguage: 'auto', maxPagesPerIngest: 0 }
-      }
-      if (!['basic', 'models', 'wiki'].includes(currentSection.value)) {
-        currentSection.value = 'wiki'
-      }
-    } else if ((oldType === 'faq' && currentSection.value === 'faq') || (oldType === 'wiki' && currentSection.value === 'wiki')) {
+    } else if (oldType === 'faq' && currentSection.value === 'faq') {
       currentSection.value = 'basic'
     }
   }
 )
 
 // 初始化表单数据
-const initFormData = (type: 'document' | 'faq' | 'wiki' = 'document') => {
+const initFormData = (type: 'document' | 'faq' = 'document') => {
   return {
     type,
     name: '',
@@ -486,9 +501,9 @@ const initFormData = (type: 'document' | 'faq' | 'wiki' = 'document') => {
       questionCount: 3
     },
     wikiConfig: {
+      enabled: false,
       autoIngest: true,
       synthesisModelId: '',
-      wikiLanguage: 'auto',
       maxPagesPerIngest: 0,
     },
   }
@@ -526,7 +541,7 @@ const loadKBData = async () => {
     hasFiles.value = (filesResult as any)?.total > 0
     
     // 设置表单数据
-    const kbType = (kb.type as 'document' | 'faq' | 'wiki') || 'document'
+    const kbType = (kb.type as 'document' | 'faq') || 'document'
     formData.value = {
       type: kbType,
       name: kb.name || '',
@@ -573,9 +588,9 @@ const loadKBData = async () => {
         questionCount: kb.question_generation_config?.question_count || 3
       },
       wikiConfig: {
+        enabled: kb.wiki_config?.enabled ?? false,
         autoIngest: kb.wiki_config?.auto_ingest ?? true,
         synthesisModelId: kb.wiki_config?.synthesis_model_id || '',
-        wikiLanguage: kb.wiki_config?.wiki_language || 'auto',
         maxPagesPerIngest: kb.wiki_config?.max_pages_per_ingest || 0,
       },
     }
@@ -626,6 +641,10 @@ const handleAddVLLMModel = () => {
 
 const handleAddASRModel = () => {
   uiStore.openSettings('models', 'asr')
+}
+
+const handleAddWikiModel = () => {
+  uiStore.openSettings('models', 'knowledgeqa')
 }
 
 const handleStorageProviderUpdate = (value: string) => {
@@ -762,11 +781,12 @@ const buildSubmitData = () => {
     }
   }
 
-  if (formData.value.type === 'wiki') {
+  // Always send wiki_config so enabled/disabled state is persisted
+  if (formData.value.type !== 'faq') {
     data.wiki_config = {
+      enabled: formData.value.wikiConfig?.enabled ?? false,
       auto_ingest: formData.value.wikiConfig?.autoIngest ?? true,
       synthesis_model_id: formData.value.wikiConfig?.synthesisModelId || '',
-      wiki_language: formData.value.wikiConfig?.wikiLanguage || 'auto',
       max_pages_per_ingest: formData.value.wikiConfig?.maxPagesPerIngest || 0,
     }
   }
@@ -837,11 +857,11 @@ const doSubmit = async () => {
           question_index_mode: formData.value.faqConfig.questionIndexMode || 'separate'
         }
       }
-      if (formData.value.type === 'wiki' && formData.value.wikiConfig) {
+      if (formData.value.wikiConfig && formData.value.type !== 'faq') {
         updateConfig.wiki_config = {
+          enabled: formData.value.wikiConfig.enabled ?? false,
           auto_ingest: formData.value.wikiConfig.autoIngest ?? true,
           synthesis_model_id: formData.value.wikiConfig.synthesisModelId || '',
-          wiki_language: formData.value.wikiConfig.wikiLanguage || 'auto',
           max_pages_per_ingest: formData.value.wikiConfig.maxPagesPerIngest || 0,
         }
       }

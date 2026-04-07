@@ -138,11 +138,17 @@ func (r *wikiPageRepository) ListByType(ctx context.Context, kbID string, pageTy
 	return pages, nil
 }
 
-// ListBySourceRef retrieves all wiki pages that reference a given source knowledge ID
+// ListBySourceRef retrieves all wiki pages that reference a given source knowledge ID.
+// Handles both old format ("knowledgeID") and new format ("knowledgeID|title") in source_refs JSON array.
 func (r *wikiPageRepository) ListBySourceRef(ctx context.Context, kbID string, sourceKnowledgeID string) ([]*types.WikiPage, error) {
 	var pages []*types.WikiPage
+	// Match either exact "knowledgeID" or "knowledgeID|..." prefix in the JSON array
 	if err := r.db.WithContext(ctx).
-		Where("knowledge_base_id = ? AND source_refs @> ?", kbID, fmt.Sprintf(`["%s"]`, sourceKnowledgeID)).
+		Where("knowledge_base_id = ? AND (source_refs @> ? OR source_refs::text LIKE ?)",
+			kbID,
+			fmt.Sprintf(`["%s"]`, sourceKnowledgeID),
+			fmt.Sprintf(`%%"%s|%%`, sourceKnowledgeID),
+		).
 		Find(&pages).Error; err != nil {
 		return nil, err
 	}

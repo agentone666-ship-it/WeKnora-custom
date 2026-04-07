@@ -271,6 +271,8 @@ func (e *AgentEngine) executeLoop(
 		"max_iterations": e.config.MaxIterations,
 	})
 	emptyRetries := 0
+	consecutiveSameContent := 0
+	lastResponseContent := ""
 	for state.CurrentRound < e.config.MaxIterations {
 		// Check for context cancellation (request timeout, user cancel, etc.)
 		select {
@@ -324,6 +326,27 @@ func (e *AgentEngine) executeLoop(
 			logger.Debugf(ctx, "[Agent][Round-%d] Usage: prompt=%d, completion=%d, total=%d",
 				state.CurrentRound+1, response.Usage.PromptTokens,
 				response.Usage.CompletionTokens, response.Usage.TotalTokens)
+		}
+
+		// Detect stuck loops: if the LLM keeps returning the same content
+		// without tool calls (e.g., an unhandled finish reason), break early.
+		if len(response.ToolCalls) == 0 && response.Content != "" {
+			if response.Content == lastResponseContent {
+				consecutiveSameContent++
+			} else {
+				consecutiveSameContent = 0
+			}
+			lastResponseContent = response.Content
+			if consecutiveSameContent >= maxRepeatedResponseRounds {
+				logger.Warnf(ctx, "[Agent][Round-%d] Detected stuck loop: same content repeated %d times (finish=%s), stopping",
+					state.CurrentRound+1, consecutiveSameContent+1, response.FinishReason)
+				state.FinalAnswer = response.Content
+				state.IsComplete = true
+				break
+			}
+		} else {
+			consecutiveSameContent = 0
+			lastResponseContent = ""
 		}
 
 		// Create agent step

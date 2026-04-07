@@ -31,9 +31,9 @@ func TestWikiPageTypes(t *testing.T) {
 func TestWikiConfigValueScan(t *testing.T) {
 	// Test Value (serialize)
 	config := WikiConfig{
+		Enabled:          true,
 		AutoIngest:       true,
 		SynthesisModelID: "model-123",
-		WikiLanguage:     "zh",
 		MaxPagesPerIngest: 20,
 	}
 
@@ -57,9 +57,6 @@ func TestWikiConfigValueScan(t *testing.T) {
 	}
 	if restored.SynthesisModelID != "model-123" {
 		t.Error("SynthesisModelID mismatch")
-	}
-	if restored.WikiLanguage != "zh" {
-		t.Error("WikiLanguage mismatch")
 	}
 	if restored.MaxPagesPerIngest != 20 {
 		t.Error("MaxPagesPerIngest mismatch")
@@ -118,32 +115,36 @@ func TestStringArrayEmpty(t *testing.T) {
 }
 
 func TestKnowledgeBaseEnsureDefaultsWiki(t *testing.T) {
-	kb := &KnowledgeBase{Type: KnowledgeBaseTypeWiki}
+	kb := &KnowledgeBase{Type: KnowledgeBaseTypeDocument, WikiConfig: &WikiConfig{Enabled: true, AutoIngest: true}}
 	kb.EnsureDefaults()
 
 	if kb.WikiConfig == nil {
-		t.Fatal("EnsureDefaults should create default WikiConfig for wiki type")
+		t.Fatal("EnsureDefaults should preserve WikiConfig for wiki-enabled KB")
 	}
 	if kb.WikiConfig.AutoIngest != true {
-		t.Error("Default AutoIngest should be true")
-	}
-	if kb.WikiConfig.WikiLanguage != "auto" {
-		t.Errorf("Default WikiLanguage should be 'auto', got '%s'", kb.WikiConfig.WikiLanguage)
+		t.Error("AutoIngest should be preserved")
 	}
 	if kb.FAQConfig != nil {
-		t.Error("Wiki KB should not have FAQConfig")
+		t.Error("Document KB should not have FAQConfig")
+	}
+
+	// Test that user can disable AutoIngest
+	kb2 := &KnowledgeBase{Type: KnowledgeBaseTypeDocument, WikiConfig: &WikiConfig{Enabled: true, AutoIngest: false}}
+	kb2.EnsureDefaults()
+	if kb2.WikiConfig.AutoIngest != false {
+		t.Error("EnsureDefaults should not override user's AutoIngest=false setting")
 	}
 }
 
-func TestKnowledgeBaseEnsureDefaultsDocumentClearsWikiConfig(t *testing.T) {
+func TestKnowledgeBaseEnsureDefaultsDocumentWithoutWiki(t *testing.T) {
 	kb := &KnowledgeBase{
-		Type:       KnowledgeBaseTypeDocument,
-		WikiConfig: &WikiConfig{AutoIngest: true},
+		Type: KnowledgeBaseTypeDocument,
 	}
 	kb.EnsureDefaults()
 
+	// WikiConfig should remain nil when not set
 	if kb.WikiConfig != nil {
-		t.Error("Document KB should not have WikiConfig after EnsureDefaults")
+		t.Error("Document KB without wiki should not have WikiConfig after EnsureDefaults")
 	}
 }
 

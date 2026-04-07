@@ -119,6 +119,7 @@ func RunAsynqServer(params AsynqTaskParams) *asynq.ServeMux {
 
 	// Register wiki ingest handler
 	mux.HandleFunc(types.TypeWikiIngest, params.WikiIngest.Handle)
+	mux.HandleFunc(types.TypeWikiRetract, params.WikiIngest.Handle)
 
 	go func() {
 		// Start the server

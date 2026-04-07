@@ -87,14 +87,15 @@ func (WikiPage) TableName() string {
 }
 
 // WikiConfig stores wiki-specific configuration for a knowledge base.
-// Only applicable when KnowledgeBase.Type == "wiki".
+// Applicable to document-type knowledge bases with wiki feature enabled.
+// When Enabled is true, document ingestion triggers automatic wiki page generation.
 type WikiConfig struct {
+	// Enabled activates the wiki feature for this knowledge base
+	Enabled bool `yaml:"enabled" json:"enabled"`
 	// AutoIngest triggers wiki page generation/update when new documents are added
 	AutoIngest bool `yaml:"auto_ingest" json:"auto_ingest"`
 	// SynthesisModelID is the LLM model ID used for wiki page generation and updates
 	SynthesisModelID string `yaml:"synthesis_model_id" json:"synthesis_model_id"`
-	// WikiLanguage is the preferred language for wiki content (zh, en, auto)
-	WikiLanguage string `yaml:"wiki_language" json:"wiki_language"`
 	// MaxPagesPerIngest limits pages created/updated per ingest operation (0 = no limit)
 	MaxPagesPerIngest int `yaml:"max_pages_per_ingest" json:"max_pages_per_ingest"`
 }

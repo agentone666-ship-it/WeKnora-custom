@@ -53,8 +53,8 @@ func (h *WikiPageHandler) validateWikiKB(c *gin.Context) (string, uint64, error)
 		return "", 0, errors.NewNotFoundError("Knowledge base not found")
 	}
 
-	if kb.Type != types.KnowledgeBaseTypeWiki {
-		return "", 0, errors.NewBadRequestError("Knowledge base is not a wiki type")
+	if !kb.IsWikiEnabled() {
+		return "", 0, errors.NewBadRequestError("Wiki feature is not enabled for this knowledge base")
 	}
 
 	return kbID, tenantID, nil
@@ -62,7 +62,7 @@ func (h *WikiPageHandler) validateWikiKB(c *gin.Context) (string, uint64, error)
 
 // getSlugParam extracts and cleans the slug from gin's wildcard path param
 func getSlugParam(c *gin.Context) string {
-	slug := getSlugParam(c)
+	slug := c.Param("slug")
 	// gin wildcard params include a leading "/"
 	slug = strings.TrimPrefix(slug, "/")
 	return strings.TrimSpace(slug)
