@@ -24,7 +24,12 @@ func NewChunkRepository(db *gorm.DB) interfaces.ChunkRepository {
 	return &chunkRepository{db: db}
 }
 
-// CreateChunks creates multiple chunks in batches
+// CreateChunks creates multiple chunks in batches.
+// Uses Omit("SeqID") so GORM won't include the auto-increment column in the
+// INSERT, which avoids MySQL generating ON DUPLICATE KEY UPDATE and the
+// resulting gap-lock deadlocks under concurrent writes.
+// A deadlock retry wrapper is kept as defense-in-depth for any remaining
+// edge cases on secondary unique indexes.
 func (r *chunkRepository) CreateChunks(ctx context.Context, chunks []*types.Chunk) error {
 	for _, chunk := range chunks {
 		chunk.Content = common.CleanInvalidUTF8(chunk.Content)
