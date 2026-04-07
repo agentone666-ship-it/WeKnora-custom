@@ -276,7 +276,8 @@ func (s *wikiIngestService) ProcessWikiRetract(ctx context.Context, t *asynq.Tas
 	s.appendLogEntry(ctx, WikiIngestPayload{
 		TenantID:        payload.TenantID,
 		KnowledgeBaseID: payload.KnowledgeBaseID,
-	}, payload.DocTitle+" [DELETED]", payload.PageSlugs, nil)
+		KnowledgeID:     payload.KnowledgeID,
+	}, "retract", payload.DocTitle, payload.PageSlugs, "")
 
 	// Clean up dead links pointing to archived/deleted pages
 	s.cleanDeadLinks(ctx, payload.KnowledgeBaseID)
@@ -362,7 +363,6 @@ func (s *wikiIngestService) ProcessWikiIngest(ctx context.Context, t *asynq.Task
 	}
 
 	var pagesAffected []string
-	var synthesisSuggestions []string
 
 	// Format source ref as "knowledgeID|docTitle" for frontend display
 	sourceRef := fmt.Sprintf("%s|%s", payload.KnowledgeID, docTitle)
@@ -415,16 +415,13 @@ func (s *wikiIngestService) ProcessWikiIngest(ctx context.Context, t *asynq.Task
 		}
 	}
 
-	// Step 3: Detect synthesis opportunities (no LLM call, pure heuristic)
-	synthesisSuggestions = s.detectSynthesisOpportunities(ctx, payload)
-
-	// Step 4: Rebuild index page
+	// Step 3: Rebuild index page
 	if err := s.rebuildIndexPage(ctx, chatModel, payload, lang); err != nil {
 		logger.Warnf(ctx, "wiki ingest: rebuild index failed: %v", err)
 	}
 
-	// Step 5: Append to log page with synthesis suggestions
-	s.appendLogEntry(ctx, payload, docTitle, pagesAffected, synthesisSuggestions)
+	// Step 4: Append to log page
+	s.appendLogEntry(ctx, payload, "ingest", docTitle, pagesAffected, "")
 
 	// Step 6: Cross-link injection — scan all affected pages and inject [[wiki-links]]
 	// for mentions of other wiki page titles. Pure text matching, no LLM call.
@@ -1010,28 +1007,30 @@ func (s *wikiIngestService) rebuildIndexPage(ctx context.Context, chatModel chat
 }
 
 // appendLogEntry appends an entry to the log page, including any synthesis suggestions
-func (s *wikiIngestService) appendLogEntry(ctx context.Context, payload WikiIngestPayload, docTitle string, pagesAffected []string, suggestions []string) {
+// appendLogEntry appends a structured, grep-parseable entry to the log page.
+// Format: ## [2026-04-07 19:50:02] action | title
+// Followed by key-value metadata lines. No sub-headings — keeps `grep "^## \[" log.md` clean.
+func (s *wikiIngestService) appendLogEntry(ctx context.Context, payload WikiIngestPayload, action, docTitle string, pagesAffected []string, extra string) {
 	logPage, _ := s.wikiService.GetLog(ctx, payload.KnowledgeBaseID)
 	if logPage == nil {
 		return
 	}
 
-	entry := fmt.Sprintf("\n## [%s] ingest | %s\n- **Source**: knowledge/%s\n- **Pages affected**: %d (%s)\n",
-		time.Now().UTC().Format("2006-01-02 15:04"),
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "\n## [%s] %s | %s\n",
+		time.Now().UTC().Format("2006-01-02 15:04:05"),
+		action,
 		docTitle,
-		payload.KnowledgeID,
-		len(pagesAffected),
-		strings.Join(pagesAffected, ", "),
 	)
-
-	if len(suggestions) > 0 {
-		entry += "\n### Synthesis Opportunities\n"
-		for _, suggestion := range suggestions {
-			entry += fmt.Sprintf("- %s\n", suggestion)
-		}
+	fmt.Fprintf(&sb, "- **Source**: knowledge/%s\n", payload.KnowledgeID)
+	if len(pagesAffected) > 0 {
+		fmt.Fprintf(&sb, "- **Pages affected**: %d (%s)\n", len(pagesAffected), strings.Join(pagesAffected, ", "))
+	}
+	if extra != "" {
+		sb.WriteString(extra)
 	}
 
-	logPage.Content = logPage.Content + entry
+	logPage.Content = logPage.Content + sb.String()
 	if _, err := s.wikiService.UpdatePage(ctx, logPage); err != nil {
 		logger.Warnf(ctx, "wiki ingest: failed to update log page: %v", err)
 	}

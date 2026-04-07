@@ -1335,7 +1335,7 @@ func (s *knowledgeService) cleanupWikiOnKnowledgeDelete(ctx context.Context, kbI
 
 	// Rebuild index page to reflect deleted pages
 	if len(deletedSlugs) > 0 {
-		s.rebuildWikiIndexSimple(ctx, kbID, docTitle, deletedSlugs)
+		s.rebuildWikiIndexSimple(ctx, kbID, knowledgeID, docTitle, deletedSlugs)
 	}
 }
 
@@ -1356,7 +1356,7 @@ func removeSourceRef(refs types.StringArray, knowledgeID string) types.StringArr
 // rebuildWikiIndexSimple regenerates the index page from current page listing
 // and appends a deletion log entry. Does NOT use LLM — generates a simple
 // structured listing. Used during document deletion when LLM is not available.
-func (s *knowledgeService) rebuildWikiIndexSimple(ctx context.Context, kbID, docTitle string, deletedSlugs []string) {
+func (s *knowledgeService) rebuildWikiIndexSimple(ctx context.Context, kbID, knowledgeID, docTitle string, deletedSlugs []string) {
 	// Rebuild index
 	resp, err := s.wikiService.ListPages(ctx, &types.WikiPageListRequest{
 		KnowledgeBaseID: kbID,
@@ -1401,9 +1401,10 @@ func (s *knowledgeService) rebuildWikiIndexSimple(ctx context.Context, kbID, doc
 	// Append log entry
 	logPage, _ := s.wikiService.GetLog(ctx, kbID)
 	if logPage != nil {
-		entry := fmt.Sprintf("\n## [%s] delete | %s\n- **Pages deleted**: %d (%s)\n",
-			time.Now().UTC().Format("2006-01-02 15:04"),
+		entry := fmt.Sprintf("\n## [%s] delete | %s\n- **Source**: knowledge/%s\n- **Pages deleted**: %d (%s)\n",
+			time.Now().UTC().Format("2006-01-02 15:04:05"),
 			docTitle,
+			knowledgeID,
 			len(deletedSlugs),
 			strings.Join(deletedSlugs, ", "),
 		)
