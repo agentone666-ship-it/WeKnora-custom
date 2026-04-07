@@ -59,6 +59,7 @@ type responseVerdict struct {
 
 // analyzeResponse inspects the LLM response for stop conditions:
 //   - finish_reason == "stop" with no tool calls → agent is done (natural stop)
+//   - finish_reason == "content_filter" with no tool calls → agent is done (content filtered)
 //   - final_answer tool call present → agent is done (explicit tool)
 //
 // It returns a responseVerdict. If isDone is true the caller should break out of the loop.
@@ -66,6 +67,50 @@ func (e *AgentEngine) analyzeResponse(
 	ctx context.Context, response *types.ChatResponse,
 	step types.AgentStep, iteration int, sessionID string, roundStart time.Time,
 ) responseVerdict {
+	// Case 0: Content was blocked by the model's content filter.
+	// Treat this as a terminal condition to avoid an infinite loop where
+	// the same filtered response accumulates in the context.
+	if response.FinishReason == "content_filter" && len(response.ToolCalls) == 0 {
+		logger.Warnf(ctx, "[Agent][Round-%d] Content filter triggered, stopping agent loop (content=%d chars)",
+			iteration+1, len(response.Content))
+		common.PipelineWarn(ctx, "Agent", "content_filter_stop", map[string]interface{}{
+			"iteration":   iteration,
+			"round":       iteration + 1,
+			"content_len": len(response.Content),
+		})
+
+		answer := response.Content
+		if answer == "" {
+			answer = "Sorry, this request was blocked by the content safety policy. Please try rephrasing your question."
+		}
+
+		answerID := generateEventID("answer")
+		e.eventBus.Emit(ctx, event.Event{
+			ID:        answerID,
+			Type:      event.EventAgentFinalAnswer,
+			SessionID: sessionID,
+			Data: event.AgentFinalAnswerData{
+				Content: answer,
+				Done:    false,
+			},
+		})
+		e.eventBus.Emit(ctx, event.Event{
+			ID:        answerID,
+			Type:      event.EventAgentFinalAnswer,
+			SessionID: sessionID,
+			Data: event.AgentFinalAnswerData{
+				Content: "",
+				Done:    true,
+			},
+		})
+
+		return responseVerdict{
+			isDone:      true,
+			finalAnswer: answer,
+			step:        step,
+		}
+	}
+
 	// Case 1: LLM stopped naturally without requesting any tool calls
 	if response.FinishReason == "stop" && len(response.ToolCalls) == 0 {
 		// Strip <think>…</think> blocks that some models embed in content
