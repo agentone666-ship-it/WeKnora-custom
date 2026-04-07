@@ -244,13 +244,16 @@ func (r *wikiPageRepository) Search(ctx context.Context, kbID string, query stri
 		limit = 50
 	}
 
+	likePattern := "%" + query + "%"
+
 	var pages []*types.WikiPage
 	if err := r.db.WithContext(ctx).
-		Where("knowledge_base_id = ?", kbID).
-		Where("to_tsvector('simple', coalesce(title, '') || ' ' || coalesce(content, '')) @@ plainto_tsquery('simple', ?)", query).
-		Order("ts_rank(to_tsvector('simple', coalesce(title, '') || ' ' || coalesce(content, '')), plainto_tsquery('simple', ?)) DESC").
+		Where("knowledge_base_id = ? AND (title ILIKE ? OR content ILIKE ? OR summary ILIKE ? OR slug ILIKE ?)",
+			kbID, likePattern, likePattern, likePattern, likePattern).
+		Where("status != ?", "archived").
+		Order("updated_at DESC").
 		Limit(limit).
-		Find(&pages, query).Error; err != nil {
+		Find(&pages).Error; err != nil {
 		return nil, err
 	}
 	return pages, nil

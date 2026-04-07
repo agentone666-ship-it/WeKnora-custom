@@ -1046,6 +1046,13 @@ function drawLegend(svg: SVGSVGElement, width: number) {
 }
 
 // Load graph when switching to graph view
+// Reload all pages when search query is cleared (backspace or clear button)
+watch(searchQuery, (val) => {
+  if (!val || !val.trim()) {
+    loadPages()
+  }
+})
+
 watch(() => props.view, (v) => {
   if (v === 'graph') loadGraph()
 })
