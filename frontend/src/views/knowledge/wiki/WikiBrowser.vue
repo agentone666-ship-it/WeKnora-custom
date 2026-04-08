@@ -4,6 +4,54 @@
     <template v-if="view === 'graph'">
       <div class="wiki-graph">
         <div ref="graphRef" class="wiki-graph-canvas"></div>
+
+        <!-- Graph Search Overlay -->
+        <div v-if="graphReady" class="wiki-graph-search">
+          <t-select
+            v-model="graphSearchValue"
+            filterable
+            :options="graphSearchOptions"
+            :placeholder="$t('knowledgeEditor.wikiBrowser.searchPlaceholder')"
+            @change="handleGraphSearchSelect"
+            @enter="handleGraphSearchEnter"
+            :popup-props="{ zIndex: 100 }"
+            class="graph-search-select"
+          >
+            <template #prefixIcon><t-icon name="search" /></template>
+          </t-select>
+        </div>
+
+        <!-- Legend Overlay -->
+        <div v-if="graphReady" class="wiki-graph-legend">
+          <div class="legend-items">
+            <div class="legend-item">
+              <span class="legend-dot" style="background: #0052d9"></span>
+              {{ $t('knowledgeEditor.wikiBrowser.filterSummary') }}
+            </div>
+            <div class="legend-item">
+              <span class="legend-dot" style="background: #2ba471"></span>
+              {{ $t('knowledgeEditor.wikiBrowser.filterEntity') }}
+            </div>
+            <div class="legend-item">
+              <span class="legend-dot" style="background: #e37318"></span>
+              {{ $t('knowledgeEditor.wikiBrowser.filterConcept') }}
+            </div>
+            <div class="legend-item">
+              <span class="legend-dot" style="background: #0594fa"></span>
+              {{ $t('knowledgeEditor.wikiBrowser.filterSynthesis') }}
+            </div>
+            <div class="legend-item">
+              <span class="legend-dot" style="background: #d54941"></span>
+              {{ $t('knowledgeEditor.wikiBrowser.filterComparison') }}
+            </div>
+          </div>
+          <div class="legend-divider"></div>
+          <div class="legend-action" @click="toggleArrows" :class="{ active: showArrows }">
+            <span class="legend-action-icon">→</span>
+            <span>{{ showArrows ? $t('knowledgeEditor.wikiBrowser.hideArrows') : $t('knowledgeEditor.wikiBrowser.showArrows') }}</span>
+          </div>
+        </div>
+
         <div v-if="!graphReady" class="wiki-reader-empty">
           <t-loading v-if="graphLoading" />
           <div v-else class="wiki-empty-icon">
@@ -20,6 +68,9 @@
           :footer="false"
           placement="right"
           :attach="false"
+          :show-overlay="false"
+          :close-btn="true"
+          class="wiki-graph-drawer"
         >
           <template v-if="graphDrawerPage">
             <div class="wiki-reader-meta" style="margin-bottom: 16px;">
@@ -221,12 +272,12 @@ const selectedPage = ref<WikiPage | null>(null)
 const stats = ref<WikiStats | null>(null)
 const graphData = ref<WikiGraphData | null>(null)
 const searchQuery = ref('')
+const graphSearchValue = ref('')
 const graphRef = ref<HTMLElement | null>(null)
 const loading = ref(false)
 const graphLoading = ref(false)
 const graphReady = ref(false)
 const showArrows = ref(true)
-const graphEdgeEls = ref<{ line: SVGLineElement; bidir: boolean }[]>([])
 const collapsedGroups = reactive<Record<string, boolean>>({})
 const graphDrawerVisible = ref(false)
 const graphDrawerPage = ref<WikiPage | null>(null)
@@ -317,7 +368,7 @@ function handleGraphDrawerClick(e: MouseEvent) {
   if (target.classList.contains('wiki-content-link')) {
     e.preventDefault()
     const slug = target.getAttribute('data-slug')
-    if (slug) openGraphDrawer(slug)
+    if (slug) handleGraphSearchSelect(slug)
   }
 }
 
@@ -441,7 +492,7 @@ async function doSearch() {
 
 function toggleArrows() {
   showArrows.value = !showArrows.value
-  for (const e of graphEdgeEls.value) {
+  for (const e of graphEdgeElsRef) {
     if (showArrows.value) {
       e.line.setAttribute('marker-end', 'url(#arrow-end)')
       if (e.bidir) e.line.setAttribute('marker-start', 'url(#arrow-start)')
@@ -483,7 +534,17 @@ let graphNodes: GNode[] = []
 let graphSvg: SVGSVGElement | null = null
 let graphAnimFrame = 0
 
+// Used for graph search centering interaction
+let graphPanZoomRef: {
+  setScale: (s: number) => void,
+  setTranslate: (x: number, y: number) => void,
+  apply: () => void,
+  flyTo: (x: number, y: number, s?: number, duration?: number) => void,
+  getScale: () => number
+} | null = null
+
 const graphHighlightSlug = ref<string | null>(null)
+const graphSelectedSlug = ref<string | null>(null)
 
 // Color map for node types
 const nodeColorMap: Record<string, string> = {
@@ -565,7 +626,7 @@ function renderGraph() {
   markerEnd.setAttribute('markerHeight', '6')
   markerEnd.setAttribute('orient', 'auto')
   const arrowPath = document.createElementNS('http://www.w3.org/2000/svg', 'path')
-  arrowPath.setAttribute('d', 'M0,0 L10,3 L0,6')
+  arrowPath.setAttribute('d', 'M0,0 L10,3 L0,6 L2,3 Z')
   arrowPath.setAttribute('fill', '#c0c4cc')
   markerEnd.appendChild(arrowPath)
   defs.appendChild(markerEnd)
@@ -580,7 +641,7 @@ function renderGraph() {
   markerStart.setAttribute('markerHeight', '6')
   markerStart.setAttribute('orient', 'auto')
   const arrowPathStart = document.createElementNS('http://www.w3.org/2000/svg', 'path')
-  arrowPathStart.setAttribute('d', 'M10,0 L0,3 L10,6')
+  arrowPathStart.setAttribute('d', 'M10,0 L0,3 L10,6 L8,3 Z')
   arrowPathStart.setAttribute('fill', '#c0c4cc')
   markerStart.appendChild(arrowPathStart)
   defs.appendChild(markerStart)
@@ -596,11 +657,21 @@ function renderGraph() {
     m.setAttribute('markerHeight', '6')
     m.setAttribute('orient', 'auto')
     const p = document.createElementNS('http://www.w3.org/2000/svg', 'path')
-    p.setAttribute('d', id.includes('end') ? 'M0,0 L10,3 L0,6' : 'M10,0 L0,3 L10,6')
+    p.setAttribute('d', id.includes('end') ? 'M0,0 L10,3 L0,6 L2,3 Z' : 'M10,0 L0,3 L10,6 L8,3 Z')
     p.setAttribute('fill', '#0052d9')
     m.appendChild(p)
     defs.appendChild(m)
   }
+
+  // Drop shadow filter for nodes
+  const filter = document.createElementNS('http://www.w3.org/2000/svg', 'filter')
+  filter.setAttribute('id', 'node-shadow')
+  filter.setAttribute('x', '-20%')
+  filter.setAttribute('y', '-20%')
+  filter.setAttribute('width', '140%')
+  filter.setAttribute('height', '140%')
+  filter.innerHTML = `<feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#000" flood-opacity="0.15"/>`
+  defs.appendChild(filter)
 
   svg.appendChild(defs)
 
@@ -627,6 +698,7 @@ function renderGraph() {
     line.setAttribute('stroke-width', '1.2')
     line.setAttribute('stroke-opacity', '0.4')
     line.setAttribute('marker-end', 'url(#arrow-end)')
+    line.style.transition = 'stroke 0.2s, stroke-width 0.2s, stroke-opacity 0.2s'
     if (bidir) {
       line.setAttribute('marker-start', 'url(#arrow-start)')
     }
@@ -635,19 +707,36 @@ function renderGraph() {
   }
 
   // Create SVG elements for nodes
-  const nodeEls: { g: SVGGElement; circle: SVGCircleElement; text: SVGTextElement; node: GNode }[] = []
+  const nodeEls: { g: SVGGElement; circle: SVGCircleElement; text: SVGTextElement; activeRing: SVGCircleElement; node: GNode }[] = []
   for (const n of graphNodes) {
     const g = document.createElementNS('http://www.w3.org/2000/svg', 'g')
     g.style.cursor = 'pointer'
 
-    const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
     const r = nodeRadius(n)
+
+    // Pulse ring for selected state
+    const activeRing = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
+    activeRing.setAttribute('r', String(r + 5))
+    activeRing.setAttribute('fill', 'none')
+    activeRing.setAttribute('stroke', nodeColorMap[n.type] || '#8c8c8c')
+    activeRing.setAttribute('stroke-width', '2')
+    activeRing.style.opacity = '0'
+    activeRing.style.transition = 'opacity 0.2s'
+    activeRing.classList.add('node-active-ring')
+    g.appendChild(activeRing)
+
+    const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
     circle.setAttribute('r', String(r))
     circle.setAttribute('fill', nodeColorMap[n.type] || '#8c8c8c')
     circle.setAttribute('stroke', '#fff')
     circle.setAttribute('stroke-width', '2')
+    circle.setAttribute('filter', 'url(#node-shadow)')
     circle.style.transition = 'r 0.2s, stroke-width 0.2s, opacity 0.2s'
     g.appendChild(circle)
+
+    // Text label wrapper for better readability
+    const textBg = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
+    g.appendChild(textBg) // we'll size this after we know text size
 
     const text = document.createElementNS('http://www.w3.org/2000/svg', 'text')
     text.setAttribute('text-anchor', 'middle')
@@ -655,22 +744,55 @@ function renderGraph() {
     text.setAttribute('font-size', '11')
     text.setAttribute('fill', 'var(--td-text-color-secondary)')
     text.setAttribute('pointer-events', 'none')
+    text.style.textShadow = '0 1px 3px var(--td-bg-color-container), 0 -1px 3px var(--td-bg-color-container), 1px 0 3px var(--td-bg-color-container), -1px 0 3px var(--td-bg-color-container)'
     text.textContent = n.title.length > 14 ? n.title.substring(0, 14) + '…' : n.title
     g.appendChild(text)
 
     // Hover highlight
     g.addEventListener('mouseenter', () => {
-      graphHighlightSlug.value = n.slug
-      applyHighlight(n.slug, adjacency, nodeEls, edgeEls)
+      // Don't change highlight on hover if we have a selected node
+      if (!graphSelectedSlug.value) {
+        graphHighlightSlug.value = n.slug
+        applyHighlight(n.slug, adjacency, nodeEls, edgeEls)
+      } else if (graphSelectedSlug.value !== n.slug) {
+        // If a node is selected, hover over others should just add to highlight
+        // but we'll keep the selected one as the main focus
+        applyHighlight(graphSelectedSlug.value, adjacency, nodeEls, edgeEls, n.slug)
+      }
     })
     g.addEventListener('mouseleave', () => {
-      graphHighlightSlug.value = null
-      clearHighlight(nodeEls, edgeEls)
+      // Only clear if we were just highlighting on hover, not selected
+      if (!graphSelectedSlug.value) {
+        graphHighlightSlug.value = null
+        clearHighlight(nodeEls, edgeEls)
+      } else {
+        // Restore pure selected state
+        applyHighlight(graphSelectedSlug.value, adjacency, nodeEls, edgeEls)
+      }
     })
 
-    // Click to open drawer
+    // Click to select & open drawer directly
     g.addEventListener('click', (e) => {
       e.stopPropagation()
+      
+      // Select and highlight
+      graphSelectedSlug.value = n.slug
+      applyHighlight(n.slug, adjacency, nodeEls, edgeEls)
+      
+      // Auto pan to center the node, shifted left for drawer
+      if (graphPanZoomRef) {
+        const container = graphRef.value
+        if (container) {
+          const width = container.clientWidth
+          const height = container.clientHeight
+          graphPanZoomRef.flyTo(
+            width / 2 - n.x * graphPanZoomRef.getScale() - 240,
+            height / 2 - n.y * graphPanZoomRef.getScale()
+          )
+        }
+      }
+      
+      // Open drawer (it will handle drawer visibility and fetching content)
       openGraphDrawer(n.slug)
     })
 
@@ -678,7 +800,7 @@ function renderGraph() {
     setupDrag(g, n, nodeMap, edgeEls, nodeEls, nodeRadius)
 
     nodeG.appendChild(g)
-    nodeEls.push({ g, circle, text, node: n })
+    nodeEls.push({ g, circle, text, activeRing, node: n })
   }
 
   // Pan & zoom on SVG background
@@ -763,12 +885,11 @@ function renderGraph() {
     }
   }
 
-  // Draw legend
-  drawLegend(svg, width)
-
-  // Store edge refs for arrow toggle
-  graphEdgeEls.value = edgeEls.map(e => ({ line: e.line, bidir: e.bidir }))
-
+  // Store node and edge refs for search and arrow toggle
+  graphNodeElsRef = nodeEls
+  graphEdgeElsRef = edgeEls.map(e => ({ line: e.line, source: e.source, target: e.target, bidir: e.bidir }))
+  graphAdjacencyRef = adjacency
+  
   graphAnimFrame = requestAnimationFrame(tick)
   graphReady.value = true
 }
@@ -796,7 +917,7 @@ function setupDrag(
   g: SVGGElement, node: GNode,
   nodeMap: Map<string, GNode>,
   edgeEls: { line: SVGLineElement; source: string; target: string; bidir: boolean }[],
-  nodeEls: { g: SVGGElement; circle: SVGCircleElement; text: SVGTextElement; node: GNode }[],
+  nodeEls: { g: SVGGElement; circle: SVGCircleElement; text: SVGTextElement; activeRing: SVGCircleElement; node: GNode }[],
   nodeRadius: (n: GNode) => number,
 ) {
   let dragging = false
@@ -865,9 +986,36 @@ function setupPanZoom(svg: SVGSVGElement, rootG: SVGGElement) {
   let translateX = 0, translateY = 0
   let panning = false
   let panStartX = 0, panStartY = 0
+  let dragStartX = 0, dragStartY = 0
 
   function applyTransform() {
     rootG.setAttribute('transform', `translate(${translateX},${translateY}) scale(${scale})`)
+  }
+
+  // Export methods for programmatic pan/zoom
+  let animId = 0
+  graphPanZoomRef = {
+    setScale: (s: number) => { scale = s },
+    setTranslate: (x: number, y: number) => { translateX = x; translateY = y },
+    apply: applyTransform,
+    getScale: () => scale,
+    flyTo: (tx: number, ty: number, s?: number, duration = 400) => {
+      cancelAnimationFrame(animId)
+      const startX = translateX, startY = translateY, startScale = scale
+      const targetScale = s || scale
+      const startTime = performance.now()
+      const animate = (time: number) => {
+        let t = (time - startTime) / duration
+        if (t > 1) t = 1
+        const ease = 1 - Math.pow(1 - t, 3) // cubic ease out
+        translateX = startX + (tx - startX) * ease
+        translateY = startY + (ty - startY) * ease
+        scale = startScale + (targetScale - startScale) * ease
+        applyTransform()
+        if (t < 1) animId = requestAnimationFrame(animate)
+      }
+      animId = requestAnimationFrame(animate)
+    }
   }
 
   // Zoom with mouse wheel
@@ -894,6 +1042,8 @@ function setupPanZoom(svg: SVGSVGElement, rootG: SVGGElement) {
       panning = true
       panStartX = e.clientX - translateX
       panStartY = e.clientY - translateY
+      dragStartX = e.clientX
+      dragStartY = e.clientY
       svg.style.cursor = 'grabbing'
     }
   })
@@ -905,10 +1055,21 @@ function setupPanZoom(svg: SVGSVGElement, rootG: SVGGElement) {
     applyTransform()
   })
 
-  window.addEventListener('mouseup', () => {
+  window.addEventListener('mouseup', (e) => {
     if (panning) {
       panning = false
       svg.style.cursor = 'default'
+      
+      // If we barely moved, consider it a click to clear selection
+      const dx = e.clientX - dragStartX
+      const dy = e.clientY - dragStartY
+      if (Math.abs(dx) < 5 && Math.abs(dy) < 5) {
+        if ((e.target as Element).tagName === 'svg' || (e.target as Element).tagName === 'SVG') {
+          graphSelectedSlug.value = null
+          graphDrawerVisible.value = false
+          clearHighlight(graphNodeElsRef, graphEdgeElsRef)
+        }
+      }
     }
   })
 }
@@ -917,28 +1078,49 @@ function setupPanZoom(svg: SVGSVGElement, rootG: SVGGElement) {
 function applyHighlight(
   slug: string,
   adjacency: Map<string, Set<string>>,
-  nodeEls: { g: SVGGElement; circle: SVGCircleElement; text: SVGTextElement; node: GNode }[],
+  nodeEls: { g: SVGGElement; circle: SVGCircleElement; text: SVGTextElement; activeRing: SVGCircleElement; node: GNode }[],
   edgeEls: { line: SVGLineElement; source: string; target: string; bidir: boolean }[],
+  hoverSlug?: string
 ) {
   const neighbors = adjacency.get(slug) || new Set()
-  for (const { g, circle, node } of nodeEls) {
+  const hoverNeighbors = hoverSlug ? (adjacency.get(hoverSlug) || new Set()) : new Set()
+  
+  for (const { g, circle, activeRing, node } of nodeEls) {
     if (node.slug === slug) {
       circle.setAttribute('r', String(Math.max(6, Math.min(18, 6 + node.linkCount * 1.5)) + 3))
       circle.setAttribute('stroke-width', '3')
       g.style.opacity = '1'
-    } else if (neighbors.has(node.slug)) {
+    } else if (hoverSlug && node.slug === hoverSlug) {
+      circle.setAttribute('r', String(Math.max(6, Math.min(18, 6 + node.linkCount * 1.5)) + 3))
+      circle.setAttribute('stroke-width', '3')
+      g.style.opacity = '1'
+    } else if (neighbors.has(node.slug) || (hoverSlug && hoverNeighbors.has(node.slug))) {
+      circle.setAttribute('r', String(Math.max(6, Math.min(18, 6 + node.linkCount * 1.5))))
+      circle.setAttribute('stroke-width', '2')
       g.style.opacity = '1'
     } else {
+      circle.setAttribute('r', String(Math.max(6, Math.min(18, 6 + node.linkCount * 1.5))))
+      circle.setAttribute('stroke-width', '2')
       g.style.opacity = '0.2'
+    }
+    
+    if (node.slug === graphSelectedSlug.value) {
+      activeRing.style.opacity = '1'
+    } else {
+      activeRing.style.opacity = '0'
     }
   }
   for (const e of edgeEls) {
-    if (e.source === slug || e.target === slug) {
+    if (e.source === slug || e.target === slug || (hoverSlug && (e.source === hoverSlug || e.target === hoverSlug))) {
       e.line.setAttribute('stroke-opacity', '0.9')
       e.line.setAttribute('stroke-width', '2')
+      
+      // Determine which node is driving the highlight color
+      const focusSlug = (hoverSlug && (e.source === hoverSlug || e.target === hoverSlug)) ? hoverSlug : slug
       const hlColor = nodeColorMap[
-        nodeEls.find(n => n.node.slug === slug)?.node.type || ''
+        nodeEls.find(n => n.node.slug === focusSlug)?.node.type || ''
       ] || '#0052d9'
+      
       e.line.setAttribute('stroke', hlColor)
       e.line.setAttribute('marker-end', 'url(#arrow-end-hl)')
       if (e.bidir) e.line.setAttribute('marker-start', 'url(#arrow-start-hl)')
@@ -953,13 +1135,19 @@ function applyHighlight(
 }
 
 function clearHighlight(
-  nodeEls: { g: SVGGElement; circle: SVGCircleElement; text: SVGTextElement; node: GNode }[],
+  nodeEls: { g: SVGGElement; circle: SVGCircleElement; text: SVGTextElement; activeRing: SVGCircleElement; node: GNode }[],
   edgeEls: { line: SVGLineElement; source: string; target: string; bidir: boolean }[],
 ) {
-  for (const { g, circle, node } of nodeEls) {
+  if (graphSelectedSlug.value) {
+    applyHighlight(graphSelectedSlug.value, graphAdjacencyRef, nodeEls, edgeEls)
+    return
+  }
+
+  for (const { g, circle, activeRing, node } of nodeEls) {
     circle.setAttribute('r', String(Math.max(6, Math.min(18, 6 + node.linkCount * 1.5))))
     circle.setAttribute('stroke-width', '2')
     g.style.opacity = '1'
+    activeRing.style.opacity = '0'
   }
   for (const e of edgeEls) {
     e.line.setAttribute('stroke', '#c0c4cc')
@@ -971,92 +1159,64 @@ function clearHighlight(
   }
 }
 
-// ─── Legend ───
-function drawLegend(svg: SVGSVGElement, width: number) {
-  const legendG = document.createElementNS('http://www.w3.org/2000/svg', 'g')
-  legendG.setAttribute('transform', `translate(${width - 140}, 16)`)
+const graphSearchOptions = computed(() => {
+  if (!graphData.value?.nodes) return []
+  return graphData.value.nodes.map(n => ({
+    label: n.title,
+    value: n.slug
+  }))
+})
 
-  // Background
-  const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
-  bg.setAttribute('x', '-8'); bg.setAttribute('y', '-4')
-  bg.setAttribute('width', '132'); bg.setAttribute('rx', '6')
-  bg.setAttribute('fill', 'var(--td-bg-color-container)')
-  bg.setAttribute('fill-opacity', '0.9')
-  bg.setAttribute('stroke', 'var(--td-component-stroke)')
-  bg.setAttribute('stroke-width', '1')
-  legendG.appendChild(bg)
+let graphNodeElsRef: { g: SVGGElement; circle: SVGCircleElement; text: SVGTextElement; activeRing: SVGCircleElement; node: GNode }[] = []
+let graphEdgeElsRef: { line: SVGLineElement; source: string; target: string; bidir: boolean }[] = []
+let graphAdjacencyRef = new Map<string, Set<string>>()
 
-  const types = [
-    { type: 'summary', label: t('knowledgeEditor.wikiBrowser.filterSummary') },
-    { type: 'entity', label: t('knowledgeEditor.wikiBrowser.filterEntity') },
-    { type: 'concept', label: t('knowledgeEditor.wikiBrowser.filterConcept') },
-    { type: 'synthesis', label: t('knowledgeEditor.wikiBrowser.filterSynthesis') },
-    { type: 'comparison', label: t('knowledgeEditor.wikiBrowser.filterComparison') },
-  ]
-
-  let y = 10
-  for (const { type, label } of types) {
-    const dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
-    dot.setAttribute('cx', '6'); dot.setAttribute('cy', String(y))
-    dot.setAttribute('r', '5'); dot.setAttribute('fill', nodeColorMap[type])
-    legendG.appendChild(dot)
-
-    const txt = document.createElementNS('http://www.w3.org/2000/svg', 'text')
-    txt.setAttribute('x', '18'); txt.setAttribute('y', String(y + 4))
-    txt.setAttribute('font-size', '11')
-    txt.setAttribute('fill', 'var(--td-text-color-secondary)')
-    txt.textContent = label
-    legendG.appendChild(txt)
-
-    y += 22
+function handleGraphSearchSelect(value: string) {
+  if (!value) return
+  
+  // Find node coordinates
+  const node = graphNodes.find(n => n.slug === value)
+  if (node && graphPanZoomRef) {
+    const container = graphRef.value
+    if (container) {
+      const width = container.clientWidth
+      const height = container.clientHeight
+      // Center node while maintaining current scale, shifted left by 240px to account for the 480px drawer
+      const currentScale = graphPanZoomRef.getScale()
+      graphPanZoomRef.flyTo(
+        width / 2 - node.x * currentScale - 240,
+        height / 2 - node.y * currentScale
+      )
+    }
   }
 
-  // Divider line
-  y += 4
-  const divider = document.createElementNS('http://www.w3.org/2000/svg', 'line')
-  divider.setAttribute('x1', '-2'); divider.setAttribute('x2', '118')
-  divider.setAttribute('y1', String(y)); divider.setAttribute('y2', String(y))
-  divider.setAttribute('stroke', 'var(--td-component-stroke)')
-  divider.setAttribute('stroke-width', '1')
-  legendG.appendChild(divider)
-  y += 12
+  // Trigger highlight
+  graphSelectedSlug.value = value
+  graphHighlightSlug.value = value
+  if (graphNodeElsRef.length > 0) {
+    applyHighlight(value, graphAdjacencyRef, graphNodeElsRef, graphEdgeElsRef)
+  }
 
-  // Arrow toggle row
-  const arrowRow = document.createElementNS('http://www.w3.org/2000/svg', 'g')
-  arrowRow.style.cursor = 'pointer'
+  // Open drawer automatically when searching
+  openGraphDrawer(value)
 
-  // Arrow icon (small →)
-  const arrowIcon = document.createElementNS('http://www.w3.org/2000/svg', 'text')
-  arrowIcon.setAttribute('x', '3'); arrowIcon.setAttribute('y', String(y + 3))
-  arrowIcon.setAttribute('font-size', '13')
-  arrowIcon.setAttribute('fill', showArrows.value ? 'var(--td-brand-color)' : 'var(--td-text-color-placeholder)')
-  arrowIcon.textContent = '→'
-  arrowRow.appendChild(arrowIcon)
+  // Clear search input after selection to be ready for next search
+  setTimeout(() => { graphSearchValue.value = '' }, 300)
+}
 
-  const arrowLabel = document.createElementNS('http://www.w3.org/2000/svg', 'text')
-  arrowLabel.setAttribute('x', '18'); arrowLabel.setAttribute('y', String(y + 4))
-  arrowLabel.setAttribute('font-size', '11')
-  arrowLabel.setAttribute('fill', showArrows.value ? 'var(--td-brand-color)' : 'var(--td-text-color-secondary)')
-  arrowLabel.textContent = showArrows.value
-    ? t('knowledgeEditor.wikiBrowser.hideArrows')
-    : t('knowledgeEditor.wikiBrowser.showArrows')
-  arrowRow.appendChild(arrowLabel)
-
-  arrowRow.addEventListener('click', () => {
-    toggleArrows()
-    // Update label & color after toggle
-    arrowLabel.textContent = showArrows.value
-      ? t('knowledgeEditor.wikiBrowser.hideArrows')
-      : t('knowledgeEditor.wikiBrowser.showArrows')
-    arrowLabel.setAttribute('fill', showArrows.value ? 'var(--td-brand-color)' : 'var(--td-text-color-secondary)')
-    arrowIcon.setAttribute('fill', showArrows.value ? 'var(--td-brand-color)' : 'var(--td-text-color-placeholder)')
-  })
-
-  legendG.appendChild(arrowRow)
-  y += 16
-
-  bg.setAttribute('height', String(y + 4))
-  svg.appendChild(legendG)
+function handleGraphSearchEnter(context: { inputValue: string }) {
+  const value = context.inputValue?.trim()
+  if (!value) return
+  
+  // Try to find exact or partial match
+  const match = graphSearchOptions.value.find(opt => 
+    opt.label.toLowerCase().includes(value.toLowerCase()) || 
+    opt.value.toLowerCase().includes(value.toLowerCase())
+  )
+  
+  if (match) {
+    handleGraphSearchSelect(match.value)
+  }
 }
 
 // Load graph when switching to graph view
@@ -1523,9 +1683,114 @@ onMounted(() => {
   height: 100%;
 }
 
+.wiki-graph-search {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  width: 280px;
+  z-index: 10;
+  box-shadow: var(--td-shadow-1);
+  border-radius: 4px;
+}
+
+:deep(.wiki-graph-drawer) {
+  box-shadow: -4px 0 16px rgba(0, 0, 0, 0.08);
+}
+
+.graph-search-select {
+  background: var(--td-bg-color-container) !important;
+  opacity: 0.95;
+}
+
 .wiki-graph-canvas {
   width: 100%;
   height: 100%;
   min-height: 500px;
+}
+
+.wiki-graph-legend {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  background: var(--td-bg-color-container);
+  border: 1px solid var(--td-component-stroke);
+  border-radius: 6px;
+  padding: 10px 12px;
+  box-shadow: var(--td-shadow-1);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  z-index: 10;
+  opacity: 0.95;
+}
+
+.legend-items {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--td-text-color-secondary);
+}
+
+.legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+.legend-divider {
+  height: 1px;
+  background: var(--td-component-stroke);
+  margin: 0 -12px;
+}
+
+.legend-action {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--td-text-color-secondary);
+  cursor: pointer;
+  user-select: none;
+  transition: all 0.15s;
+
+  &:hover {
+    color: var(--td-brand-color);
+    .legend-action-icon {
+      color: var(--td-brand-color);
+    }
+  }
+  
+  &.active {
+    color: var(--td-brand-color);
+    .legend-action-icon {
+      color: var(--td-brand-color);
+    }
+  }
+}
+
+.legend-action-icon {
+  font-size: 13px;
+  font-family: monospace;
+  color: var(--td-text-color-placeholder);
+  transition: color 0.15s;
+}
+
+@keyframes node-active-pulse {
+  0% { transform: scale(1); opacity: 0.8; }
+  100% { transform: scale(1.6); opacity: 0; }
+}
+
+.node-active-ring {
+  transform-origin: 0 0;
+  animation: node-active-pulse 1.5s cubic-bezier(0.25, 0.46, 0.45, 0.94) infinite;
 }
 </style>
