@@ -561,7 +561,7 @@ func (s *wikiIngestService) processOneDocument(
 	}
 
 	// Step 1: Extract entities and concepts
-	extractedPages, err := s.extractEntitiesAndConcepts(ctx, chatModel, content, docTitle, lang, docPayload, sourceRef, oldPageSlugs)
+	extractedPages, slugNames, err := s.extractEntitiesAndConcepts(ctx, chatModel, content, docTitle, lang, docPayload, sourceRef, oldPageSlugs)
 	if err != nil {
 		logger.Warnf(ctx, "wiki ingest: knowledge extraction failed for %s: %v", knowledgeID, err)
 	} else {
@@ -572,7 +572,11 @@ func (s *wikiIngestService) processOneDocument(
 	summarySlug := fmt.Sprintf("summary/%s", slugify(docTitle))
 	var slugListing string
 	for _, slug := range extractedPages {
-		slugListing += fmt.Sprintf("- [[%s]]\n", slug)
+		if name, ok := slugNames[slug]; ok {
+			slugListing += fmt.Sprintf("- [[%s]] = %s\n", slug, name)
+		} else {
+			slugListing += fmt.Sprintf("- [[%s]]\n", slug)
+		}
 	}
 	summaryContent, err := s.generateWithTemplate(ctx, chatModel, agent.WikiSummaryPrompt, map[string]string{
 		"Title":          docTitle,
@@ -921,7 +925,8 @@ type combinedExtraction struct {
 }
 
 // extractEntitiesAndConcepts performs a single LLM call to extract both entities and concepts,
-// then upserts pages for each. Returns the list of successfully upserted page slugs.
+// then upserts pages for each. Returns the list of successfully upserted page slugs and
+// a slug→display name map for building wiki-link references.
 // oldPageSlugs contains slugs from the previous version of this document — passed to LLM for slug stability.
 func (s *wikiIngestService) extractEntitiesAndConcepts(
 	ctx context.Context,
@@ -930,7 +935,7 @@ func (s *wikiIngestService) extractEntitiesAndConcepts(
 	payload WikiIngestPayload,
 	sourceRef string,
 	oldPageSlugs map[string]bool,
-) ([]string, error) {
+) ([]string, map[string]string, error) {
 	// Build previous slugs listing for the prompt
 	var prevSlugsText string
 	if len(oldPageSlugs) > 0 {
@@ -951,7 +956,7 @@ func (s *wikiIngestService) extractEntitiesAndConcepts(
 		"PreviousSlugs": prevSlugsText,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("combined extraction failed: %w", err)
+		return nil, nil, fmt.Errorf("combined extraction failed: %w", err)
 	}
 
 	// Clean JSON - strip markdown code blocks if present
@@ -964,7 +969,7 @@ func (s *wikiIngestService) extractEntitiesAndConcepts(
 	var result combinedExtraction
 	if err := json.Unmarshal([]byte(extractionJSON), &result); err != nil {
 		logger.Warnf(ctx, "wiki ingest: failed to parse combined extraction JSON: %v\nRaw: %s", err, truncateString(extractionJSON, 500))
-		return nil, fmt.Errorf("parse combined extraction JSON: %w", err)
+		return nil, nil, fmt.Errorf("parse combined extraction JSON: %w", err)
 	}
 
 	var affected []string
@@ -974,6 +979,19 @@ func (s *wikiIngestService) extractEntitiesAndConcepts(
 
 	// Deduplicate concepts against existing wiki pages (LLM-based)
 	result.Concepts = s.deduplicateItems(ctx, chatModel, result.Concepts, types.WikiPageTypeConcept, payload.KnowledgeBaseID)
+
+	// Build slug→name map for wiki-link generation in summary pages
+	slugNames := make(map[string]string)
+	for _, item := range result.Entities {
+		if item.Slug != "" && item.Name != "" {
+			slugNames[item.Slug] = item.Name
+		}
+	}
+	for _, item := range result.Concepts {
+		if item.Slug != "" && item.Name != "" {
+			slugNames[item.Slug] = item.Name
+		}
+	}
 
 	// Upsert entity pages
 	entitySlugs, err := s.upsertExtractedPages(ctx, chatModel, result.Entities, types.WikiPageTypeEntity, docTitle, lang, payload, sourceRef)
@@ -991,7 +1009,7 @@ func (s *wikiIngestService) extractEntitiesAndConcepts(
 		affected = append(affected, conceptSlugs...)
 	}
 
-	return affected, nil
+	return affected, slugNames, nil
 }
 
 // upsertExtractedPages creates or updates wiki pages from pre-extracted items.
