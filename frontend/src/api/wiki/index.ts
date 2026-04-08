@@ -11,6 +11,7 @@ export interface WikiPage {
   status: string;
   content: string;
   summary: string;
+  aliases: string[];
   source_refs: string[];
   in_links: string[];
   out_links: string[];

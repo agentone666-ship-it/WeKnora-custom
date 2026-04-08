@@ -65,6 +65,7 @@ If previous slugs are provided above, you MUST follow these rules:
 Each entity should have:
 - "name": The entity name in {{.Language}} (human-readable)
 - "slug": URL-friendly slug, format "entity/<lowercase-hyphenated-name>" (use romanized/pinyin form for non-Latin names). **Reuse previous slug if the entity was extracted before.**
+- "aliases": An array of strings representing alternative names, abbreviations, acronyms or translations of the entity found in the document. Provide [] if none.
 - "description": **Index listing summary** — one sentence, 15-40 words, in {{.Language}}. Describes WHAT this entity IS and its role in the document. Must be self-contained (understandable without reading the full page). This will be displayed in the wiki index.
 - "details": A 2-5 sentence summary in {{.Language}} of key facts from the document. **Image rule**: If the document contains relevant <image> elements in an <images> tag, include them in the details using Markdown syntax: ![caption](url).
 
@@ -74,6 +75,7 @@ Only include entities that are substantively discussed (mentioned at least twice
 Each concept should have:
 - "name": The concept name in {{.Language}} (human-readable)
 - "slug": URL-friendly slug, format "concept/<lowercase-hyphenated-name>" (use romanized/pinyin form for non-Latin names). **Reuse previous slug if the concept was extracted before.**
+- "aliases": An array of strings representing alternative names, abbreviations, acronyms or translations of the concept found in the document. Provide [] if none.
 - "description": **Index listing summary** — one sentence, 15-40 words, in {{.Language}}. Defines WHAT this concept IS. Must be self-contained (understandable without reading the full page). This will be displayed in the wiki index.
 - "details": A 2-5 sentence explanation in {{.Language}} as discussed in the document. **Image rule**: If the document contains relevant <image> elements in an <images> tag, include them in the details using Markdown syntax: ![caption](url).
 
@@ -91,6 +93,7 @@ Output ONLY valid JSON. Example:
     {
       "name": "Acme Corp",
       "slug": "entity/acme-corp",
+      "aliases": ["Acme", "Acme Corporation"],
       "description": "A technology company specializing in AI solutions.",
       "details": "Acme Corp was founded in 2020 and has grown to 500 employees. They focus on enterprise AI products and recently launched their flagship RAG platform."
     }
@@ -99,6 +102,7 @@ Output ONLY valid JSON. Example:
     {
       "name": "Retrieval-Augmented Generation",
       "slug": "concept/retrieval-augmented-generation",
+      "aliases": ["RAG"],
       "description": "A technique that combines information retrieval with language model generation.",
       "details": "RAG works by first retrieving relevant documents from a knowledge base using vector similarity search, then feeding those documents as context to an LLM for answer generation."
     }

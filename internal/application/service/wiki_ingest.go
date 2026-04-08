@@ -916,10 +916,11 @@ func (s *wikiIngestService) retractStalePages(
 
 // extractedItem represents a single extracted entity or concept
 type extractedItem struct {
-	Name        string `json:"name"`
-	Slug        string `json:"slug"`
-	Description string `json:"description"`
-	Details     string `json:"details"`
+	Name        string   `json:"name"`
+	Slug        string   `json:"slug"`
+	Aliases     []string `json:"aliases"`
+	Description string   `json:"description"`
+	Details     string   `json:"details"`
 }
 
 // combinedExtraction represents the parsed result of the combined entity+concept extraction
@@ -1057,6 +1058,19 @@ func (s *wikiIngestService) upsertExtractedPages(
 			if updatedSummary != "" {
 				existing.Summary = updatedSummary
 			}
+			if len(item.Aliases) > 0 {
+				// Merge new aliases with existing ones, deduplicating
+				aliasMap := make(map[string]bool)
+				for _, alias := range existing.Aliases {
+					aliasMap[alias] = true
+				}
+				for _, newAlias := range item.Aliases {
+					if !aliasMap[newAlias] {
+						existing.Aliases = append(existing.Aliases, newAlias)
+						aliasMap[newAlias] = true
+					}
+				}
+			}
 			existing.SourceRefs = appendUnique(existing.SourceRefs, sourceRef)
 
 			if _, err := s.wikiService.UpdatePage(ctx, existing); err != nil {
@@ -1075,6 +1089,7 @@ func (s *wikiIngestService) upsertExtractedPages(
 				KnowledgeBaseID: payload.KnowledgeBaseID,
 				Slug:            item.Slug,
 				Title:           item.Name,
+				Aliases:         item.Aliases,
 				PageType:        pageType,
 				Status:          types.WikiPageStatusDraft,
 				Content:         pageContent,
@@ -1310,13 +1325,21 @@ func (s *wikiIngestService) deduplicateItems(
 	// Build existing pages listing
 	var existingBuf strings.Builder
 	for _, p := range typedPages {
-		fmt.Fprintf(&existingBuf, "- slug: %s | title: %s\n", p.Slug, p.Title)
+		aliases := ""
+		if len(p.Aliases) > 0 {
+			aliases = fmt.Sprintf(" | aliases: %s", strings.Join(p.Aliases, ", "))
+		}
+		fmt.Fprintf(&existingBuf, "- slug: %s | title: %s%s\n", p.Slug, p.Title, aliases)
 	}
 
 	// Build new items listing
 	var newBuf strings.Builder
 	for _, item := range items {
-		fmt.Fprintf(&newBuf, "- slug: %s | name: %s\n", item.Slug, item.Name)
+		aliases := ""
+		if len(item.Aliases) > 0 {
+			aliases = fmt.Sprintf(" | aliases: %s", strings.Join(item.Aliases, ", "))
+		}
+		fmt.Fprintf(&newBuf, "- slug: %s | name: %s%s\n", item.Slug, item.Name, aliases)
 	}
 
 	// Call LLM for deduplication

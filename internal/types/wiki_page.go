@@ -63,6 +63,8 @@ type WikiPage struct {
 	Content string `json:"content" gorm:"type:text"`
 	// One-line summary for index listing
 	Summary string `json:"summary" gorm:"type:text"`
+	// Alternate names, abbreviations, acronyms or translated names
+	Aliases StringArray `json:"aliases" gorm:"type:json"`
 	// References to source knowledge IDs that contributed to this page
 	SourceRefs StringArray `json:"source_refs" gorm:"type:json"`
 	// Slugs of pages that link TO this page (backlinks)

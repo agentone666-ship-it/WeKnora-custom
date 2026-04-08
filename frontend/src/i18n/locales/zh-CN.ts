@@ -2132,6 +2132,7 @@ export default {
       emptyDesc: "上传文档并启用 Wiki 后将自动生成知识页面",
       selectPageHint: "从左侧选择一个页面查看内容",
       version: "v{ver}",
+      aliases: "别名",
       linksTo: "链接到",
       linkedFrom: "被链接",
       sources: "来源文档",

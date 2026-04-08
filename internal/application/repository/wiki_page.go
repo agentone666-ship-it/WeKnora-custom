@@ -118,10 +118,11 @@ func (r *wikiPageRepository) List(ctx context.Context, req *types.WikiPageListRe
 		query = query.Where("status = ?", req.Status)
 	}
 	if req.Query != "" {
-		// Use PostgreSQL full-text search
+		// Use PostgreSQL full-text search + ILIKE for aliases
 		query = query.Where(
-			"to_tsvector('simple', coalesce(title, '') || ' ' || coalesce(content, '')) @@ plainto_tsquery('simple', ?)",
+			"(to_tsvector('simple', coalesce(title, '') || ' ' || coalesce(content, '')) @@ plainto_tsquery('simple', ?) OR aliases::text ILIKE ?)",
 			req.Query,
+			"%"+req.Query+"%",
 		)
 	}
 

@@ -182,6 +182,12 @@
               <!-- Page header -->
               <div class="wiki-reader-header">
                 <h2 class="wiki-reader-title">{{ selectedPage.title }}</h2>
+                <div v-if="selectedPage.aliases && selectedPage.aliases.length" class="wiki-reader-aliases">
+                  <span class="wiki-alias-label">{{ $t('knowledgeEditor.wikiBrowser.aliases') }}:</span>
+                  <t-tag v-for="alias in selectedPage.aliases" :key="alias" size="small" variant="light" class="wiki-alias-tag">
+                    {{ alias }}
+                  </t-tag>
+                </div>
                 <div class="wiki-reader-meta">
                   <t-tag size="small" :theme="getTypeTheme(selectedPage.page_type)" variant="light-outline">
                     {{ getTypeLabel(selectedPage.page_type) }}
