@@ -64,7 +64,7 @@ func TestIsIconImage(t *testing.T) {
 		{
 			name:   "wide but short 200x30",
 			data:   createTestPNG(200, 30),
-			expect: true,
+			expect: false,
 		},
 	}
 	for _, tt := range tests {

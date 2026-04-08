@@ -255,7 +255,8 @@ func (c *RemoteAPIChat) BuildChatCompletionRequest(messages []Message, opts *Cha
 
 		// 处理 ParallelToolCalls
 		if opts.ParallelToolCalls != nil {
-			req.ParallelToolCalls = *opts.ParallelToolCalls
+			val := *opts.ParallelToolCalls
+			req.ParallelToolCalls = val
 		}
 
 		// 处理 ToolChoice（标准实现）
