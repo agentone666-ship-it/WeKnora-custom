@@ -30,9 +30,14 @@ func TestParseOutLinks(t *testing.T) {
 			want:    []string{"entity/acme-corp"},
 		},
 		{
-			name:    "pipe syntax: title|slug",
-			content: "See [[Acme Corp|entity/acme-corp]] for details.",
+			name:    "pipe syntax: slug|display name",
+			content: "See [[entity/acme-corp|Acme Corp]] for details.",
 			want:    []string{"entity/acme-corp"},
+		},
+		{
+			name:    "mixed: pipe and bare links",
+			content: "See [[entity/acme-corp|Acme Corp]] and [[concept/rag]] here.",
+			want:    []string{"entity/acme-corp", "concept/rag"},
 		},
 		{
 			name:    "no links",

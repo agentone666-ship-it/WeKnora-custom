@@ -352,9 +352,9 @@ func (s *wikiPageService) parseOutLinks(content string) types.StringArray {
 	for _, match := range matches {
 		if len(match) > 1 {
 			slug := strings.TrimSpace(match[1])
-			// Handle [[Title|slug]] format
+			// Handle [[slug|display name]] format — slug is the first part
 			if parts := strings.SplitN(slug, "|", 2); len(parts) == 2 {
-				slug = strings.TrimSpace(parts[1])
+				slug = strings.TrimSpace(parts[0])
 			}
 			slug = normalizeSlug(slug)
 			if slug != "" && !seen[slug] {

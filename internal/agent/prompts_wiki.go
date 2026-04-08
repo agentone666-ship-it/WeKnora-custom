@@ -25,7 +25,7 @@ const WikiSummaryPrompt = `You are a wiki editor. Given the following document c
 2. After the SUMMARY line, write a comprehensive summary of the document in Markdown format.
 3. Include the key facts, arguments, and conclusions.
 4. Use proper heading hierarchy (## for sections, ### for subsections).
-5. **Wiki-link rule**: The available_wiki_pages list above maps slugs to display names (e.g. "[[entity/zhong-guo]] = 中国"). Whenever you mention a name that matches a listed entry, you MUST write it as [[slug]] (e.g. [[entity/zhong-guo]]), NOT as bold (**name**) or plain text. Use the EXACT slugs provided — do NOT invent new slugs.
+5. **Wiki-link rule**: The available_wiki_pages list above maps slugs to display names (format: "[[slug]] = display name"). Whenever you mention a name that matches a listed entry, you MUST write it as [[slug|display name]] (e.g. [[entity/zhong-guo|中国]]), NOT as bold (**name**) or bare [[slug]]. Use the EXACT slugs provided — do NOT invent new slugs.
 6. At the end, include a "## Key Takeaways" section with bullet points.
 7. Write in {{.Language}}.
 8. Keep the summary concise but thorough (500-1500 words depending on document length).
@@ -124,7 +124,7 @@ const WikiPageUpdatePrompt = `You are a wiki editor tasked with updating an exis
 3. Preserve all existing information that is still valid.
 4. If the new information contradicts existing content, prefer the newer information and silently replace the old claim.
 5. Add new facts, details, and context from the new document.
-6. Preserve any existing [[wiki-link]] references in the content. Do NOT invent new wiki-link slugs.
+6. Preserve any existing [[slug|name]] wiki-link references in the content. Do NOT invent new wiki-link slugs.
 7. Maintain the existing page structure and formatting style.
 8. Add a source reference to the new document at the bottom.
 9. Write in {{.Language}}.
@@ -161,7 +161,7 @@ const WikiPageRetractPrompt = `You are a wiki editor. A source document has been
 4. If a fact is also supported by the remaining source documents, KEEP it.
 5. If you are unsure whether a fact came from the deleted document, keep it as-is — do NOT add any review notes or annotations.
 6. Update or remove the "Source: {{.DeletedDocTitle}}" reference line if present.
-7. Keep [[wiki-link]] references ONLY if the slug appears in the <valid_wiki_links> list above. Remove any [[wiki-link]] whose slug is NOT in that list.
+7. Keep [[slug|name]] wiki-link references ONLY if the slug appears in the <valid_wiki_links> list above. Remove any [[slug|name]] whose slug is NOT in that list.
 8. Maintain the existing page structure, formatting style, and language.
 9. If after removing the deleted document's contributions the page becomes nearly empty, output just: "SUMMARY: (empty page)\n# [Title]\n\n*This page's primary source document was removed.*"
 10. Write in {{.Language}}.
@@ -247,7 +247,7 @@ Use wiki_write_page to persist valuable knowledge artifacts. Write a page when:
 
 #### Page Content Guidelines
 - Write in Markdown with proper heading hierarchy
-- Use [[entity/slug]] and [[concept/slug]] syntax to link to other wiki pages
+- Use [[slug|display name]] syntax to link to other wiki pages (e.g. [[entity/acme-corp|Acme Corp]])
 - Include a one-line summary in the first paragraph (used for index listings)
 - Cite source documents when possible
 - Keep pages focused: one topic/entity/concept per page

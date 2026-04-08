@@ -746,19 +746,15 @@ func (s *wikiIngestService) injectCrossLinks(ctx context.Context, kbID string, a
 		changed := false
 
 		for _, ref := range allRefs {
-			// Don't self-link
 			if ref.slug == p.Slug {
 				continue
 			}
-			// Skip if already linked with this slug
-			if strings.Contains(content, "[["+ref.slug+"]]") {
+			// Skip if already linked with this slug (either [[slug]] or [[slug|...]])
+			if strings.Contains(content, "[["+ref.slug+"|") || strings.Contains(content, "[["+ref.slug+"]]") {
 				continue
 			}
-			// Replace title mentions with [[slug]] link
-			// Only replace if the title appears as a standalone term (not inside an existing link)
 			if strings.Contains(content, ref.title) {
-				// Replace first occurrence only (avoid over-linking)
-				content = replaceFirstOutsideLinks(content, ref.title, ref.title+" [["+ref.slug+"]]")
+				content = replaceFirstOutsideLinks(content, ref.title, "[["+ref.slug+"|"+ref.title+"]]")
 				changed = true
 			}
 		}

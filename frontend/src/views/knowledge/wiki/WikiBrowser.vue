@@ -288,8 +288,12 @@ const graphDrawerContent = computed(() => {
 
 function renderMarkdown(content: string): string {
   let html = content
-  html = html.replace(/\[\[([^\]]+)\]\]/g, (_, slug) =>
-    `<a href="#" class="wiki-content-link" data-slug="${slug}">[[${slug}]]</a>`)
+  html = html.replace(/\[\[([^\]]+)\]\]/g, (_, inner: string) => {
+    const pipeIdx = inner.indexOf('|')
+    const slug = pipeIdx > 0 ? inner.substring(0, pipeIdx).trim() : inner.trim()
+    const display = pipeIdx > 0 ? inner.substring(pipeIdx + 1).trim() : slugDisplayName(slug)
+    return `<a href="#" class="wiki-content-link" data-slug="${slug}">${display}</a>`
+  })
   html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>')
   html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>')
   html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>')
@@ -1290,13 +1294,9 @@ onMounted(() => {
   :deep(.wiki-content-link) {
     color: var(--td-brand-color);
     text-decoration: none;
-    font-family: monospace;
-    font-size: 13px;
-    padding: 1px 4px;
-    background: rgba(7, 192, 95, 0.06);
-    border-radius: 3px;
+    border-bottom: 1px dashed var(--td-brand-color);
     cursor: pointer;
-    &:hover { background: rgba(7, 192, 95, 0.12); }
+    &:hover { border-bottom-style: solid; }
   }
 }
 
