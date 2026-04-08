@@ -577,10 +577,10 @@ func (w *weaviateRepository) VectorRetrieve(ctx context.Context,
 		log.Errorf("[Weaviate] Vector search failed: %v", err)
 		return nil, fmt.Errorf("failed to search: %w", err)
 	}
-		if len(result.Errors) > 0 {
-			log.Errorf("[Weaviate] Vector search failed: %v", result.Errors)
-			return nil, fmt.Errorf("graphql search failed: %s", result.Errors[0].Message)
-		}
+	if len(result.Errors) > 0 {
+		log.Errorf("[Weaviate] Vector search failed: %v", result.Errors)
+		return nil, fmt.Errorf("graphql search failed: %s", result.Errors[0].Message)
+	}
 
 	data, ok := result.Data["Get"].(map[string]interface{})
 	if !ok || data[collectionName] == nil {
