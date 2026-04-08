@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"text/template"
 	"time"
@@ -72,6 +73,7 @@ type WikiRetractPayload struct {
 type wikiIngestService struct {
 	wikiService  interfaces.WikiPageService
 	kbService    interfaces.KnowledgeBaseService
+	knowledgeSvc interfaces.KnowledgeService
 	chunkRepo    interfaces.ChunkRepository
 	modelService interfaces.ModelService
 	task         interfaces.TaskEnqueuer
@@ -82,6 +84,7 @@ type wikiIngestService struct {
 func NewWikiIngestService(
 	wikiService interfaces.WikiPageService,
 	kbService interfaces.KnowledgeBaseService,
+	knowledgeSvc interfaces.KnowledgeService,
 	chunkRepo interfaces.ChunkRepository,
 	modelService interfaces.ModelService,
 	task interfaces.TaskEnqueuer,
@@ -90,6 +93,7 @@ func NewWikiIngestService(
 	svc := &wikiIngestService{
 		wikiService:  wikiService,
 		kbService:    kbService,
+		knowledgeSvc: knowledgeSvc,
 		chunkRepo:    chunkRepo,
 		modelService: modelService,
 		task:         task,
@@ -535,12 +539,16 @@ func (s *wikiIngestService) processOneDocument(
 
 	// Get document title
 	docTitle := knowledgeID
-	for _, ch := range chunks {
-		if ch.Content != "" {
-			lines := strings.SplitN(ch.Content, "\n", 2)
-			if len(lines) > 0 && len(lines[0]) > 0 && len(lines[0]) < 200 {
-				docTitle = strings.TrimPrefix(strings.TrimSpace(lines[0]), "# ")
-				break
+	if kn, err := s.knowledgeSvc.GetKnowledgeByIDOnly(ctx, knowledgeID); err == nil && kn != nil && kn.Title != "" {
+		docTitle = kn.Title
+	} else {
+		for _, ch := range chunks {
+			if ch.Content != "" {
+				lines := strings.SplitN(ch.Content, "\n", 2)
+				if len(lines) > 0 && len(lines[0]) > 0 && len(lines[0]) < 200 {
+					docTitle = strings.TrimPrefix(strings.TrimSpace(lines[0]), "# ")
+					break
+				}
 			}
 		}
 	}
@@ -1389,20 +1397,89 @@ func reconstructContent(chunks []*types.Chunk) string {
 		}
 	}
 
-	// Sort by chunk index
-	for i := 0; i < len(textChunks); i++ {
-		for j := i + 1; j < len(textChunks); j++ {
-			if textChunks[i].ChunkIndex > textChunks[j].ChunkIndex {
-				textChunks[i], textChunks[j] = textChunks[j], textChunks[i]
+	// Sort by StartAt, then ChunkIndex
+	sort.Slice(textChunks, func(i, j int) bool {
+		if textChunks[i].StartAt == textChunks[j].StartAt {
+			return textChunks[i].ChunkIndex < textChunks[j].ChunkIndex
+		}
+		return textChunks[i].StartAt < textChunks[j].StartAt
+	})
+
+	var sb strings.Builder
+	lastEndAt := -1
+	for _, c := range textChunks {
+		toAppend := c.Content
+
+		if c.StartAt > lastEndAt || c.EndAt == 0 {
+			// Non-overlapping or missing position info
+			if sb.Len() > 0 {
+				sb.WriteString("\n")
+			}
+			sb.WriteString(toAppend)
+			if c.EndAt > 0 {
+				lastEndAt = c.EndAt
+			}
+		} else if c.EndAt > lastEndAt {
+			// Partial overlap
+			contentRunes := []rune(toAppend)
+			offset := len(contentRunes) - (c.EndAt - lastEndAt)
+			if offset >= 0 && offset < len(contentRunes) {
+				sb.WriteString(string(contentRunes[offset:]))
+			} else {
+				// Fallback if offset calculation is invalid
+				if sb.Len() > 0 {
+					sb.WriteString("\n")
+				}
+				sb.WriteString(toAppend)
+			}
+			lastEndAt = c.EndAt
+		}
+		// If c.EndAt <= lastEndAt, it's fully contained, so skip appending text
+	}
+
+	// Append image information at the end to avoid interrupting text flow
+	var hasImages bool
+	seenURLs := make(map[string]bool)
+	for _, c := range textChunks {
+		if c.ImageInfo != "" {
+			var imageInfos []types.ImageInfo
+			if err := json.Unmarshal([]byte(c.ImageInfo), &imageInfos); err == nil && len(imageInfos) > 0 {
+				for _, img := range imageInfos {
+					// Deduplicate images by URL to avoid printing the same image multiple times from overlapping chunks
+					if img.URL != "" {
+						if seenURLs[img.URL] {
+							continue
+						}
+						seenURLs[img.URL] = true
+					}
+
+					if !hasImages {
+						sb.WriteString("\n\n<images>\n")
+						hasImages = true
+					} else {
+						sb.WriteString("\n")
+					}
+
+					sb.WriteString("<image>\n")
+					if img.URL != "" {
+						sb.WriteString(fmt.Sprintf("  <url>%s</url>\n", img.URL))
+					}
+					if img.Caption != "" {
+						sb.WriteString(fmt.Sprintf("  <caption>%s</caption>\n", img.Caption))
+					}
+					if img.OCRText != "" {
+						sb.WriteString(fmt.Sprintf("  <ocr_text>%s</ocr_text>\n", img.OCRText))
+					}
+					sb.WriteString("</image>\n")
+				}
 			}
 		}
 	}
 
-	var sb strings.Builder
-	for _, c := range textChunks {
-		sb.WriteString(c.Content)
-		sb.WriteString("\n")
+	if hasImages {
+		sb.WriteString("</images>\n")
 	}
+
 	return sb.String()
 }
 
