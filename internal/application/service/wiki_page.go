@@ -20,9 +20,9 @@ var wikiLinkRegex = regexp.MustCompile(`\[\[([^\]]+)\]\]`)
 
 // wikiPageService implements the WikiPageService interface
 type wikiPageService struct {
-	repo         interfaces.WikiPageRepository
-	chunkRepo    interfaces.ChunkRepository
-	kbService    interfaces.KnowledgeBaseService
+	repo      interfaces.WikiPageRepository
+	chunkRepo interfaces.ChunkRepository
+	kbService interfaces.KnowledgeBaseService
 }
 
 // NewWikiPageService creates a new wiki page service
@@ -70,11 +70,6 @@ func (s *wikiPageService) CreatePage(ctx context.Context, page *types.WikiPage) 
 	// Update inbound links on target pages
 	s.updateInLinks(ctx, page.KnowledgeBaseID, page.Slug, page.OutLinks)
 
-	// Sync to chunks for retrieval pipeline integration
-	if err := s.syncToChunk(ctx, page); err != nil {
-		logger.Warnf(ctx, "wiki: failed to sync page %s to chunks: %v", page.Slug, err)
-	}
-
 	return page, nil
 }
 
@@ -107,11 +102,6 @@ func (s *wikiPageService) UpdatePage(ctx context.Context, page *types.WikiPage) 
 	// Update inbound links: remove old, add new
 	s.removeInLinks(ctx, existing.KnowledgeBaseID, existing.Slug, oldOutLinks)
 	s.updateInLinks(ctx, existing.KnowledgeBaseID, existing.Slug, existing.OutLinks)
-
-	// Re-sync to chunks
-	if err := s.syncToChunk(ctx, existing); err != nil {
-		logger.Warnf(ctx, "wiki: failed to sync page %s to chunks: %v", existing.Slug, err)
-	}
 
 	return existing, nil
 }
@@ -341,6 +331,11 @@ func (s *wikiPageService) RebuildLinks(ctx context.Context, kbID string) error {
 	return nil
 }
 
+// ListAllPages retrieves all wiki pages without pagination.
+func (s *wikiPageService) ListAllPages(ctx context.Context, kbID string) ([]*types.WikiPage, error) {
+	return s.repo.ListAll(ctx, kbID)
+}
+
 // SearchPages performs full-text search over wiki pages
 func (s *wikiPageService) SearchPages(ctx context.Context, kbID string, query string, limit int) ([]*types.WikiPage, error) {
 	return s.repo.Search(ctx, kbID, query, limit)
@@ -411,33 +406,6 @@ func (s *wikiPageService) removeInLinks(ctx context.Context, kbID string, source
 			}
 		}
 	}
-}
-
-// syncToChunk syncs a wiki page to the chunk table for retrieval pipeline integration.
-// Each wiki page maps to a single chunk with ChunkType = "wiki_page".
-// The chunk's KnowledgeID is set to the wiki page ID for tracking.
-func (s *wikiPageService) syncToChunk(ctx context.Context, page *types.WikiPage) error {
-	// Build content for the chunk: title + summary + content
-	chunkContent := fmt.Sprintf("# %s\n\n%s\n\n%s", page.Title, page.Summary, page.Content)
-
-	chunk := &types.Chunk{
-		ID:              "wp-" + page.ID, // prefix to avoid collision with regular chunks
-		TenantID:        page.TenantID,
-		KnowledgeID:     page.ID, // link back to wiki page
-		KnowledgeBaseID: page.KnowledgeBaseID,
-		Content:         chunkContent,
-		ChunkType:       types.ChunkTypeWikiPage,
-		IsEnabled:       page.Status == types.WikiPageStatusPublished,
-		Status:          int(types.ChunkStatusStored),
-	}
-
-	// Try to create; if it already exists, update
-	err := s.chunkRepo.CreateChunks(ctx, []*types.Chunk{chunk})
-	if err != nil {
-		// Fallback: update existing chunk
-		return s.chunkRepo.UpdateChunk(ctx, chunk)
-	}
-	return nil
 }
 
 // deleteChunkForPage removes the synced chunk for a wiki page

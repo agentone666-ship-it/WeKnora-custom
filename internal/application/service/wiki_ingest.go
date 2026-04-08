@@ -63,8 +63,9 @@ type WikiRetractPayload struct {
 	KnowledgeBaseID string   `json:"knowledge_base_id"`
 	KnowledgeID     string   `json:"knowledge_id"`
 	DocTitle        string   `json:"doc_title"`
+	DocSummary      string   `json:"doc_summary,omitempty"` // one-line summary of the deleted document
 	Language        string   `json:"language,omitempty"`
-	PageSlugs       []string `json:"page_slugs"` // pages to retract content from
+	PageSlugs       []string `json:"page_slugs"`
 }
 
 // wikiIngestService handles the LLM-powered wiki generation pipeline
@@ -205,51 +206,14 @@ func (s *wikiIngestService) ProcessWikiRetract(ctx context.Context, t *asynq.Tas
 
 	lang := types.LanguageNameFromContext(ctx)
 
-	for _, slug := range payload.PageSlugs {
-		page, err := s.wikiService.GetPageBySlug(ctx, payload.KnowledgeBaseID, slug)
-		if err != nil || page == nil {
-			continue
-		}
-
-		// Build remaining sources list
-		var remainingSources string
-		for _, ref := range page.SourceRefs {
-			pipeIdx := strings.Index(ref, "|")
-			if pipeIdx > 0 {
-				remainingSources += "- " + ref[pipeIdx+1:] + "\n"
-			} else {
-				remainingSources += "- " + ref + "\n"
-			}
-		}
-		if remainingSources == "" {
-			remainingSources = "(no other sources)"
-		}
-
-		// Call LLM to retract content
-		updatedContent, err := s.generateWithTemplate(ctx, chatModel, agent.WikiPageRetractPrompt, map[string]string{
-			"ExistingContent":  page.Content,
-			"DeletedDocTitle":  payload.DocTitle,
-			"RemainingSources": remainingSources,
-			"Language":         lang,
-		})
-		if err != nil {
-			logger.Warnf(ctx, "wiki retract: LLM call failed for page %s: %v", slug, err)
-			continue
-		}
-
-		page.Content = updatedContent
-		if _, err := s.wikiService.UpdatePage(ctx, page); err != nil {
-			logger.Warnf(ctx, "wiki retract: failed to update page %s: %v", slug, err)
-		} else {
-			logger.Infof(ctx, "wiki retract: updated page %s after removing content from '%s'", slug, payload.DocTitle)
-		}
-	}
+	s.retractPagesContent(ctx, chatModel, payload.KnowledgeBaseID, payload.DocTitle, payload.DocSummary, payload.PageSlugs, lang)
 
 	// Rebuild index page to reflect changes
+	retractChangeDesc := fmt.Sprintf("Removed document '%s': %s", payload.DocTitle, payload.DocSummary)
 	if err := s.rebuildIndexPage(ctx, chatModel, WikiIngestPayload{
 		TenantID:        payload.TenantID,
 		KnowledgeBaseID: payload.KnowledgeBaseID,
-	}, lang); err != nil {
+	}, retractChangeDesc, lang); err != nil {
 		logger.Warnf(ctx, "wiki retract: rebuild index failed: %v", err)
 	}
 
@@ -264,6 +228,81 @@ func (s *wikiIngestService) ProcessWikiRetract(ctx context.Context, t *asynq.Tas
 	s.cleanDeadLinks(ctx, payload.KnowledgeBaseID)
 
 	return nil
+}
+
+// retractPagesContent uses LLM to remove a deleted/stale document's contributions
+// from the given wiki pages. docContent is the deleted document's content (or summary)
+// so the LLM can accurately identify which parts to remove. It does NOT rebuild the
+// index or append log entries — callers are responsible for those post-processing steps.
+func (s *wikiIngestService) retractPagesContent(
+	ctx context.Context,
+	chatModel chat.Chat,
+	kbID, docTitle, docContent string,
+	pageSlugs []string,
+	lang string,
+) {
+	allPages, _ := s.wikiService.ListAllPages(ctx, kbID)
+	slugTitleMap := make(map[string]string)
+	for _, p := range allPages {
+		if p.PageType != types.WikiPageTypeIndex && p.PageType != types.WikiPageTypeLog && p.Status != types.WikiPageStatusArchived {
+			slugTitleMap[p.Slug] = p.Title
+		}
+	}
+
+	for _, slug := range pageSlugs {
+		page, err := s.wikiService.GetPageBySlug(ctx, kbID, slug)
+		if err != nil || page == nil {
+			continue
+		}
+
+		var remainingSources string
+		for _, ref := range page.SourceRefs {
+			pipeIdx := strings.Index(ref, "|")
+			if pipeIdx > 0 {
+				remainingSources += "- " + ref[pipeIdx+1:] + "\n"
+			} else {
+				remainingSources += "- " + ref + "\n"
+			}
+		}
+		if remainingSources == "" {
+			remainingSources = "(no other sources)"
+		}
+
+		var relatedSlugs strings.Builder
+		for _, outSlug := range page.OutLinks {
+			if title, ok := slugTitleMap[outSlug]; ok {
+				fmt.Fprintf(&relatedSlugs, "- %s (%s)\n", outSlug, title)
+			}
+		}
+
+		updatedContent, err := s.generateWithTemplate(ctx, chatModel, agent.WikiPageRetractPrompt, map[string]string{
+			"ExistingContent":   page.Content,
+			"DeletedDocTitle":   docTitle,
+			"DeletedDocContent": docContent,
+			"RemainingSources":  remainingSources,
+			"AvailableSlugs":    relatedSlugs.String(),
+			"Language":          lang,
+		})
+		if err != nil {
+			logger.Warnf(ctx, "wiki retract: LLM call failed for page %s: %v", slug, err)
+			continue
+		}
+
+		retractedSummary, retractedBody := splitSummaryLine(updatedContent)
+		if retractedBody != "" {
+			page.Content = retractedBody
+		} else {
+			page.Content = updatedContent
+		}
+		if retractedSummary != "" {
+			page.Summary = retractedSummary
+		}
+		if _, err := s.wikiService.UpdatePage(ctx, page); err != nil {
+			logger.Warnf(ctx, "wiki retract: failed to update page %s: %v", slug, err)
+		} else {
+			logger.Infof(ctx, "wiki retract: updated page %s after removing content from '%s'", slug, docTitle)
+		}
+	}
 }
 
 // ProcessWikiIngest processes a batch wiki ingest task.
@@ -356,19 +395,30 @@ func (s *wikiIngestService) ProcessWikiIngest(ctx context.Context, t *asynq.Task
 
 	// Process each document
 	var allPagesAffected []string
+	var docResults []*docIngestResult
 	for _, knowledgeID := range knowledgeIDs {
-		pages, err := s.processOneDocument(ctx, chatModel, payload, knowledgeID, lang)
+		result, err := s.processOneDocument(ctx, chatModel, payload, knowledgeID, lang)
 		if err != nil {
 			logger.Warnf(ctx, "wiki ingest: failed to process knowledge %s: %v", knowledgeID, err)
 			continue
 		}
-		allPagesAffected = append(allPagesAffected, pages...)
+		if result != nil {
+			allPagesAffected = append(allPagesAffected, result.Pages...)
+			docResults = append(docResults, result)
+		}
 	}
 
 	// Batch post-processing (once for the whole batch, not per-doc)
 
+	// Build change description from processed documents
+	var changeDesc strings.Builder
+	fmt.Fprintf(&changeDesc, "Added %d documents:\n", len(docResults))
+	for _, r := range docResults {
+		fmt.Fprintf(&changeDesc, "- %s: %s\n", r.DocTitle, r.Summary)
+	}
+
 	// Rebuild index page
-	if err := s.rebuildIndexPage(ctx, chatModel, payload, lang); err != nil {
+	if err := s.rebuildIndexPage(ctx, chatModel, payload, changeDesc.String(), lang); err != nil {
 		logger.Warnf(ctx, "wiki ingest: rebuild index failed: %v", err)
 	}
 
@@ -453,15 +503,22 @@ func (s *wikiIngestService) drainPendingList(ctx context.Context, kbID string) [
 	return unique
 }
 
+// docIngestResult captures per-document info for batch post-processing.
+type docIngestResult struct {
+	KnowledgeID string
+	DocTitle    string
+	Summary     string   // one-line summary of the document (from summary page)
+	Pages       []string // affected page slugs
+}
+
 // processOneDocument handles wiki ingest for a single document.
-// Returns the list of affected page slugs.
 func (s *wikiIngestService) processOneDocument(
 	ctx context.Context,
 	chatModel chat.Chat,
 	payload WikiIngestPayload,
 	knowledgeID string,
 	lang string,
-) ([]string, error) {
+) (*docIngestResult, error) {
 	// Get document chunks and reconstruct content
 	chunks, err := s.chunkRepo.ListChunksByKnowledgeID(ctx, payload.TenantID, knowledgeID)
 	if err != nil {
@@ -489,6 +546,7 @@ func (s *wikiIngestService) processOneDocument(
 	}
 
 	var pagesAffected []string
+	var docSummaryLine string
 	sourceRef := fmt.Sprintf("%s|%s", knowledgeID, docTitle)
 
 	// Snapshot existing page slugs for stale detection
@@ -503,7 +561,7 @@ func (s *wikiIngestService) processOneDocument(
 	}
 
 	// Step 1: Extract entities and concepts
-	extractedPages, extractedSlugs, err := s.extractEntitiesAndConcepts(ctx, chatModel, content, docTitle, lang, docPayload, sourceRef, oldPageSlugs)
+	extractedPages, err := s.extractEntitiesAndConcepts(ctx, chatModel, content, docTitle, lang, docPayload, sourceRef, oldPageSlugs)
 	if err != nil {
 		logger.Warnf(ctx, "wiki ingest: knowledge extraction failed for %s: %v", knowledgeID, err)
 	} else {
@@ -513,7 +571,7 @@ func (s *wikiIngestService) processOneDocument(
 	// Step 2: Generate summary page
 	summarySlug := fmt.Sprintf("summary/%s", slugify(docTitle))
 	var slugListing string
-	for _, slug := range extractedSlugs {
+	for _, slug := range extractedPages {
 		slugListing += fmt.Sprintf("- [[%s]]\n", slug)
 	}
 	summaryContent, err := s.generateWithTemplate(ctx, chatModel, agent.WikiSummaryPrompt, map[string]string{
@@ -527,6 +585,14 @@ func (s *wikiIngestService) processOneDocument(
 	if err != nil {
 		logger.Errorf(ctx, "wiki ingest: generate summary failed for %s: %v", knowledgeID, err)
 	} else {
+		sumLine, sumBody := splitSummaryLine(summaryContent)
+		if sumBody == "" {
+			sumBody = summaryContent
+		}
+		if sumLine == "" {
+			sumLine = docTitle
+		}
+		docSummaryLine = sumLine
 		_, err := s.wikiService.CreatePage(ctx, &types.WikiPage{
 			ID:              uuid.New().String(),
 			TenantID:        payload.TenantID,
@@ -535,8 +601,8 @@ func (s *wikiIngestService) processOneDocument(
 			Title:           docTitle + " - Summary",
 			PageType:        types.WikiPageTypeSummary,
 			Status:          types.WikiPageStatusDraft,
-			Content:         summaryContent,
-			Summary:         truncateString(summaryContent, 200),
+			Content:         sumBody,
+			Summary:         sumLine,
 			SourceRefs:      types.StringArray{sourceRef},
 		})
 		if err != nil {
@@ -547,34 +613,36 @@ func (s *wikiIngestService) processOneDocument(
 	}
 
 	// Retract stale pages (pages this doc previously contributed to but no longer does)
-	s.retractStalePages(ctx, docPayload, oldPageSlugs, pagesAffected, docTitle, lang)
+	s.retractStalePages(ctx, chatModel, docPayload, oldPageSlugs, pagesAffected, docTitle, content, lang)
 
 	logger.Infof(ctx, "wiki ingest: processed knowledge %s, %d pages affected", knowledgeID, len(pagesAffected))
-	return pagesAffected, nil
+	return &docIngestResult{
+		KnowledgeID: knowledgeID,
+		DocTitle:    docTitle,
+		Summary:     docSummaryLine,
+		Pages:       pagesAffected,
+	}, nil
 }
 
 // cleanDeadLinks removes [[wiki-links]] that point to archived or deleted pages.
 // Scans all published pages, checks each out_link, and removes references to
 // pages that no longer exist or are archived. No LLM call — pure text cleanup.
 func (s *wikiIngestService) cleanDeadLinks(ctx context.Context, kbID string) {
-	resp, err := s.wikiService.ListPages(ctx, &types.WikiPageListRequest{
-		KnowledgeBaseID: kbID,
-		PageSize:        500,
-	})
-	if err != nil || resp == nil {
+	allPages, err := s.wikiService.ListAllPages(ctx, kbID)
+	if err != nil || len(allPages) == 0 {
 		return
 	}
 
 	// Build set of live (non-archived, non-system) slugs
 	liveSlugs := make(map[string]bool)
-	for _, p := range resp.Pages {
+	for _, p := range allPages {
 		if p.Status != types.WikiPageStatusArchived {
 			liveSlugs[p.Slug] = true
 		}
 	}
 
 	var cleaned int
-	for _, p := range resp.Pages {
+	for _, p := range allPages {
 		if p.Status == types.WikiPageStatusArchived {
 			continue
 		}
@@ -622,11 +690,8 @@ func (s *wikiIngestService) cleanDeadLinks(ctx context.Context, kbID string) {
 // Only processes entity/concept/synthesis/comparison pages (not index/log/summary).
 func (s *wikiIngestService) injectCrossLinks(ctx context.Context, kbID string, affectedSlugs []string) {
 	// Build a title→slug lookup from ALL pages in this KB
-	resp, err := s.wikiService.ListPages(ctx, &types.WikiPageListRequest{
-		KnowledgeBaseID: kbID,
-		PageSize:        500,
-	})
-	if err != nil || resp == nil || len(resp.Pages) < 2 {
+	allPages, err := s.wikiService.ListAllPages(ctx, kbID)
+	if err != nil || len(allPages) < 2 {
 		return
 	}
 
@@ -635,7 +700,7 @@ func (s *wikiIngestService) injectCrossLinks(ctx context.Context, kbID string, a
 		title string
 	}
 	var allRefs []pageRef
-	for _, p := range resp.Pages {
+	for _, p := range allPages {
 		if p.PageType == types.WikiPageTypeIndex || p.PageType == types.WikiPageTypeLog {
 			continue
 		}
@@ -664,7 +729,7 @@ func (s *wikiIngestService) injectCrossLinks(ctx context.Context, kbID string, a
 	}
 
 	var updated int
-	for _, p := range resp.Pages {
+	for _, p := range allPages {
 		if !affectedSet[p.Slug] {
 			continue
 		}
@@ -745,17 +810,14 @@ func replaceFirstOutsideLinks(s, old, newStr string) string {
 // getExistingPageSlugsForKnowledge returns all page slugs that currently reference
 // a given knowledge ID in their source_refs. Used to snapshot state before re-ingest.
 func (s *wikiIngestService) getExistingPageSlugsForKnowledge(ctx context.Context, kbID, knowledgeID string) map[string]bool {
-	resp, err := s.wikiService.ListPages(ctx, &types.WikiPageListRequest{
-		KnowledgeBaseID: kbID,
-		PageSize:        500,
-	})
-	if err != nil || resp == nil {
+	allPages, err := s.wikiService.ListAllPages(ctx, kbID)
+	if err != nil || len(allPages) == 0 {
 		return nil
 	}
 
 	slugs := make(map[string]bool)
 	prefix := knowledgeID + "|"
-	for _, p := range resp.Pages {
+	for _, p := range allPages {
 		if p.PageType == types.WikiPageTypeIndex || p.PageType == types.WikiPageTypeLog {
 			continue
 		}
@@ -771,14 +833,15 @@ func (s *wikiIngestService) getExistingPageSlugsForKnowledge(ctx context.Context
 
 // retractStalePages handles pages that were previously linked to this document
 // but are no longer produced by the updated extraction.
-// - Single-source stale pages → archived
-// - Multi-source stale pages → enqueue LLM retract to clean content
+// - Single-source stale pages → deleted
+// - Multi-source stale pages → LLM retract to clean content synchronously
 func (s *wikiIngestService) retractStalePages(
 	ctx context.Context,
+	chatModel chat.Chat,
 	payload WikiIngestPayload,
 	oldSlugs map[string]bool,
 	newSlugs []string,
-	docTitle, lang string,
+	docTitle, docContent, lang string,
 ) {
 	if len(oldSlugs) == 0 {
 		return
@@ -838,16 +901,8 @@ func (s *wikiIngestService) retractStalePages(
 		}
 	}
 
-	// Enqueue LLM retraction for multi-source stale pages
 	if len(retractSlugs) > 0 {
-		EnqueueWikiRetract(ctx, s.task, WikiRetractPayload{
-			TenantID:        payload.TenantID,
-			KnowledgeBaseID: payload.KnowledgeBaseID,
-			KnowledgeID:     payload.KnowledgeID,
-			DocTitle:        docTitle,
-			Language:        payload.Language,
-			PageSlugs:       retractSlugs,
-		})
+		s.retractPagesContent(ctx, chatModel, payload.KnowledgeBaseID, docTitle, docContent, retractSlugs, lang)
 	}
 }
 
@@ -866,7 +921,7 @@ type combinedExtraction struct {
 }
 
 // extractEntitiesAndConcepts performs a single LLM call to extract both entities and concepts,
-// then upserts pages for each. Returns the list of affected page slugs and all extracted slugs (for linking).
+// then upserts pages for each. Returns the list of successfully upserted page slugs.
 // oldPageSlugs contains slugs from the previous version of this document — passed to LLM for slug stability.
 func (s *wikiIngestService) extractEntitiesAndConcepts(
 	ctx context.Context,
@@ -875,7 +930,7 @@ func (s *wikiIngestService) extractEntitiesAndConcepts(
 	payload WikiIngestPayload,
 	sourceRef string,
 	oldPageSlugs map[string]bool,
-) ([]string, []string, error) {
+) ([]string, error) {
 	// Build previous slugs listing for the prompt
 	var prevSlugsText string
 	if len(oldPageSlugs) > 0 {
@@ -896,7 +951,7 @@ func (s *wikiIngestService) extractEntitiesAndConcepts(
 		"PreviousSlugs": prevSlugsText,
 	})
 	if err != nil {
-		return nil, nil, fmt.Errorf("combined extraction failed: %w", err)
+		return nil, fmt.Errorf("combined extraction failed: %w", err)
 	}
 
 	// Clean JSON - strip markdown code blocks if present
@@ -909,20 +964,7 @@ func (s *wikiIngestService) extractEntitiesAndConcepts(
 	var result combinedExtraction
 	if err := json.Unmarshal([]byte(extractionJSON), &result); err != nil {
 		logger.Warnf(ctx, "wiki ingest: failed to parse combined extraction JSON: %v\nRaw: %s", err, truncateString(extractionJSON, 500))
-		return nil, nil, fmt.Errorf("parse combined extraction JSON: %w", err)
-	}
-
-	// Collect all extracted slugs (before dedup remapping) for summary linking
-	var allSlugs []string
-	for _, item := range result.Entities {
-		if item.Slug != "" {
-			allSlugs = append(allSlugs, item.Slug)
-		}
-	}
-	for _, item := range result.Concepts {
-		if item.Slug != "" {
-			allSlugs = append(allSlugs, item.Slug)
-		}
+		return nil, fmt.Errorf("parse combined extraction JSON: %w", err)
 	}
 
 	var affected []string
@@ -932,19 +974,6 @@ func (s *wikiIngestService) extractEntitiesAndConcepts(
 
 	// Deduplicate concepts against existing wiki pages (LLM-based)
 	result.Concepts = s.deduplicateItems(ctx, chatModel, result.Concepts, types.WikiPageTypeConcept, payload.KnowledgeBaseID)
-
-	// Update allSlugs after dedup (use final slugs)
-	allSlugs = allSlugs[:0]
-	for _, item := range result.Entities {
-		if item.Slug != "" {
-			allSlugs = append(allSlugs, item.Slug)
-		}
-	}
-	for _, item := range result.Concepts {
-		if item.Slug != "" {
-			allSlugs = append(allSlugs, item.Slug)
-		}
-	}
 
 	// Upsert entity pages
 	entitySlugs, err := s.upsertExtractedPages(ctx, chatModel, result.Entities, types.WikiPageTypeEntity, docTitle, lang, payload, sourceRef)
@@ -962,7 +991,7 @@ func (s *wikiIngestService) extractEntitiesAndConcepts(
 		affected = append(affected, conceptSlugs...)
 	}
 
-	return affected, allSlugs, nil
+	return affected, nil
 }
 
 // upsertExtractedPages creates or updates wiki pages from pre-extracted items.
@@ -996,8 +1025,16 @@ func (s *wikiIngestService) upsertExtractedPages(
 				continue
 			}
 
-			existing.Content = updatedContent
-			existing.Summary = item.Description
+			// LLM returns "SUMMARY: ..." on first line — use it as the authoritative summary
+			updatedSummary, updatedBody := splitSummaryLine(updatedContent)
+			if updatedBody != "" {
+				existing.Content = updatedBody
+			} else {
+				existing.Content = updatedContent
+			}
+			if updatedSummary != "" {
+				existing.Summary = updatedSummary
+			}
 			existing.SourceRefs = appendUnique(existing.SourceRefs, sourceRef)
 
 			if _, err := s.wikiService.UpdatePage(ctx, existing); err != nil {
@@ -1032,47 +1069,143 @@ func (s *wikiIngestService) upsertExtractedPages(
 	return affected, nil
 }
 
-// rebuildIndexPage regenerates the index page from all existing pages
-func (s *wikiIngestService) rebuildIndexPage(ctx context.Context, chatModel chat.Chat, payload WikiIngestPayload, lang string) error {
-	// List all pages
-	resp, err := s.wikiService.ListPages(ctx, &types.WikiPageListRequest{
-		KnowledgeBaseID: payload.KnowledgeBaseID,
-		PageSize:        500,
-		SortBy:          "page_type",
-		SortOrder:       "asc",
-	})
+// rebuildIndexPage regenerates the index page.
+//
+// Strategy: Index = LLM-generated intro (stored in Summary field) + code-generated directory.
+//   - Intro: stored in indexPage.Summary. First time: generated from document summaries.
+//     Subsequent: incrementally updated with changeDescription.
+//   - Directory: pure code, rebuilt every time. O(N) string concat, no LLM.
+func (s *wikiIngestService) rebuildIndexPage(ctx context.Context, chatModel chat.Chat, payload WikiIngestPayload, changeDesc, lang string) error {
+	indexPage, _ := s.wikiService.GetIndex(ctx, payload.KnowledgeBaseID)
+	if indexPage == nil {
+		return nil
+	}
+
+	// List all live pages
+	allPages, err := s.wikiService.ListAllPages(ctx, payload.KnowledgeBaseID)
 	if err != nil {
 		return err
 	}
 
-	// Build page listing
-	var listing strings.Builder
-	for _, p := range resp.Pages {
+	typeOrder := []string{
+		types.WikiPageTypeSummary, types.WikiPageTypeEntity, types.WikiPageTypeConcept,
+		types.WikiPageTypeSynthesis, types.WikiPageTypeComparison,
+	}
+	typeLabels := map[string]string{
+		types.WikiPageTypeSummary: "Summary", types.WikiPageTypeEntity: "Entity",
+		types.WikiPageTypeConcept: "Concept", types.WikiPageTypeSynthesis: "Synthesis",
+		types.WikiPageTypeComparison: "Comparison",
+	}
+
+	grouped := make(map[string][]*types.WikiPage)
+	totalPages := 0
+	for _, p := range allPages {
 		if p.PageType == types.WikiPageTypeIndex || p.PageType == types.WikiPageTypeLog {
 			continue
 		}
-		listing.WriteString(fmt.Sprintf("- [%s] [[%s]] | %s — %s\n", p.PageType, p.Slug, p.Title, p.Summary))
+		if p.Status == types.WikiPageStatusArchived {
+			continue
+		}
+		grouped[p.PageType] = append(grouped[p.PageType], p)
+		totalPages++
 	}
 
-	indexContent, err := s.generateWithTemplate(ctx, chatModel, agent.WikiIndexRebuildPrompt, map[string]string{
-		"PageListing": listing.String(),
-		"Language":    lang,
-	})
-	if err != nil {
-		return fmt.Errorf("generate index: %w", err)
+	// Build document summaries listing (only summary-type pages — they represent documents)
+	var docSummaries strings.Builder
+	for _, p := range grouped[types.WikiPageTypeSummary] {
+		fmt.Fprintf(&docSummaries, "- %s: %s\n", p.Title, p.Summary)
+	}
+	if docSummaries.Len() == 0 {
+		docSummaries.WriteString("(no documents yet)")
 	}
 
-	// Get or create index page
-	indexPage, _ := s.wikiService.GetIndex(ctx, payload.KnowledgeBaseID)
-	if indexPage != nil {
-		indexPage.Content = indexContent
-		indexPage.Summary = "Wiki index - table of contents"
-		if _, err := s.wikiService.UpdatePage(ctx, indexPage); err != nil {
-			return fmt.Errorf("update index page: %w", err)
+	// Generate or update intro
+	existingIntro := indexPage.Summary
+	var intro string
+
+	if existingIntro == "" || existingIntro == "Wiki index - table of contents" {
+		// First time — generate intro from scratch
+		generatedIntro, genErr := s.generateWithTemplate(ctx, chatModel, agent.WikiIndexIntroPrompt, map[string]string{
+			"DocumentSummaries": docSummaries.String(),
+			"Language":          lang,
+		})
+		if genErr != nil {
+			intro = "# Wiki Index\n\nThis wiki contains knowledge extracted from uploaded documents.\n"
+		} else {
+			intro = strings.TrimSpace(generatedIntro)
+		}
+	} else if changeDesc != "" {
+		// Incremental update — tell LLM what changed
+		updatedIntro, genErr := s.generateWithTemplate(ctx, chatModel, agent.WikiIndexIntroUpdatePrompt, map[string]string{
+			"ExistingIntro":     existingIntro,
+			"ChangeDescription": changeDesc,
+			"DocumentSummaries": docSummaries.String(),
+			"Language":          lang,
+		})
+		if genErr != nil {
+			intro = existingIntro // keep existing on error
+		} else {
+			intro = strings.TrimSpace(updatedIntro)
+		}
+	} else {
+		intro = existingIntro // no change description, keep as-is
+	}
+
+	// Build directory (pure code, no LLM)
+	var dir strings.Builder
+	for _, pt := range typeOrder {
+		pages := grouped[pt]
+		if len(pages) == 0 {
+			continue
+		}
+		fmt.Fprintf(&dir, "\n## %s (%d)\n\n", typeLabels[pt], len(pages))
+		for _, p := range pages {
+			summary := p.Summary
+			fmt.Fprintf(&dir, "[[%s]] — %s\n", p.Slug, summary)
 		}
 	}
+	for pt, pages := range grouped {
+		inOrder := false
+		for _, o := range typeOrder {
+			if o == pt {
+				inOrder = true
+				break
+			}
+		}
+		if inOrder || len(pages) == 0 {
+			continue
+		}
+		fmt.Fprintf(&dir, "\n## %s (%d)\n\n", pt, len(pages))
+		for _, p := range pages {
+			fmt.Fprintf(&dir, "[[%s]] — %s\n", p.Slug, p.Summary)
+		}
+	}
+	if totalPages == 0 {
+		dir.WriteString("\n*No wiki pages yet. Upload documents to get started.*\n")
+	}
 
-	return nil
+	indexPage.Content = intro + "\n" + dir.String()
+	indexPage.Summary = intro // persist intro for next incremental update
+	_, err = s.wikiService.UpdatePage(ctx, indexPage)
+	return err
+}
+
+// splitSummaryLine extracts the "SUMMARY: ..." line from LLM output.
+// Returns (summary, content). If no SUMMARY line found, summary is empty.
+func splitSummaryLine(raw string) (summary string, content string) {
+	raw = strings.TrimSpace(raw)
+	if strings.HasPrefix(raw, "SUMMARY:") || strings.HasPrefix(raw, "SUMMARY：") {
+		idx := strings.IndexByte(raw, '\n')
+		if idx < 0 {
+			// Only one line
+			return strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(raw, "SUMMARY:"), "SUMMARY：")), ""
+		}
+		summaryLine := raw[:idx]
+		summaryLine = strings.TrimPrefix(summaryLine, "SUMMARY:")
+		summaryLine = strings.TrimPrefix(summaryLine, "SUMMARY：")
+		return strings.TrimSpace(summaryLine), strings.TrimSpace(raw[idx+1:])
+	}
+	return "", raw
 }
 
 // appendLogEntry appends an entry to the log page, including any synthesis suggestions
@@ -1136,18 +1269,25 @@ func (s *wikiIngestService) deduplicateItems(
 	}
 
 	// Get existing pages of the same type
-	resp, err := s.wikiService.ListPages(ctx, &types.WikiPageListRequest{
-		KnowledgeBaseID: kbID,
-		PageType:        pageType,
-		PageSize:        2000,
-	})
-	if err != nil || resp == nil || len(resp.Pages) == 0 {
-		return items // No existing pages → nothing to deduplicate against
+	allPages, err := s.wikiService.ListAllPages(ctx, kbID)
+	if err != nil || len(allPages) == 0 {
+		return items
+	}
+
+	// Filter to the target type
+	var typedPages []*types.WikiPage
+	for _, p := range allPages {
+		if p.PageType == pageType {
+			typedPages = append(typedPages, p)
+		}
+	}
+	if len(typedPages) == 0 {
+		return items // No existing pages of this type → nothing to deduplicate against
 	}
 
 	// Build existing pages listing
 	var existingBuf strings.Builder
-	for _, p := range resp.Pages {
+	for _, p := range typedPages {
 		fmt.Fprintf(&existingBuf, "- slug: %s | title: %s\n", p.Slug, p.Title)
 	}
 

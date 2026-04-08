@@ -1284,6 +1284,15 @@ func (s *knowledgeService) cleanupWikiOnKnowledgeDelete(ctx context.Context, kbI
 		}
 	}
 
+	// Capture the summary page's description before deleting (for retract changeDesc)
+	var docSummary string
+	for _, page := range pages {
+		if page.PageType == types.WikiPageTypeSummary {
+			docSummary = page.Summary
+			break
+		}
+	}
+
 	var deletedSlugs []string
 	var retractSlugs []string
 	for _, page := range pages {
@@ -1327,14 +1336,17 @@ func (s *knowledgeService) cleanupWikiOnKnowledgeDelete(ctx context.Context, kbI
 			KnowledgeBaseID: kbID,
 			KnowledgeID:     knowledgeID,
 			DocTitle:        docTitle,
+			DocSummary:      docSummary,
 			Language:        lang,
 			PageSlugs:       retractSlugs,
 		})
 		logger.Infof(ctx, "wiki cleanup: enqueued retract task for %d pages: %v", len(retractSlugs), retractSlugs)
 	}
 
-	// Rebuild index page to reflect deleted pages
-	if len(deletedSlugs) > 0 {
+	// If pages were deleted but no retract task was enqueued,
+	// we still need to update the index and log synchronously.
+	// (When retractSlugs > 0, ProcessWikiRetract handles index/log.)
+	if len(deletedSlugs) > 0 && len(retractSlugs) == 0 {
 		s.rebuildWikiIndexSimple(ctx, kbID, knowledgeID, docTitle, deletedSlugs)
 	}
 }
@@ -1355,47 +1367,60 @@ func removeSourceRef(refs types.StringArray, knowledgeID string) types.StringArr
 
 // rebuildWikiIndexSimple regenerates the index page from current page listing
 // and appends a deletion log entry. Does NOT use LLM — generates a simple
-// structured listing. Used during document deletion when LLM is not available.
+// structured listing while preserving the LLM-generated intro from Summary field.
 func (s *knowledgeService) rebuildWikiIndexSimple(ctx context.Context, kbID, knowledgeID, docTitle string, deletedSlugs []string) {
 	// Rebuild index
-	resp, err := s.wikiService.ListPages(ctx, &types.WikiPageListRequest{
-		KnowledgeBaseID: kbID,
-		PageSize:        500,
-		SortBy:          "page_type",
-		SortOrder:       "asc",
-	})
-	if err != nil || resp == nil {
+	allPages, err := s.wikiService.ListAllPages(ctx, kbID)
+	if err != nil {
+		logger.Warnf(ctx, "wiki cleanup: failed to list pages: %v", err)
 		return
 	}
 
-	var indexContent strings.Builder
-	indexContent.WriteString("# Wiki Index\n\n")
+	indexPage, _ := s.wikiService.GetIndex(ctx, kbID)
+	if indexPage == nil {
+		return
+	}
 
-	currentType := ""
-	for _, p := range resp.Pages {
+	// Preserve LLM-generated intro from Summary field
+	var indexContent strings.Builder
+	if indexPage.Summary != "" && indexPage.Summary != "Index" {
+		indexContent.WriteString(indexPage.Summary)
+		indexContent.WriteString("\n")
+	} else {
+		indexContent.WriteString("# Wiki Index\n\n")
+	}
+
+	// Group pages by type
+	typeOrder := []string{types.WikiPageTypeSummary, types.WikiPageTypeEntity, types.WikiPageTypeConcept, types.WikiPageTypeSynthesis, types.WikiPageTypeComparison}
+	grouped := make(map[string][]*types.WikiPage)
+	for _, p := range allPages {
 		if p.PageType == types.WikiPageTypeIndex || p.PageType == types.WikiPageTypeLog {
 			continue
 		}
 		if p.Status == types.WikiPageStatusArchived {
 			continue
 		}
-		if p.PageType != currentType {
-			currentType = p.PageType
-			label := currentType
-			if len(label) > 0 {
-				label = strings.ToUpper(label[:1]) + label[1:]
-			}
-			fmt.Fprintf(&indexContent, "\n## %s\n\n", label)
-		}
-		fmt.Fprintf(&indexContent, "- [[%s]] — %s\n", p.Slug, p.Summary)
+		grouped[p.PageType] = append(grouped[p.PageType], p)
 	}
 
-	indexPage, _ := s.wikiService.GetIndex(ctx, kbID)
-	if indexPage != nil {
-		indexPage.Content = indexContent.String()
-		if _, err := s.wikiService.UpdatePage(ctx, indexPage); err != nil {
-			logger.Warnf(ctx, "wiki cleanup: failed to rebuild index: %v", err)
+	for _, pt := range typeOrder {
+		pages := grouped[pt]
+		if len(pages) == 0 {
+			continue
 		}
+		label := pt
+		if len(label) > 0 {
+			label = strings.ToUpper(label[:1]) + label[1:]
+		}
+		fmt.Fprintf(&indexContent, "\n## %s\n\n", label)
+		for _, p := range pages {
+			fmt.Fprintf(&indexContent, "- [[%s]] — %s\n", p.Slug, p.Summary)
+		}
+	}
+
+	indexPage.Content = indexContent.String()
+	if _, err := s.wikiService.UpdatePage(ctx, indexPage); err != nil {
+		logger.Warnf(ctx, "wiki cleanup: failed to rebuild index: %v", err)
 	}
 
 	// Append log entry

@@ -7,48 +7,54 @@ package agent
 // WikiSummaryPrompt generates a summary page for a newly ingested document.
 const WikiSummaryPrompt = `You are a wiki editor. Given the following document content, create a structured wiki summary page in Markdown format.
 
-## Document Info
-- Title: {{.Title}}
-- File Name: {{.FileName}}
-- File Type: {{.FileType}}
-
-## Document Content
+<document>
+<title>{{.Title}}</title>
+<file_name>{{.FileName}}</file_name>
+<file_type>{{.FileType}}</file_type>
+<content>
 {{.Content}}
+</content>
+</document>
 
-## Available Wiki Pages (use these exact slugs for links)
+<available_wiki_pages>
 {{.ExtractedSlugs}}
+</available_wiki_pages>
 
-## Instructions
-1. Write a comprehensive summary of the document in Markdown format.
-2. Include the key facts, arguments, and conclusions.
-3. Use proper heading hierarchy (## for sections, ### for subsections).
-4. Use [[wiki-link]] syntax to reference the available wiki pages listed above. Use the EXACT slugs provided — do NOT invent new slugs.
-5. At the end, include a "## Key Takeaways" section with bullet points.
-6. Write in {{.Language}}.
-7. Keep the summary concise but thorough (500-1500 words depending on document length).
+<instructions>
+1. The FIRST line of your output MUST be: SUMMARY: {one sentence, 15-40 words, describing what this document is about — for wiki index listing}
+2. After the SUMMARY line, write a comprehensive summary of the document in Markdown format.
+3. Include the key facts, arguments, and conclusions.
+4. Use proper heading hierarchy (## for sections, ### for subsections).
+5. Use [[wiki-link]] syntax to reference the available wiki pages listed above. Use the EXACT slugs provided — do NOT invent new slugs.
+6. At the end, include a "## Key Takeaways" section with bullet points.
+7. Write in {{.Language}}.
+8. Keep the summary concise but thorough (500-1500 words depending on document length).
+</instructions>
 
-Output ONLY the Markdown content for the wiki page. Do not include any preamble or explanation.`
+Output the SUMMARY line first, then the Markdown content. Do not include any other preamble.`
 
 // WikiKnowledgeExtractPrompt extracts both entities and concepts in a single LLM call.
 // Returns a JSON object with "entities" and "concepts" arrays.
 // This replaces the former separate WikiEntityExtractPrompt and WikiConceptExtractPrompt.
 const WikiKnowledgeExtractPrompt = `You are a knowledge extraction system. Analyze the following document and extract all significant entities AND key concepts.
 
-## Document Info
-- Title: {{.Title}}
-
-## Document Content
+<document>
+<title>{{.Title}}</title>
+<content>
 {{.Content}}
+</content>
+</document>
 
-## Previously Extracted Slugs (from earlier version of this document)
+<previous_slugs>
 {{.PreviousSlugs}}
+</previous_slugs>
 
-## Instructions
+<instructions>
 Return a JSON object with two arrays: "entities" and "concepts".
 **IMPORTANT: Write ALL names, descriptions, and details in {{.Language}}.**
 
 ### Slug Continuity Rules
-If a "Previously Extracted Slugs" list is provided above, you MUST follow these rules:
+If previous slugs are provided above, you MUST follow these rules:
 - If an entity or concept from the previous extraction still exists in the current document, **reuse its exact slug** from the previous list. Do NOT generate a new slug for the same thing.
 - If an entity or concept no longer appears in the document, **do NOT include it** in the output.
 - Only generate new slugs for entities/concepts that are genuinely new (not present in the previous list).
@@ -58,7 +64,7 @@ If a "Previously Extracted Slugs" list is provided above, you MUST follow these 
 Each entity should have:
 - "name": The entity name in {{.Language}} (human-readable)
 - "slug": URL-friendly slug, format "entity/<lowercase-hyphenated-name>" (use romanized/pinyin form for non-Latin names). **Reuse previous slug if the entity was extracted before.**
-- "description": A one-sentence description in {{.Language}} based on what the document says
+- "description": **Index listing summary** — one sentence, 15-40 words, in {{.Language}}. Describes WHAT this entity IS and its role in the document. Must be self-contained (understandable without reading the full page). This will be displayed in the wiki index.
 - "details": A 2-5 sentence summary in {{.Language}} of key facts from the document
 
 Only include entities that are substantively discussed (mentioned at least twice or described in detail). Do NOT include generic terms.
@@ -67,7 +73,7 @@ Only include entities that are substantively discussed (mentioned at least twice
 Each concept should have:
 - "name": The concept name in {{.Language}} (human-readable)
 - "slug": URL-friendly slug, format "concept/<lowercase-hyphenated-name>" (use romanized/pinyin form for non-Latin names). **Reuse previous slug if the concept was extracted before.**
-- "description": A one-sentence definition or description in {{.Language}}
+- "description": **Index listing summary** — one sentence, 15-40 words, in {{.Language}}. Defines WHAT this concept IS. Must be self-contained (understandable without reading the full page). This will be displayed in the wiki index.
 - "details": A 2-5 sentence explanation in {{.Language}} as discussed in the document
 
 Only include concepts that are substantively discussed. Skip trivial or overly generic concepts.
@@ -76,6 +82,7 @@ Only include concepts that are substantively discussed. Skip trivial or overly g
 - If something is a specific named thing (person, company, product, place), put it ONLY in "entities".
 - If something is an abstract idea, methodology, or theory, put it ONLY in "concepts".
 - Never duplicate items across the two arrays.
+</instructions>
 
 Output ONLY valid JSON. Example:
 {
@@ -100,63 +107,109 @@ Output ONLY valid JSON. Example:
 // WikiPageUpdatePrompt incrementally updates an existing wiki page with new information.
 const WikiPageUpdatePrompt = `You are a wiki editor tasked with updating an existing wiki page with new information from a recently ingested document.
 
-## Existing Page Content
+<existing_page_content>
 {{.ExistingContent}}
+</existing_page_content>
 
-## New Information from Document "{{.NewDocTitle}}"
+<new_information>
+<source_document>{{.NewDocTitle}}</source_document>
+<content>
 {{.NewContent}}
+</content>
+</new_information>
 
-## Instructions
-1. Merge the new information into the existing page content.
-2. Preserve all existing information that is still valid.
-3. If the new information contradicts existing content, prefer the newer information and silently replace the old claim.
-4. Add new facts, details, and context from the new document.
-5. Update cross-references: add new [[wiki-link]] references where appropriate.
-6. Maintain the existing page structure and formatting style.
-7. Add a source reference to the new document at the bottom.
-8. Write in {{.Language}}.
+<instructions>
+1. The FIRST line of your output MUST be: SUMMARY: {one sentence, 15-40 words, describing what this page is about after the update — for wiki index listing}
+2. Merge the new information into the existing page content.
+3. Preserve all existing information that is still valid.
+4. If the new information contradicts existing content, prefer the newer information and silently replace the old claim.
+5. Add new facts, details, and context from the new document.
+6. Preserve any existing [[wiki-link]] references in the content. Do NOT invent new wiki-link slugs.
+7. Maintain the existing page structure and formatting style.
+8. Add a source reference to the new document at the bottom.
+9. Write in {{.Language}}.
+</instructions>
 
-Output ONLY the updated Markdown content. Do not include any preamble or explanation.`
+Output the SUMMARY line first, then the updated Markdown content. Do not include any other preamble.`
 
 // WikiPageRetractPrompt removes information contributed by a deleted document from an existing wiki page.
 const WikiPageRetractPrompt = `You are a wiki editor. A source document has been DELETED from the knowledge base. You must update the existing wiki page to remove any information that came exclusively from this deleted document.
 
-## Existing Page Content
+<existing_page_content>
 {{.ExistingContent}}
+</existing_page_content>
 
-## Deleted Document Title
-{{.DeletedDocTitle}}
+<deleted_document>
+<title>{{.DeletedDocTitle}}</title>
+<content>
+{{.DeletedDocContent}}
+</content>
+</deleted_document>
 
-## Remaining Source Documents
+<remaining_sources>
 {{.RemainingSources}}
+</remaining_sources>
 
-## Instructions
-1. Carefully review the existing page content.
-2. Remove any facts, claims, or details that were ONLY sourced from "{{.DeletedDocTitle}}".
-3. If a fact is also supported by the remaining source documents, KEEP it.
-4. If you are unsure whether a fact came from the deleted document, keep it as-is — do NOT add any review notes or annotations.
-5. Update or remove the "Source: {{.DeletedDocTitle}}" reference line if present.
-6. Remove any [[wiki-link]] references that point to pages that no longer exist, if you can identify them.
-7. Maintain the existing page structure, formatting style, and language.
-8. If after removing the deleted document's contributions the page becomes nearly empty, output just: "# [Title]\n\n*This page's primary source document was removed.*"
-9. Write in {{.Language}}.
+<valid_wiki_links>
+{{.AvailableSlugs}}
+</valid_wiki_links>
 
-Output ONLY the updated Markdown content. Do not include any preamble or explanation.`
+<instructions>
+1. The FIRST line of your output MUST be: SUMMARY: {one sentence, 15-40 words, describing what this page is about after retraction — for wiki index listing}
+2. Carefully review the existing page content and compare it with the deleted document content above.
+3. Remove any facts, claims, or details that were ONLY sourced from the deleted document.
+4. If a fact is also supported by the remaining source documents, KEEP it.
+5. If you are unsure whether a fact came from the deleted document, keep it as-is — do NOT add any review notes or annotations.
+6. Update or remove the "Source: {{.DeletedDocTitle}}" reference line if present.
+7. Keep [[wiki-link]] references ONLY if the slug appears in the <valid_wiki_links> list above. Remove any [[wiki-link]] whose slug is NOT in that list.
+8. Maintain the existing page structure, formatting style, and language.
+9. If after removing the deleted document's contributions the page becomes nearly empty, output just: "SUMMARY: (empty page)\n# [Title]\n\n*This page's primary source document was removed.*"
+10. Write in {{.Language}}.
+</instructions>
 
-// WikiIndexRebuildPrompt generates the index page content from a list of all pages.
-const WikiIndexRebuildPrompt = `You are a wiki editor. Generate an index page (table of contents) for a wiki based on the following page listing.
+Output the SUMMARY line first, then the updated Markdown content. Do not include any other preamble.`
 
-## Pages
-{{.PageListing}}
+// WikiIndexIntroPrompt generates the introduction for a NEW index page (first time only).
+const WikiIndexIntroPrompt = `You are a wiki editor. Write a brief introduction for a wiki knowledge base index page.
 
-## Instructions
-1. Organize pages by category (Summaries, Entities, Concepts, Analyses, etc.).
-2. For each page, include: [[slug]] — one-line summary
-3. Within each category, sort alphabetically.
-4. Include a brief introduction at the top explaining what this wiki covers.
-5. Write in {{.Language}}.
+<document_summaries>
+{{.DocumentSummaries}}
+</document_summaries>
 
-Output ONLY the Markdown content for the index page.`
+<instructions>
+1. Write a title line starting with "# " that reflects the knowledge domain.
+2. Follow with 2-3 sentences describing what this wiki covers, based on the document summaries above.
+3. Keep it concise — this is just the header section, the directory listing will be added separately below.
+4. Write in {{.Language}}.
+</instructions>
+
+Output ONLY the title and introduction paragraph. Do NOT generate any directory listings or page links.`
+
+// WikiIndexIntroUpdatePrompt incrementally updates an existing index introduction.
+const WikiIndexIntroUpdatePrompt = `You are a wiki editor. Update the introduction section of a wiki index page to reflect recent changes.
+
+<current_introduction>
+{{.ExistingIntro}}
+</current_introduction>
+
+<changes>
+{{.ChangeDescription}}
+</changes>
+
+<document_summaries>
+{{.DocumentSummaries}}
+</document_summaries>
+
+<instructions>
+1. Update the introduction to accurately reflect the current state of the wiki.
+2. If documents were added, mention the new topics if they significantly change the wiki's scope.
+3. If documents were removed, remove references to those topics if they no longer apply.
+4. Keep the same tone, style, and title format as the existing introduction.
+5. Keep it concise — 1 title line + 2-3 sentences.
+6. Write in {{.Language}}.
+</instructions>
+
+Output ONLY the updated title and introduction paragraph. Do NOT generate any directory listings or page links.`
 
 // WikiLogEntryTemplate is a simple template for log entries (not LLM-generated).
 const WikiLogEntryTemplate = `## [{{.Date}}] {{.Operation}} | {{.Title}}
@@ -207,13 +260,15 @@ The wiki has a log page (slug: "log") that records all ingest and update activit
 // between newly extracted items and existing wiki pages.
 const WikiDeduplicationPrompt = `You are a deduplication system. Given a list of newly extracted items and a list of existing wiki pages, determine which new items refer to the same entity or concept as an existing page.
 
-## Newly Extracted Items
+<new_items>
 {{.NewItems}}
+</new_items>
 
-## Existing Wiki Pages
+<existing_pages>
 {{.ExistingPages}}
+</existing_pages>
 
-## Instructions
+<instructions>
 For each newly extracted item, check if it refers to the same real-world entity or concept as any existing page. Consider:
 - Name variations (e.g. "Acme Corp" vs "Acme Corporation", "RAG" vs "Retrieval-Augmented Generation")
 - Abbreviations and full names
@@ -223,6 +278,7 @@ For each newly extracted item, check if it refers to the same real-world entity 
 Return a JSON object with a "merges" map. The key is the NEW item's slug, the value is the EXISTING page's slug that it should merge into. Only include items that have a match.
 
 If no items match any existing pages, return: {"merges": {}}
+</instructions>
 
 Output ONLY valid JSON. Example:
 {"merges": {"entity/acme-corporation": "entity/acme-corp", "concept/rag": "concept/retrieval-augmented-generation"}}`
