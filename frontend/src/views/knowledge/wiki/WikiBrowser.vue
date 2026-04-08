@@ -43,7 +43,6 @@
             v-model="searchQuery"
             :placeholder="$t('knowledgeEditor.wikiBrowser.searchPlaceholder')"
             clearable
-            size="small"
             @enter="doSearch"
             @clear="loadPages"
           >
@@ -55,26 +54,24 @@
           <!-- Index page (pinned at top) -->
           <div
             v-if="indexPage"
-            :class="['wiki-page-item wiki-page-item-index', { active: selectedPage?.id === indexPage.id }]"
+            :class="['wiki-nav-item', { active: selectedPage?.id === indexPage.id }]"
             @click="selectPage(indexPage)"
           >
-            <div class="wiki-page-item-title">
-              <t-icon name="catalog" size="14px" class="wiki-index-icon" />
-              {{ indexPage.title || 'Index' }}
-            </div>
+            <t-icon name="catalog" class="wiki-nav-icon" />
+            <span class="wiki-nav-text">{{ $t('knowledgeEditor.wikiBrowser.indexTitle') }}</span>
           </div>
 
           <!-- Log page (pinned) -->
           <div
             v-if="logPage"
-            :class="['wiki-page-item wiki-page-item-log', { active: selectedPage?.id === logPage.id }]"
+            :class="['wiki-nav-item', { active: selectedPage?.id === logPage.id }]"
             @click="selectPage(logPage)"
           >
-            <div class="wiki-page-item-title">
-              <t-icon name="history" size="14px" class="wiki-index-icon" />
-              {{ $t('knowledgeEditor.wikiBrowser.logTitle') }}
-            </div>
+            <t-icon name="history" class="wiki-nav-icon" />
+            <span class="wiki-nav-text">{{ $t('knowledgeEditor.wikiBrowser.logTitle') }}</span>
           </div>
+
+          <div class="wiki-sidebar-divider" v-if="indexPage || logPage"></div>
 
           <!-- Grouped by type (collapsible) -->
           <template v-for="group in groupedPages" :key="group.type">
@@ -100,7 +97,6 @@
                 <div class="wiki-page-item-title">{{ page.title }}</div>
                 <div class="wiki-page-item-summary">{{ page.summary }}</div>
                 <div class="wiki-page-item-meta">
-                  <span class="wiki-page-item-slug">{{ page.slug }}</span>
                   <span>{{ formatDate(page.updated_at) }}</span>
                 </div>
               </div>
@@ -116,73 +112,78 @@
             <p class="wiki-empty-desc">{{ $t('knowledgeEditor.wikiBrowser.emptyDesc') }}</p>
           </div>
         </div>
-
-        <!-- Stats footer -->
-        <div v-if="stats" class="wiki-sidebar-footer">
-          {{ $t('knowledgeEditor.wikiBrowser.stats', { pages: stats.total_pages, links: stats.total_links }) }}
-        </div>
       </aside>
 
       <!-- Right Panel: Reader -->
       <div class="wiki-content">
         <div class="wiki-reader">
-          <template v-if="selectedPage">
-            <!-- Page header -->
-            <div class="wiki-reader-header">
-              <h2 class="wiki-reader-title">{{ selectedPage.title }}</h2>
-              <div class="wiki-reader-meta">
-                <t-tag size="small" :theme="getTypeTheme(selectedPage.page_type)" variant="light-outline">
-                  {{ getTypeLabel(selectedPage.page_type) }}
-                </t-tag>
-                <span class="wiki-reader-meta-text">{{ $t('knowledgeEditor.wikiBrowser.version', { ver: selectedPage.version }) }}</span>
-                <span class="wiki-reader-meta-text">{{ formatDate(selectedPage.updated_at) }}</span>
+          <div class="wiki-reader-inner">
+            <template v-if="selectedPage">
+              <!-- Navigation -->
+              <div v-if="navHistory.length" class="wiki-nav-bar">
+                <a href="#" class="wiki-nav-back" @click.prevent="goBack">
+                  <t-icon name="arrow-left" size="14px" />
+                  <span>{{ navHistory[navHistory.length - 1].title }}</span>
+                </a>
               </div>
-            </div>
 
-            <!-- Backlinks (in_links) -->
-            <div v-if="selectedPage.in_links?.length" class="wiki-reader-backlinks">
-              <span class="wiki-backlink-label">
-                <t-icon name="link" size="14px" />
-                {{ $t('knowledgeEditor.wikiBrowser.linkedFrom') }}
-              </span>
-              <a
-                v-for="link in selectedPage.in_links"
-                :key="'in-' + link"
-                href="#"
-                class="wiki-backlink-tag"
-                @click.prevent="navigateToSlug(link)"
-              >{{ slugDisplayName(link) }}</a>
-            </div>
+              <!-- Page header -->
+              <div class="wiki-reader-header">
+                <h2 class="wiki-reader-title">{{ selectedPage.title }}</h2>
+                <div class="wiki-reader-meta">
+                  <t-tag size="small" :theme="getTypeTheme(selectedPage.page_type)" variant="light-outline">
+                    {{ getTypeLabel(selectedPage.page_type) }}
+                  </t-tag>
+                  <span class="wiki-reader-meta-text">{{ $t('knowledgeEditor.wikiBrowser.version', { ver: selectedPage.version }) }}</span>
+                  <span class="wiki-reader-meta-text">{{ formatDate(selectedPage.updated_at) }}</span>
+                </div>
+              </div>
 
-            <!-- Content -->
-            <div class="wiki-reader-body" v-html="renderedContent" @click="handleContentClick"></div>
+              <!-- Backlinks (in_links) -->
+              <div v-if="selectedPage.in_links?.length" class="wiki-reader-backlinks">
+                <span class="wiki-backlink-label">
+                  <t-icon name="link" size="14px" />
+                  {{ $t('knowledgeEditor.wikiBrowser.linkedFrom') }}
+                </span>
+                <a
+                  v-for="link in selectedPage.in_links"
+                  :key="'in-' + link"
+                  href="#"
+                  class="wiki-backlink-tag"
+                  @click.prevent="navigateToSlug(link)"
+                >{{ slugDisplayName(link) }}</a>
+              </div>
 
-            <!-- Source refs -->
-            <div v-if="parsedSourceRefs.length" class="wiki-reader-sources">
-              <span class="wiki-link-label">{{ $t('knowledgeEditor.wikiBrowser.sources') }}</span>
-              <a
-                v-for="ref in parsedSourceRefs"
-                :key="ref.id"
-                href="#"
-                class="wiki-source-ref"
-                @click.prevent="emit('open-source-doc', ref.id)"
-              >
-                <t-icon name="file" size="14px" />
-                {{ ref.title }}
-              </a>
-            </div>
-          </template>
+              <!-- Content -->
+              <div class="wiki-reader-body" v-html="renderedContent" @click="handleContentClick"></div>
 
-          <!-- No page selected -->
-          <div v-else class="wiki-reader-empty">
-            <div class="wiki-empty-icon">
-              <t-icon name="browse" size="48px" />
-            </div>
-            <p class="wiki-empty-title" v-if="contentPages.length > 0">{{ $t('knowledgeEditor.wikiBrowser.selectPageHint') }}</p>
-            <template v-else>
-              <p class="wiki-empty-title">{{ $t('knowledgeEditor.wikiBrowser.emptyTitle') }}</p>
-              <p class="wiki-empty-desc">{{ $t('knowledgeEditor.wikiBrowser.emptyDesc') }}</p>
+              <!-- Source refs -->
+              <div v-if="parsedSourceRefs.length" class="wiki-reader-sources">
+                <span class="wiki-link-label">{{ $t('knowledgeEditor.wikiBrowser.sources') }}</span>
+                <a
+                  v-for="ref in parsedSourceRefs"
+                  :key="ref.id"
+                  href="#"
+                  class="wiki-source-ref"
+                  @click.prevent="emit('open-source-doc', ref.id)"
+                >
+                  <t-icon name="file" size="14px" />
+                  {{ ref.title }}
+                </a>
+              </div>
             </template>
+
+            <!-- No page selected -->
+            <div v-else class="wiki-reader-empty">
+              <div class="wiki-empty-icon">
+                <t-icon name="browse" size="48px" />
+              </div>
+              <p class="wiki-empty-title" v-if="contentPages.length > 0">{{ $t('knowledgeEditor.wikiBrowser.selectPageHint') }}</p>
+              <template v-else>
+                <p class="wiki-empty-title">{{ $t('knowledgeEditor.wikiBrowser.emptyTitle') }}</p>
+                <p class="wiki-empty-desc">{{ $t('knowledgeEditor.wikiBrowser.emptyDesc') }}</p>
+              </template>
+            </div>
           </div>
         </div>
       </div>
@@ -193,6 +194,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch, nextTick, reactive } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { marked } from 'marked'
 import {
   listWikiPages,
   getWikiPage,
@@ -228,6 +230,7 @@ const graphEdgeEls = ref<{ line: SVGLineElement; bidir: boolean }[]>([])
 const collapsedGroups = reactive<Record<string, boolean>>({})
 const graphDrawerVisible = ref(false)
 const graphDrawerPage = ref<WikiPage | null>(null)
+const navHistory = ref<WikiPage[]>([])
 // Index and log pages (pinned at top)
 const indexPage = computed(() => pages.value.find(p => p.page_type === 'index'))
 const logPage = computed(() => pages.value.find(p => p.page_type === 'log'))
@@ -287,22 +290,16 @@ const graphDrawerContent = computed(() => {
 })
 
 function renderMarkdown(content: string): string {
-  let html = content
-  html = html.replace(/\[\[([^\]]+)\]\]/g, (_, inner: string) => {
+  // Pre-process wiki links [[slug|name]] to custom HTML tags
+  let preprocessed = content.replace(/\[\[([^\]]+)\]\]/g, (_, inner: string) => {
     const pipeIdx = inner.indexOf('|')
     const slug = pipeIdx > 0 ? inner.substring(0, pipeIdx).trim() : inner.trim()
     const display = pipeIdx > 0 ? inner.substring(pipeIdx + 1).trim() : slugDisplayName(slug)
     return `<a href="#" class="wiki-content-link" data-slug="${slug}">${display}</a>`
   })
-  html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>')
-  html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>')
-  html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>')
-  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>')
-  html = html.replace(/^- (.+)$/gm, '<li>$1</li>')
-  html = html.replace(/\n\n/g, '</p><p>')
-  html = html.replace(/\n/g, '<br>')
-  return `<p>${html}</p>`
+
+  // Use marked to render the markdown to HTML
+  return marked.parse(preprocessed, { breaks: true, async: false }) as string
 }
 
 async function openGraphDrawer(slug: string) {
@@ -403,6 +400,9 @@ async function loadGraph() {
 
 async function selectPage(page: WikiPage) {
   try {
+    if (selectedPage.value && selectedPage.value.id !== page.id) {
+      navHistory.value.push(selectedPage.value)
+    }
     const res = await getWikiPage(props.knowledgeBaseId, page.slug)
     selectedPage.value = (res as any).data || res as any
   } catch (e) {
@@ -412,10 +412,20 @@ async function selectPage(page: WikiPage) {
 
 async function navigateToSlug(slug: string) {
   try {
+    if (selectedPage.value && selectedPage.value.slug !== slug) {
+      navHistory.value.push(selectedPage.value)
+    }
     const res = await getWikiPage(props.knowledgeBaseId, slug)
     selectedPage.value = (res as any).data || res as any
   } catch (e) {
     console.error(`Failed to navigate to ${slug}:`, e)
+  }
+}
+
+function goBack() {
+  const prev = navHistory.value.pop()
+  if (prev) {
+    selectedPage.value = prev
   }
 }
 
@@ -1051,10 +1061,16 @@ function drawLegend(svg: SVGSVGElement, width: number) {
 
 // Load graph when switching to graph view
 // Reload all pages when search query is cleared (backspace or clear button)
+let searchTimer: ReturnType<typeof setTimeout> | null = null
 watch(searchQuery, (val) => {
-  if (!val || !val.trim()) {
-    loadPages()
-  }
+  if (searchTimer) clearTimeout(searchTimer)
+  searchTimer = setTimeout(() => {
+    if (!val || !val.trim()) {
+      loadPages()
+    } else {
+      doSearch()
+    }
+  }, 300)
 })
 
 watch(() => props.view, (v) => {
@@ -1078,53 +1094,86 @@ onMounted(() => {
 
 // ── Left Sidebar ──
 .wiki-sidebar {
-  width: 300px;
-  min-width: 260px;
+  width: 280px;
+  min-width: 240px;
   border-right: 1px solid var(--td-component-stroke);
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
+  background: var(--td-bg-color-container);
 }
 
 .wiki-sidebar-header {
-  padding: 16px 12px 12px;
+  padding: 16px 16px 12px;
 }
 
 .wiki-page-list {
   flex: 1;
   overflow-y: auto;
-  padding: 0 8px 8px;
+  padding: 0 12px 12px;
 }
 
-.wiki-page-item-index,
-.wiki-page-item-log {
-  .wiki-page-item-title {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 13px;
+.wiki-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  margin-bottom: 4px;
+  transition: all 0.15s;
+
+  &:hover {
+    background: var(--td-bg-color-container-hover);
   }
-  .wiki-index-icon {
-    color: var(--td-text-color-placeholder);
+
+  &.active {
+    background: var(--td-brand-color-light);
+    .wiki-nav-text {
+      color: var(--td-brand-color);
+      font-weight: 600;
+    }
+    .wiki-nav-icon {
+      color: var(--td-brand-color);
+    }
   }
+
+  .wiki-nav-icon {
+    font-size: 16px;
+    color: var(--td-text-color-secondary);
+  }
+
+  .wiki-nav-text {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--td-text-color-primary);
+  }
+}
+
+.wiki-sidebar-divider {
+  height: 1px;
+  background: var(--td-component-stroke);
+  margin: 8px 12px;
 }
 
 .wiki-group-label {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--td-text-color-placeholder);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  padding: 12px 12px 4px;
-  margin-top: 4px;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--td-bg-color-container);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--td-text-color-secondary);
+  padding: 12px 8px 8px;
   cursor: pointer;
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   user-select: none;
+  transition: color 0.15s;
 
   &:hover {
-    color: var(--td-text-color-secondary);
+    color: var(--td-text-color-primary);
   }
 
   &:first-child {
@@ -1133,27 +1182,29 @@ onMounted(() => {
 }
 
 .wiki-group-chevron {
+  font-size: 14px;
+  color: var(--td-text-color-placeholder);
+  transition: transform 0.2s;
   flex-shrink: 0;
 }
 
 .wiki-group-count {
   margin-left: auto;
-  font-size: 10px;
-  font-weight: 400;
+  font-size: 12px;
   color: var(--td-text-color-placeholder);
   background: var(--td-bg-color-secondarycontainer);
-  border-radius: 8px;
-  padding: 0 6px;
-  min-width: 18px;
+  border-radius: 10px;
+  padding: 0 8px;
+  line-height: 18px;
   text-align: center;
 }
 
 .wiki-page-item {
-  padding: 8px 12px;
-  border-radius: 8px;
+  padding: 10px 12px;
+  border-radius: 6px;
   cursor: pointer;
   margin-bottom: 2px;
-  transition: all 0.15s cubic-bezier(0.2, 0, 0, 1);
+  transition: all 0.15s;
 
   &:hover {
     background: var(--td-bg-color-container-hover);
@@ -1166,42 +1217,31 @@ onMounted(() => {
 
 .wiki-page-item-title {
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 500;
   color: var(--td-text-color-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  margin-bottom: 2px;
+  margin-bottom: 4px;
 }
 
 .wiki-page-item-summary {
   font-size: 12px;
   color: var(--td-text-color-secondary);
-  line-height: 1.4;
+  line-height: 1.5;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
-  margin-bottom: 4px;
+  margin-bottom: 6px;
 }
 
 .wiki-page-item-meta {
   display: flex;
   justify-content: space-between;
+  align-items: center;
   font-size: 11px;
   color: var(--td-text-color-placeholder);
-}
-
-.wiki-page-item-slug {
-  font-family: monospace;
-}
-
-.wiki-sidebar-footer {
-  padding: 8px 16px;
-  border-top: 1px solid var(--td-component-stroke);
-  font-size: 12px;
-  color: var(--td-text-color-placeholder);
-  text-align: center;
 }
 
 // ── Right Content ──
@@ -1216,17 +1256,44 @@ onMounted(() => {
 .wiki-reader {
   flex: 1;
   overflow-y: auto;
-  padding: 24px 32px;
+  padding: 16px 24px;
+}
+
+.wiki-reader-inner {
+  width: 100%;
 }
 
 .wiki-reader-header {
-  margin-bottom: 24px;
+  margin-bottom: 16px;
+}
+
+.wiki-nav-bar {
+  margin-bottom: 16px;
+}
+
+.wiki-nav-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--td-text-color-secondary);
+  text-decoration: none;
+  padding: 4px 8px;
+  margin-left: -8px;
+  border-radius: 4px;
+  transition: all 0.15s;
+
+  &:hover {
+    color: var(--td-brand-color);
+    background: var(--td-bg-color-container-hover);
+  }
 }
 
 .wiki-reader-title {
-  margin: 0 0 8px;
-  font-size: 22px;
+  margin: 0 0 12px;
+  font-size: 26px;
   font-weight: 600;
+  line-height: 1.3;
   color: var(--td-text-color-primary);
 }
 
@@ -1281,21 +1348,67 @@ onMounted(() => {
 }
 
 .wiki-reader-body {
-  line-height: 1.8;
+  line-height: 1.6;
   font-size: 14px;
   color: var(--td-text-color-primary);
 
-  :deep(h1) { font-size: 22px; margin: 24px 0 12px; font-weight: 600; }
-  :deep(h2) { font-size: 18px; margin: 20px 0 10px; font-weight: 600; }
-  :deep(h3) { font-size: 16px; margin: 16px 0 8px; font-weight: 500; }
-  :deep(p) { margin: 0 0 12px; }
-  :deep(li) { margin-left: 20px; margin-bottom: 4px; }
+  :deep(h1) { font-size: 24px; margin: 28px 0 16px; font-weight: 600; line-height: 1.4; }
+  :deep(h2) { font-size: 18px; margin: 24px 0 12px; font-weight: 600; line-height: 1.4; }
+  :deep(h3) { font-size: 16px; margin: 20px 0 10px; font-weight: 600; line-height: 1.5; }
+  :deep(h4), :deep(h5), :deep(h6) { font-size: 14px; margin: 16px 0 8px; font-weight: 600; line-height: 1.5; }
+  
+  :deep(p) { margin: 0 0 14px; }
+  
+  :deep(ul), :deep(ol) { 
+    margin: 0 0 14px; 
+    padding-left: 24px; 
+  }
+  :deep(li) { 
+    margin-bottom: 6px; 
+    line-height: 1.6;
+  }
+  :deep(li > p) {
+    margin-bottom: 6px;
+  }
+
+  :deep(blockquote) {
+    margin: 0 0 14px;
+    padding: 10px 16px;
+    background: var(--td-bg-color-secondarycontainer);
+    border-left: 4px solid var(--td-component-border);
+    border-radius: 0 4px 4px 0;
+    color: var(--td-text-color-secondary);
+  }
+  
+  :deep(code) {
+    font-family: monospace;
+    font-size: 13px;
+    padding: 2px 4px;
+    background: var(--td-bg-color-secondarycontainer);
+    border-radius: 4px;
+    color: var(--td-brand-color);
+  }
+  
+  :deep(pre) {
+    margin: 0 0 14px;
+    padding: 12px 16px;
+    background: var(--td-bg-color-secondarycontainer);
+    border-radius: 6px;
+    overflow-x: auto;
+    
+    code {
+      padding: 0;
+      background: transparent;
+      color: inherit;
+    }
+  }
 
   :deep(.wiki-content-link) {
     color: var(--td-brand-color);
     text-decoration: none;
     border-bottom: 1px dashed var(--td-brand-color);
     cursor: pointer;
+    font-weight: 500;
     &:hover { border-bottom-style: solid; }
   }
 }
@@ -1304,34 +1417,34 @@ onMounted(() => {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 6px;
-  padding: 10px 14px;
-  background: var(--td-bg-color-secondarycontainer);
-  border-radius: 8px;
-  margin-bottom: 16px;
+  gap: 8px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--td-component-stroke);
+  margin-bottom: 24px;
 }
 
 .wiki-backlink-label {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--td-text-color-placeholder);
   font-weight: 500;
   flex-shrink: 0;
-  margin-right: 2px;
+  margin-right: 4px;
 }
 
 .wiki-backlink-tag {
-  color: var(--td-brand-color);
+  color: var(--td-text-color-secondary);
   text-decoration: none;
-  font-size: 12px;
+  font-size: 13px;
   padding: 2px 8px;
-  background: var(--td-bg-color-container);
+  background: var(--td-bg-color-secondarycontainer);
   border-radius: 4px;
-  transition: background 0.15s;
+  transition: all 0.15s;
 
   &:hover {
+    color: var(--td-brand-color);
     background: var(--td-brand-color-light);
   }
 }
