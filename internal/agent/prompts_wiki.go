@@ -25,7 +25,7 @@ const WikiSummaryPrompt = `You are a wiki editor. Given the following document c
 2. After the SUMMARY line, write a comprehensive summary of the document in Markdown format.
 3. Include the key facts, arguments, and conclusions.
 4. Use proper heading hierarchy (## for sections, ### for subsections).
-5. **Wiki-link rule**: The available_wiki_pages list above maps slugs to display names (format: "[[slug]] = display name"). Whenever you mention a name that matches a listed entry, you MUST write it as [[slug|display name]] (e.g. [[entity/zhong-guo|中国]]), NOT as bold (**name**) or bare [[slug]]. Use the EXACT slugs provided — do NOT invent new slugs.
+5. **Wiki-link rule**: The available_wiki_pages list above maps slugs to display names and their aliases (format: "[[slug]] = display name (Aliases: a, b)"). Whenever you mention a name or alias that matches a listed entry, you MUST write it as [[slug|display name]] (e.g. [[entity/zhong-guo|中国]]), NOT as bold (**name**) or bare [[slug]]. Use the EXACT slugs provided — do NOT invent new slugs.
 6. **Image rule**: If the document contains <images> tags with <image> elements, you SHOULD include the relevant images in your summary using the Markdown syntax: ![caption](url). Place the images where they are contextually relevant to the text.
 7. At the end, include a "## Key Takeaways" section with bullet points.
 8. Write in {{.Language}}.

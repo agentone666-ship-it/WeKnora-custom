@@ -569,7 +569,7 @@ func (s *wikiIngestService) processOneDocument(
 	}
 
 	// Step 1: Extract entities and concepts
-	extractedPages, slugNames, err := s.extractEntitiesAndConcepts(ctx, chatModel, content, docTitle, lang, docPayload, sourceRef, oldPageSlugs)
+	extractedPages, slugItems, err := s.extractEntitiesAndConcepts(ctx, chatModel, content, docTitle, lang, docPayload, sourceRef, oldPageSlugs)
 	if err != nil {
 		logger.Warnf(ctx, "wiki ingest: knowledge extraction failed for %s: %v", knowledgeID, err)
 	} else {
@@ -580,8 +580,12 @@ func (s *wikiIngestService) processOneDocument(
 	summarySlug := fmt.Sprintf("summary/%s", slugify(docTitle))
 	var slugListing string
 	for _, slug := range extractedPages {
-		if name, ok := slugNames[slug]; ok {
-			slugListing += fmt.Sprintf("- [[%s]] = %s\n", slug, name)
+		if item, ok := slugItems[slug]; ok {
+			aliases := ""
+			if len(item.Aliases) > 0 {
+				aliases = fmt.Sprintf(" (Aliases: %s)", strings.Join(item.Aliases, ", "))
+			}
+			slugListing += fmt.Sprintf("- [[%s]] = %s%s\n", slug, item.Name, aliases)
 		} else {
 			slugListing += fmt.Sprintf("- [[%s]]\n", slug)
 		}
@@ -708,8 +712,8 @@ func (s *wikiIngestService) injectCrossLinks(ctx context.Context, kbID string, a
 	}
 
 	type pageRef struct {
-		slug  string
-		title string
+		slug      string
+		matchText string
 	}
 	var allRefs []pageRef
 	for _, p := range allPages {
@@ -717,7 +721,12 @@ func (s *wikiIngestService) injectCrossLinks(ctx context.Context, kbID string, a
 			continue
 		}
 		if p.Title != "" {
-			allRefs = append(allRefs, pageRef{slug: p.Slug, title: p.Title})
+			allRefs = append(allRefs, pageRef{slug: p.Slug, matchText: p.Title})
+		}
+		for _, alias := range p.Aliases {
+			if alias != "" {
+				allRefs = append(allRefs, pageRef{slug: p.Slug, matchText: alias})
+			}
 		}
 	}
 	if len(allRefs) == 0 {
@@ -728,7 +737,7 @@ func (s *wikiIngestService) injectCrossLinks(ctx context.Context, kbID string, a
 	// partial matches (e.g. "北京邮电大学" before "北京")
 	for i := 0; i < len(allRefs); i++ {
 		for j := i + 1; j < len(allRefs); j++ {
-			if len([]rune(allRefs[j].title)) > len([]rune(allRefs[i].title)) {
+			if len([]rune(allRefs[j].matchText)) > len([]rune(allRefs[i].matchText)) {
 				allRefs[i], allRefs[j] = allRefs[j], allRefs[i]
 			}
 		}
@@ -761,8 +770,8 @@ func (s *wikiIngestService) injectCrossLinks(ctx context.Context, kbID string, a
 			if strings.Contains(content, "[["+ref.slug+"|") || strings.Contains(content, "[["+ref.slug+"]]") {
 				continue
 			}
-			if strings.Contains(content, ref.title) {
-				content = replaceFirstOutsideLinks(content, ref.title, "[["+ref.slug+"|"+ref.title+"]]")
+			if strings.Contains(content, ref.matchText) {
+				content = replaceFirstOutsideLinks(content, ref.matchText, "[["+ref.slug+"|"+ref.matchText+"]]")
 				changed = true
 			}
 		}
@@ -940,7 +949,7 @@ func (s *wikiIngestService) extractEntitiesAndConcepts(
 	payload WikiIngestPayload,
 	sourceRef string,
 	oldPageSlugs map[string]bool,
-) ([]string, map[string]string, error) {
+) ([]string, map[string]extractedItem, error) {
 	// Build previous slugs listing for the prompt
 	var prevSlugsText string
 	if len(oldPageSlugs) > 0 {
@@ -985,16 +994,16 @@ func (s *wikiIngestService) extractEntitiesAndConcepts(
 	// Deduplicate concepts against existing wiki pages (LLM-based)
 	result.Concepts = s.deduplicateItems(ctx, chatModel, result.Concepts, types.WikiPageTypeConcept, payload.KnowledgeBaseID)
 
-	// Build slug→name map for wiki-link generation in summary pages
-	slugNames := make(map[string]string)
+	// Build slug→item map for wiki-link generation in summary pages
+	slugItems := make(map[string]extractedItem)
 	for _, item := range result.Entities {
 		if item.Slug != "" && item.Name != "" {
-			slugNames[item.Slug] = item.Name
+			slugItems[item.Slug] = item
 		}
 	}
 	for _, item := range result.Concepts {
 		if item.Slug != "" && item.Name != "" {
-			slugNames[item.Slug] = item.Name
+			slugItems[item.Slug] = item
 		}
 	}
 
@@ -1014,7 +1023,7 @@ func (s *wikiIngestService) extractEntitiesAndConcepts(
 		affected = append(affected, conceptSlugs...)
 	}
 
-	return affected, slugNames, nil
+	return affected, slugItems, nil
 }
 
 // upsertExtractedPages creates or updates wiki pages from pre-extracted items.
