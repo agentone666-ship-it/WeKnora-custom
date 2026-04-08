@@ -26,9 +26,10 @@ const WikiSummaryPrompt = `You are a wiki editor. Given the following document c
 3. Include the key facts, arguments, and conclusions.
 4. Use proper heading hierarchy (## for sections, ### for subsections).
 5. **Wiki-link rule**: The available_wiki_pages list above maps slugs to display names (format: "[[slug]] = display name"). Whenever you mention a name that matches a listed entry, you MUST write it as [[slug|display name]] (e.g. [[entity/zhong-guo|中国]]), NOT as bold (**name**) or bare [[slug]]. Use the EXACT slugs provided — do NOT invent new slugs.
-6. At the end, include a "## Key Takeaways" section with bullet points.
-7. Write in {{.Language}}.
-8. Keep the summary concise but thorough (500-1500 words depending on document length).
+6. **Image rule**: If the document contains <images> tags with <image> elements, you SHOULD include the relevant images in your summary using the Markdown syntax: ![caption](url). Place the images where they are contextually relevant to the text.
+7. At the end, include a "## Key Takeaways" section with bullet points.
+8. Write in {{.Language}}.
+9. Keep the summary concise but thorough (500-1500 words depending on document length).
 </instructions>
 
 Output the SUMMARY line first, then the Markdown content. Do not include any other preamble.`
@@ -51,7 +52,7 @@ const WikiKnowledgeExtractPrompt = `You are a knowledge extraction system. Analy
 
 <instructions>
 Return a JSON object with two arrays: "entities" and "concepts".
-**IMPORTANT: Write ALL names, descriptions, and details in {{.Language}}.**
+**IMPORTANT: Write ALL names, descriptions, and details in {{.Language}}**.
 
 ### Slug Continuity Rules
 If previous slugs are provided above, you MUST follow these rules:
@@ -65,7 +66,7 @@ Each entity should have:
 - "name": The entity name in {{.Language}} (human-readable)
 - "slug": URL-friendly slug, format "entity/<lowercase-hyphenated-name>" (use romanized/pinyin form for non-Latin names). **Reuse previous slug if the entity was extracted before.**
 - "description": **Index listing summary** — one sentence, 15-40 words, in {{.Language}}. Describes WHAT this entity IS and its role in the document. Must be self-contained (understandable without reading the full page). This will be displayed in the wiki index.
-- "details": A 2-5 sentence summary in {{.Language}} of key facts from the document
+- "details": A 2-5 sentence summary in {{.Language}} of key facts from the document. **Image rule**: If the document contains relevant <image> elements in an <images> tag, include them in the details using Markdown syntax: ![caption](url).
 
 Only include entities that are substantively discussed (mentioned at least twice or described in detail). Do NOT include generic terms.
 
@@ -74,7 +75,7 @@ Each concept should have:
 - "name": The concept name in {{.Language}} (human-readable)
 - "slug": URL-friendly slug, format "concept/<lowercase-hyphenated-name>" (use romanized/pinyin form for non-Latin names). **Reuse previous slug if the concept was extracted before.**
 - "description": **Index listing summary** — one sentence, 15-40 words, in {{.Language}}. Defines WHAT this concept IS. Must be self-contained (understandable without reading the full page). This will be displayed in the wiki index.
-- "details": A 2-5 sentence explanation in {{.Language}} as discussed in the document
+- "details": A 2-5 sentence explanation in {{.Language}} as discussed in the document. **Image rule**: If the document contains relevant <image> elements in an <images> tag, include them in the details using Markdown syntax: ![caption](url).
 
 Only include concepts that are substantively discussed. Skip trivial or overly generic concepts.
 
@@ -127,7 +128,8 @@ const WikiPageUpdatePrompt = `You are a wiki editor tasked with updating an exis
 6. Preserve any existing [[slug|name]] wiki-link references in the content. Do NOT invent new wiki-link slugs.
 7. Maintain the existing page structure and formatting style.
 8. Add a source reference to the new document at the bottom.
-9. Write in {{.Language}}.
+9. **Image rule**: If the new document contains <images> tags with <image> elements, you SHOULD include the relevant images in your updated page using the Markdown syntax: ![caption](url). Place the images where they are contextually relevant to the text.
+10. Write in {{.Language}}.
 </instructions>
 
 Output the SUMMARY line first, then the updated Markdown content. Do not include any other preamble.`

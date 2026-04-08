@@ -70,6 +70,7 @@
           :attach="false"
           :show-overlay="false"
           :close-btn="true"
+          destroy-on-close
           class="wiki-graph-drawer"
         >
           <template v-if="graphDrawerPage">
@@ -79,7 +80,7 @@
               </t-tag>
               <span class="wiki-reader-meta-text">{{ $t('knowledgeEditor.wikiBrowser.version', { ver: graphDrawerPage.version }) }}</span>
             </div>
-            <div class="wiki-reader-body" v-html="graphDrawerContent" @click="handleGraphDrawerClick"></div>
+            <div ref="drawerBodyRef" class="wiki-reader-body" v-html="graphDrawerContent" @click="handleGraphDrawerClick"></div>
           </template>
         </t-drawer>
       </div>
@@ -206,7 +207,7 @@
               </div>
 
               <!-- Content -->
-              <div class="wiki-reader-body" v-html="renderedContent" @click="handleContentClick"></div>
+              <div ref="readerBodyRef" class="wiki-reader-body" v-html="renderedContent" @click="handleContentClick"></div>
 
               <!-- Source refs -->
               <div v-if="parsedSourceRefs.length" class="wiki-reader-sources">
@@ -239,6 +240,11 @@
         </div>
       </div>
     </template>
+    
+    <!-- Image Preview -->
+    <Teleport to="body">
+      <picturePreview v-if="imagePreviewVisible" :reviewImg="imagePreviewVisible" :reviewUrl="imagePreviewUrl" @closePreImg="closeImagePreview" />
+    </Teleport>
   </div>
 </template>
 
@@ -246,6 +252,8 @@
 import { ref, computed, onMounted, watch, nextTick, reactive } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { marked } from 'marked'
+import { hydrateProtectedFileImages } from '@/utils/security'
+import picturePreview from '@/components/picture-preview.vue'
 import {
   listWikiPages,
   getWikiPage,
@@ -274,6 +282,8 @@ const graphData = ref<WikiGraphData | null>(null)
 const searchQuery = ref('')
 const graphSearchValue = ref('')
 const graphRef = ref<HTMLElement | null>(null)
+const readerBodyRef = ref<HTMLElement | null>(null)
+const drawerBodyRef = ref<HTMLElement | null>(null)
 const loading = ref(false)
 const graphLoading = ref(false)
 const graphReady = ref(false)
@@ -340,6 +350,21 @@ const graphDrawerContent = computed(() => {
   return renderMarkdown(graphDrawerPage.value.content)
 })
 
+const imagePreviewVisible = ref(false)
+const imagePreviewUrl = ref('')
+
+function closeImagePreview() {
+  imagePreviewVisible.value = false
+  imagePreviewUrl.value = ''
+}
+
+watch(graphDrawerContent, async () => {
+  await nextTick()
+  if (drawerBodyRef.value) {
+    await hydrateProtectedFileImages(drawerBodyRef.value)
+  }
+})
+
 function renderMarkdown(content: string): string {
   // Pre-process wiki links [[slug|name]] to custom HTML tags
   let preprocessed = content.replace(/\[\[([^\]]+)\]\]/g, (_, inner: string) => {
@@ -369,6 +394,12 @@ function handleGraphDrawerClick(e: MouseEvent) {
     e.preventDefault()
     const slug = target.getAttribute('data-slug')
     if (slug) handleGraphSearchSelect(slug)
+  } else if (target.tagName.toLowerCase() === 'img') {
+    e.preventDefault()
+    imagePreviewUrl.value = target.getAttribute('src') || ''
+    if (imagePreviewUrl.value) {
+      imagePreviewVisible.value = true
+    }
   }
 }
 
@@ -402,12 +433,25 @@ const renderedContent = computed(() => {
   return renderMarkdown(selectedPage.value.content)
 })
 
+watch(renderedContent, async () => {
+  await nextTick()
+  if (readerBodyRef.value) {
+    await hydrateProtectedFileImages(readerBodyRef.value)
+  }
+})
+
 function handleContentClick(e: MouseEvent) {
   const target = e.target as HTMLElement
   if (target.classList.contains('wiki-content-link')) {
     e.preventDefault()
     const slug = target.getAttribute('data-slug')
     if (slug) navigateToSlug(slug)
+  } else if (target.tagName.toLowerCase() === 'img') {
+    e.preventDefault()
+    imagePreviewUrl.value = target.getAttribute('src') || ''
+    if (imagePreviewUrl.value) {
+      imagePreviewVisible.value = true
+    }
   }
 }
 
@@ -1234,7 +1278,15 @@ watch(searchQuery, (val) => {
 })
 
 watch(() => props.view, (v) => {
-  if (v === 'graph') loadGraph()
+  if (v === 'graph') {
+    loadGraph()
+  } else if (v === 'browser') {
+    nextTick(async () => {
+      if (readerBodyRef.value && renderedContent.value) {
+        await hydrateProtectedFileImages(readerBodyRef.value)
+      }
+    })
+  }
 })
 
 onMounted(() => {
@@ -1560,6 +1612,29 @@ onMounted(() => {
       padding: 0;
       background: transparent;
       color: inherit;
+    }
+  }
+
+  :deep(p:has(img)) {
+    text-align: center;
+    color: var(--td-text-color-secondary);
+    font-size: 13px;
+    margin-top: 16px;
+    margin-bottom: 24px;
+    
+    img {
+      max-width: 100%;
+      max-height: 400px;
+      object-fit: contain;
+      border-radius: 6px;
+      display: block;
+      margin: 0 auto 8px;
+      cursor: zoom-in;
+      transition: opacity 0.2s;
+      
+      &:hover {
+        opacity: 0.9;
+      }
     }
   }
 
