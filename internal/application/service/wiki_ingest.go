@@ -725,30 +725,29 @@ func splitSummaryLine(raw string) (summary string, content string) {
 	return "", raw
 }
 
-// appendLogEntry appends an entry to the log page, including any synthesis suggestions
 // appendLogEntry appends a structured, grep-parseable entry to the log page.
 // Format: ## [2026-04-07 19:50:02] action | title
 // Followed by key-value metadata lines. No sub-headings — keeps `grep "^## \[" log.md` clean.
-func (s *wikiIngestService) appendLogEntry(ctx context.Context, payload WikiIngestPayload, action, knowledgeID, docTitle string, pagesAffected []string, extra string) {
-	logPage, _ := s.wikiService.GetLog(ctx, payload.KnowledgeBaseID)
+func (s *wikiIngestService) appendLogEntry(ctx context.Context, kbID string, action, knowledgeID, docTitle, summary string, pagesAffected []string) {
+	logPage, _ := s.wikiService.GetLog(ctx, kbID)
 	if logPage == nil {
 		return
 	}
 
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "\n## [%s] %s | %s\n",
-		time.Now().UTC().Format("2006-01-02 15:04:05"),
+		time.Now().Format("2006-01-02 15:04:05"),
 		action,
 		docTitle,
 	)
 	if knowledgeID != "" {
-		fmt.Fprintf(&sb, "- **Source**: knowledge/%s\n", knowledgeID)
+		fmt.Fprintf(&sb, "- **KnowledgeID**: %s\n", knowledgeID)
+	}
+	if summary != "" {
+		fmt.Fprintf(&sb, "- **Summary**: %s\n", summary)
 	}
 	if len(pagesAffected) > 0 {
 		fmt.Fprintf(&sb, "- **Pages affected**: %d (%s)\n", len(pagesAffected), strings.Join(pagesAffected, ", "))
-	}
-	if extra != "" {
-		sb.WriteString(extra)
 	}
 
 	logPage.Content = logPage.Content + sb.String()
@@ -842,14 +841,33 @@ func (s *wikiIngestService) deduplicateExtractedBatch(
 		return entities, concepts
 	}
 
+	existingSlugs := make(map[string]bool, len(allPages))
+	for _, p := range allPages {
+		existingSlugs[p.Slug] = true
+	}
+
+	validMerge := func(srcSlug, dstSlug string) bool {
+		if !existingSlugs[dstSlug] {
+			logger.Warnf(ctx, "wiki ingest: dedup rejected %s → %s (target slug does not exist)", srcSlug, dstSlug)
+			return false
+		}
+		srcPrefix := srcSlug[:strings.Index(srcSlug, "/")+1]
+		dstPrefix := dstSlug[:strings.Index(dstSlug, "/")+1]
+		if srcPrefix != dstPrefix {
+			logger.Warnf(ctx, "wiki ingest: dedup rejected %s → %s (type mismatch: %s vs %s)", srcSlug, dstSlug, srcPrefix, dstPrefix)
+			return false
+		}
+		return true
+	}
+
 	for i, item := range entities {
-		if existingSlug, ok := dedupeResult.Merges[item.Slug]; ok {
+		if existingSlug, ok := dedupeResult.Merges[item.Slug]; ok && validMerge(item.Slug, existingSlug) {
 			logger.Infof(ctx, "wiki ingest: dedup merge %s → %s", item.Slug, existingSlug)
 			entities[i].Slug = existingSlug
 		}
 	}
 	for i, item := range concepts {
-		if existingSlug, ok := dedupeResult.Merges[item.Slug]; ok {
+		if existingSlug, ok := dedupeResult.Merges[item.Slug]; ok && validMerge(item.Slug, existingSlug) {
 			logger.Infof(ctx, "wiki ingest: dedup merge %s → %s", item.Slug, existingSlug)
 			concepts[i].Slug = existingSlug
 		}

@@ -248,7 +248,7 @@ The wiki has a log page (slug: "log") that records all ingest and update activit
 
 // WikiDeduplicationPrompt asks the LLM to identify duplicate entities/concepts
 // between newly extracted items and existing wiki pages.
-const WikiDeduplicationPrompt = `You are a deduplication system. Given a list of newly extracted items and a list of existing wiki pages, determine which new items refer to the same entity or concept as an existing page.
+const WikiDeduplicationPrompt = `You are a strict deduplication system. Given a list of newly extracted items and a list of existing wiki pages, determine which new items refer to the **exact same** real-world entity or concept as an existing page.
 
 <new_items>
 {{.NewItems}}
@@ -259,13 +259,26 @@ const WikiDeduplicationPrompt = `You are a deduplication system. Given a list of
 </existing_pages>
 
 <instructions>
-For each newly extracted item, check if it refers to the same real-world entity or concept as any existing page. Consider:
-- Name variations (e.g. "Acme Corp" vs "Acme Corporation", "RAG" vs "Retrieval-Augmented Generation")
-- Abbreviations and full names
-- Translations (e.g. "苹果公司" vs "Apple Inc.")
-- Minor spelling/formatting differences
+### Merge criteria — ALL must be true:
+1. The new item and the existing page refer to the **same real-world thing** (same person, same organization, same specific concept).
+2. The match is a **name variation**: abbreviation ↔ full name, translation, or minor spelling difference.
+3. The types are compatible: entities merge with entities, concepts merge with concepts. **Never merge an entity into a concept or vice versa.**
 
-Return a JSON object with a "merges" map. The key is the NEW item's slug, the value is the EXISTING page's slug that it should merge into. Only include items that have a match.
+### Examples of CORRECT merges:
+- "Acme Corp" → "Acme Corporation" (same company, abbreviation)
+- "RAG" → "Retrieval-Augmented Generation" (same concept, acronym)
+- "苹果公司" → "Apple Inc." (same entity, translation)
+
+### Examples of INCORRECT merges — do NOT merge these:
+- "AI Safety" → "Content Review Mechanism" (related topics, but different concepts)
+- "Athlete Registration" → "Degree Verification" (both involve verification, but completely different domains)
+- "Competition Categories" → "Age Groups" (age groups are one aspect of categories, not the same concept)
+- "Performance Standard" → "Competition Rounds" (both relate to competitions, but are different concepts)
+- "Machine Learning" → "Neural Networks" (neural networks are a subset of ML, not the same concept)
+
+### Key principle: **related ≠ same**. When in doubt, do NOT merge. It is far better to have two separate pages for the same thing than to wrongly merge two different things.
+
+Return a JSON object with a "merges" map. The key is the NEW item's slug, the value is the EXISTING page's slug that it should merge into. Only include items where you are highly confident they are the same thing.
 
 If no items match any existing pages, return: {"merges": {}}
 

@@ -306,14 +306,14 @@ func (s *wikiIngestService) ProcessWikiIngest(ctx context.Context, t *asynq.Task
 
 	totalPagesAffected = len(allPagesAffected)
 
-	// Append log entry for retracts (since retracts aren't in docResults)
+	// Append log entries — one per operation for chronological traceability
 	for _, op := range pendingOps {
 		if op.Op == WikiOpRetract {
-			s.appendLogEntry(ctx, WikiIngestPayload{
-				TenantID:        payload.TenantID,
-				KnowledgeBaseID: payload.KnowledgeBaseID,
-			}, "retract", op.KnowledgeID, op.DocTitle, op.PageSlugs, "")
+			s.appendLogEntry(ctx, payload.KnowledgeBaseID, "retract", op.KnowledgeID, op.DocTitle, op.DocSummary, op.PageSlugs)
 		}
+	}
+	for _, r := range docResults {
+		s.appendLogEntry(ctx, payload.KnowledgeBaseID, "ingest", r.KnowledgeID, r.DocTitle, r.Summary, r.Pages)
 	}
 
 	// Build change description for the Index Intro LLM prompt
@@ -338,11 +338,6 @@ func (s *wikiIngestService) ProcessWikiIngest(ctx context.Context, t *asynq.Task
 			indexRebuildSucceeded = true
 			docPreview = append(docPreview, fmt.Sprintf("index_change=%s", previewText(changeDesc.String(), 160)))
 		}
-	}
-
-	// Append log entry for ingests
-	if len(docResults) > 0 {
-		s.appendLogEntry(ctx, payload, "ingest", "", fmt.Sprintf("%d documents", len(docResults)), ingestPagesAffected, "")
 	}
 
 	if len(retractPagesAffected) > 0 {
@@ -532,6 +527,7 @@ func (s *wikiIngestService) mapOneDocument(
 		KnowledgeID: knowledgeID,
 		DocTitle:    docTitle,
 		Summary:     docSummaryLine,
+		Pages:       extractedPages,
 	}, updates, nil
 }
 
