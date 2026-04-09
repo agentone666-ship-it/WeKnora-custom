@@ -2138,6 +2138,7 @@ export default {
       sources: "来源文档",
       recentActivity: "最近活动",
       graphEmpty: "加载图谱中...",
+      fitView: "适应屏幕",
       logTitle: '日志',
       indexTitle: '索引',
       graphNoData: '暂无图谱数据，请先上传文档',

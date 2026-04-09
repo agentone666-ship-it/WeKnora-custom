@@ -1630,6 +1630,7 @@ export default {
       sources: 'Source documents',
       recentActivity: 'Recent Activity',
       graphEmpty: 'Loading graph...',
+      fitView: 'Fit to View',
       logTitle: 'Activity Log',
       indexTitle: 'Index',
       graphNoData: 'No graph data yet. Upload documents first.',

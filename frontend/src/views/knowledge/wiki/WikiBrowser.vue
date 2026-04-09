@@ -24,31 +24,57 @@
         <!-- Legend Overlay -->
         <div v-if="graphReady" class="wiki-graph-legend">
           <div class="legend-items">
-            <div class="legend-item">
+            <div 
+              class="legend-item clickable" 
+              :class="{ disabled: !graphFilterTypes.has('summary') }"
+              @click="toggleGraphFilterType('summary')"
+            >
               <span class="legend-dot" style="background: #0052d9"></span>
               {{ $t('knowledgeEditor.wikiBrowser.filterSummary') }}
             </div>
-            <div class="legend-item">
+            <div 
+              class="legend-item clickable"
+              :class="{ disabled: !graphFilterTypes.has('entity') }"
+              @click="toggleGraphFilterType('entity')"
+            >
               <span class="legend-dot" style="background: #2ba471"></span>
               {{ $t('knowledgeEditor.wikiBrowser.filterEntity') }}
             </div>
-            <div class="legend-item">
+            <div 
+              class="legend-item clickable"
+              :class="{ disabled: !graphFilterTypes.has('concept') }"
+              @click="toggleGraphFilterType('concept')"
+            >
               <span class="legend-dot" style="background: #e37318"></span>
               {{ $t('knowledgeEditor.wikiBrowser.filterConcept') }}
             </div>
-            <div class="legend-item">
+            <div 
+              class="legend-item clickable"
+              :class="{ disabled: !graphFilterTypes.has('synthesis') }"
+              @click="toggleGraphFilterType('synthesis')"
+            >
               <span class="legend-dot" style="background: #0594fa"></span>
               {{ $t('knowledgeEditor.wikiBrowser.filterSynthesis') }}
             </div>
-            <div class="legend-item">
+            <div 
+              class="legend-item clickable"
+              :class="{ disabled: !graphFilterTypes.has('comparison') }"
+              @click="toggleGraphFilterType('comparison')"
+            >
               <span class="legend-dot" style="background: #d54941"></span>
               {{ $t('knowledgeEditor.wikiBrowser.filterComparison') }}
             </div>
           </div>
           <div class="legend-divider"></div>
-          <div class="legend-action" @click="toggleArrows" :class="{ active: showArrows }">
-            <span class="legend-action-icon">→</span>
-            <span>{{ showArrows ? $t('knowledgeEditor.wikiBrowser.hideArrows') : $t('knowledgeEditor.wikiBrowser.showArrows') }}</span>
+          <div class="legend-actions">
+            <div class="legend-action" @click="fitGraphToView" title="Fit to View">
+              <span class="legend-action-icon"><t-icon name="focus" /></span>
+              <span>{{ $t('knowledgeEditor.wikiBrowser.fitView') || '适应屏幕' }}</span>
+            </div>
+            <div class="legend-action" @click="toggleArrows" :class="{ active: showArrows }">
+              <span class="legend-action-icon">→</span>
+              <span>{{ showArrows ? $t('knowledgeEditor.wikiBrowser.hideArrows') : $t('knowledgeEditor.wikiBrowser.showArrows') }}</span>
+            </div>
           </div>
         </div>
 
@@ -298,6 +324,107 @@ const loading = ref(false)
 const graphLoading = ref(false)
 const graphReady = ref(false)
 const showArrows = ref(true)
+
+// Graph filtering
+const graphFilterTypes = ref<Set<string>>(new Set(['summary', 'entity', 'concept', 'synthesis', 'comparison', 'index', 'log']))
+
+function toggleGraphFilterType(type: string) {
+  const newSet = new Set(graphFilterTypes.value)
+  if (newSet.has(type)) {
+    newSet.delete(type)
+  } else {
+    newSet.add(type)
+  }
+  graphFilterTypes.value = newSet
+  applyGraphFilters()
+}
+
+function applyGraphFilters() {
+  if (!graphReady.value) return
+  
+  // Only show nodes whose type is in the active filter set
+  for (const { g, node } of graphNodeElsRef) {
+    if (graphFilterTypes.value.has(node.type)) {
+      g.style.display = ''
+    } else {
+      g.style.display = 'none'
+    }
+  }
+  
+  // Only show edges where BOTH source and target are visible
+  for (const { line, source, target } of graphEdgeElsRef) {
+    const sNode = graphNodes.find(n => n.slug === source)
+    const tNode = graphNodes.find(n => n.slug === target)
+    
+    if (sNode && tNode && graphFilterTypes.value.has(sNode.type) && graphFilterTypes.value.has(tNode.type)) {
+      line.style.display = ''
+    } else {
+      line.style.display = 'none'
+    }
+  }
+  
+  // Clear any existing highlight when filtering changes
+  if (graphHighlightSlug.value || graphSelectedSlug.value) {
+    const selectedStillVisible = graphSelectedSlug.value && 
+      graphFilterTypes.value.has(graphNodes.find(n => n.slug === graphSelectedSlug.value)?.type || '')
+      
+    if (!selectedStillVisible) {
+      graphSelectedSlug.value = null
+      graphHighlightSlug.value = null
+      graphDrawerVisible.value = false
+    }
+    clearHighlight(graphNodeElsRef, graphEdgeElsRef)
+  }
+}
+
+// Fit graph to view
+function fitGraphToView() {
+  if (!graphReady.value || !graphPanZoomRef || !graphRef.value || graphNodes.length === 0) return
+  
+  const container = graphRef.value
+  const width = container.clientWidth
+  const height = container.clientHeight
+  
+  // Find bounding box of all VISIBLE nodes
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+  let visibleCount = 0
+  
+  for (const node of graphNodes) {
+    if (!graphFilterTypes.value.has(node.type)) continue
+    
+    minX = Math.min(minX, node.x)
+    minY = Math.min(minY, node.y)
+    maxX = Math.max(maxX, node.x)
+    maxY = Math.max(maxY, node.y)
+    visibleCount++
+  }
+  
+  if (visibleCount === 0) return // No visible nodes
+  
+  // Calculate center of the bounding box
+  const cx = (minX + maxX) / 2
+  const cy = (minY + maxY) / 2
+  
+  // Calculate scale to fit the bounding box (with some padding)
+  const padding = 60
+  const boxWidth = Math.max(maxX - minX, 100) + padding * 2
+  const boxHeight = Math.max(maxY - minY, 100) + padding * 2
+  
+  const scaleX = width / boxWidth
+  const scaleY = height / boxHeight
+  const targetScale = Math.max(0.2, Math.min(2, Math.min(scaleX, scaleY))) // Limit scale between 0.2 and 2
+  
+  // Offset center if drawer is open
+  const targetCx = width / 2 - (graphDrawerVisible.value ? 240 : 0)
+  const targetCy = height / 2
+  
+  // Target translation
+  const targetTx = targetCx - cx * targetScale
+  const targetTy = targetCy - cy * targetScale
+  
+  graphPanZoomRef.flyTo(targetTx, targetTy, targetScale, 600)
+}
+
 const collapsedGroups = reactive<Record<string, boolean>>({})
 const graphDrawerVisible = ref(false)
 const graphDrawerPage = ref<WikiPage | null>(null)
@@ -680,8 +807,10 @@ function renderGraph() {
     return node
   })
 
-  // Node radius based on link count
-  function nodeRadius(n: GNode) { return Math.max(6, Math.min(18, 6 + n.linkCount * 1.5)) }
+  // Node radius based on link count (logarithmic scale to prevent overly large nodes)
+  function nodeRadius(n: GNode) { 
+    return Math.max(8, Math.min(24, 8 + Math.log(n.linkCount + 1) * 4)) 
+  }
 
   // Define arrow markers in SVG <defs>
   const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs')
@@ -814,6 +943,7 @@ function renderGraph() {
     text.setAttribute('font-size', '11')
     text.setAttribute('fill', 'var(--td-text-color-secondary)')
     text.setAttribute('pointer-events', 'none')
+    text.style.transition = 'opacity 0.2s' // Smooth fade in/out
     text.style.textShadow = '0 1px 3px var(--td-bg-color-container), 0 -1px 3px var(--td-bg-color-container), 1px 0 3px var(--td-bg-color-container), -1px 0 3px var(--td-bg-color-container)'
     text.textContent = n.title.length > 14 ? n.title.substring(0, 14) + '…' : n.title
     g.appendChild(text)
@@ -882,19 +1012,36 @@ function renderGraph() {
     alpha *= 0.985
     if (alpha < 0.005) { graphAnimFrame = 0; return }
 
-    // Repulsion (Barnes–Hut could optimize, but O(n²) is fine for < 500 nodes)
-    for (let i = 0; i < graphNodes.length; i++) {
-      if (graphNodes[i].pinned) continue
-      for (let j = i + 1; j < graphNodes.length; j++) {
-        let dx = graphNodes[j].x - graphNodes[i].x
-        let dy = graphNodes[j].y - graphNodes[i].y
-        const dist = Math.sqrt(dx * dx + dy * dy) || 1
+    // Repulsion: Optimized using 1D spatial sorting (X-axis) to reduce O(n²) to O(n log n)
+    // This allows smooth rendering even for > 1000 nodes
+    const sortedNodes = [...graphNodes].sort((a, b) => a.x - b.x)
+    const MAX_REPULSION_DIST = 300 // Only calculate repulsion for nodes within 300px
+    const MAX_REPULSION_DIST_SQ = MAX_REPULSION_DIST * MAX_REPULSION_DIST
+
+    for (let i = 0; i < sortedNodes.length; i++) {
+      const n1 = sortedNodes[i]
+      for (let j = i + 1; j < sortedNodes.length; j++) {
+        const n2 = sortedNodes[j]
+        const dx = n2.x - n1.x
+        
+        // Because nodes are sorted by X, if dx > MAX_REPULSION_DIST, 
+        // all subsequent n2 nodes will also be too far on the X axis, so we can break early
+        if (dx > MAX_REPULSION_DIST) break
+        
+        const dy = n2.y - n1.y
+        if (Math.abs(dy) > MAX_REPULSION_DIST) continue // Too far on Y axis
+        
+        const distSq = dx * dx + dy * dy
+        if (distSq > MAX_REPULSION_DIST_SQ) continue
+
+        const dist = Math.sqrt(distSq) || 1
         // Prevent extremely high repulsion when nodes are very close
-        const force = (200 * alpha) / Math.max(dist * dist, 100) * 60
+        const force = (200 * alpha) / Math.max(distSq, 100) * 60
         const fx = (dx / dist) * force
         const fy = (dy / dist) * force
-        if (!graphNodes[i].pinned) { graphNodes[i].vx -= fx; graphNodes[i].vy -= fy }
-        if (!graphNodes[j].pinned) { graphNodes[j].vx += fx; graphNodes[j].vy += fy }
+        
+        if (!n1.pinned) { n1.vx -= fx; n1.vy -= fy }
+        if (!n2.pinned) { n2.vx += fx; n2.vy += fy }
       }
     }
 
@@ -968,6 +1115,8 @@ function renderGraph() {
   graphNodeElsRef = nodeEls
   graphEdgeElsRef = edgeEls.map(e => ({ line: e.line, source: e.source, target: e.target, bidir: e.bidir }))
   graphAdjacencyRef = adjacency
+  
+  applyGraphFilters()
   
   graphAnimFrame = requestAnimationFrame(tick)
   graphReady.value = true
@@ -1069,6 +1218,31 @@ function setupPanZoom(svg: SVGSVGElement, rootG: SVGGElement) {
 
   function applyTransform() {
     rootG.setAttribute('transform', `translate(${translateX},${translateY}) scale(${scale})`)
+    updateLabelsVisibility()
+  }
+
+  function updateLabelsVisibility() {
+    // Hide labels when zoomed out too much or hide less important labels
+    // We only want to show labels for important nodes (high link count) when zoomed out
+    for (const { text, node } of graphNodeElsRef) {
+      if (node.slug === graphSelectedSlug.value || node.slug === graphHighlightSlug.value) {
+        text.style.opacity = '1' // Always show selected/highlighted
+        continue
+      }
+      
+      let visibilityThreshold = 0.5 // Default: need to zoom in to at least 0.5 to see all labels
+      
+      // Highly connected nodes get their labels shown earlier
+      if (node.linkCount > 10) visibilityThreshold = 0.2
+      else if (node.linkCount > 5) visibilityThreshold = 0.35
+      else if (node.linkCount > 2) visibilityThreshold = 0.45
+      
+      if (scale < visibilityThreshold) {
+        text.style.opacity = '0'
+      } else {
+        text.style.opacity = '1'
+      }
+    }
   }
 
   // Export methods for programmatic pan/zoom
@@ -1164,21 +1338,25 @@ function applyHighlight(
   const neighbors = adjacency.get(slug) || new Set()
   const hoverNeighbors = hoverSlug ? (adjacency.get(hoverSlug) || new Set()) : new Set()
   
+  // Helper to get consistent radius
+  const getRadius = (n: GNode) => Math.max(8, Math.min(24, 8 + Math.log(n.linkCount + 1) * 4))
+  
   for (const { g, circle, activeRing, node } of nodeEls) {
+    const r = getRadius(node)
     if (node.slug === slug) {
-      circle.setAttribute('r', String(Math.max(6, Math.min(18, 6 + node.linkCount * 1.5)) + 3))
+      circle.setAttribute('r', String(r + 3))
       circle.setAttribute('stroke-width', '3')
       g.style.opacity = '1'
     } else if (hoverSlug && node.slug === hoverSlug) {
-      circle.setAttribute('r', String(Math.max(6, Math.min(18, 6 + node.linkCount * 1.5)) + 3))
+      circle.setAttribute('r', String(r + 3))
       circle.setAttribute('stroke-width', '3')
       g.style.opacity = '1'
     } else if (neighbors.has(node.slug) || (hoverSlug && hoverNeighbors.has(node.slug))) {
-      circle.setAttribute('r', String(Math.max(6, Math.min(18, 6 + node.linkCount * 1.5))))
+      circle.setAttribute('r', String(r))
       circle.setAttribute('stroke-width', '2')
       g.style.opacity = '1'
     } else {
-      circle.setAttribute('r', String(Math.max(6, Math.min(18, 6 + node.linkCount * 1.5))))
+      circle.setAttribute('r', String(r))
       circle.setAttribute('stroke-width', '2')
       g.style.opacity = '0.2'
     }
@@ -1222,8 +1400,10 @@ function clearHighlight(
     return
   }
 
+  const getRadius = (n: GNode) => Math.max(8, Math.min(24, 8 + Math.log(n.linkCount + 1) * 4))
+
   for (const { g, circle, activeRing, node } of nodeEls) {
-    circle.setAttribute('r', String(Math.max(6, Math.min(18, 6 + node.linkCount * 1.5))))
+    circle.setAttribute('r', String(getRadius(node)))
     circle.setAttribute('stroke-width', '2')
     g.style.opacity = '1'
     activeRing.style.opacity = '0'
@@ -1255,6 +1435,15 @@ function handleGraphSearchSelect(value: string) {
   
   // Find node coordinates
   const node = graphNodes.find(n => n.slug === value)
+  
+  // If the node's type is currently filtered out, re-enable it so it becomes visible
+  if (node && !graphFilterTypes.value.has(node.type)) {
+    const newSet = new Set(graphFilterTypes.value)
+    newSet.add(node.type)
+    graphFilterTypes.value = newSet
+    applyGraphFilters()
+  }
+
   if (node && graphPanZoomRef) {
     const container = graphRef.value
     if (container) {
@@ -1870,6 +2059,21 @@ onUnmounted(() => {
   gap: 8px;
   font-size: 11px;
   color: var(--td-text-color-secondary);
+  
+  &.clickable {
+    cursor: pointer;
+    transition: all 0.15s;
+    
+    &:hover {
+      color: var(--td-text-color-primary);
+    }
+  }
+  
+  &.disabled {
+    color: var(--td-text-color-placeholder);
+    text-decoration: line-through;
+    opacity: 0.5;
+  }
 }
 
 .legend-dot {
@@ -1884,6 +2088,12 @@ onUnmounted(() => {
   height: 1px;
   background: var(--td-component-stroke);
   margin: 0 -12px;
+}
+
+.legend-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .legend-action {

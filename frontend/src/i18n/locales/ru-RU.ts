@@ -1832,6 +1832,7 @@ export default {
       sources: 'Исходные документы',
       recentActivity: 'Последняя активность',
       graphEmpty: 'Загрузка графа...',
+      fitView: 'По размеру экрана',
       logTitle: 'Журнал активности',
       indexTitle: 'Индекс',
       graphNoData: 'Нет данных графа. Сначала загрузите документы.',

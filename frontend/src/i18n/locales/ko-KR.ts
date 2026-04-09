@@ -2153,6 +2153,7 @@ export default {
       sources: "원본 문서",
       recentActivity: "최근 활동",
       graphEmpty: "그래프 로딩 중...",
+      fitView: "화면에 맞춤",
       logTitle: '활동 로그',
       indexTitle: '인덱스',
       graphNoData: '그래프 데이터가 없습니다. 먼저 문서를 업로드하세요.',
