@@ -324,6 +324,37 @@ func countTotalToolCalls(steps []types.AgentStep) int {
 	return total
 }
 
+// kbToolNames lists tools whose results contain knowledge base content that
+// may become stale across turns (KB can be switched, updated, or deleted).
+// Historical results from these tools are redacted to force fresh retrieval.
+var kbToolNames = map[string]bool{
+	agenttools.ToolKnowledgeSearch:     true,
+	agenttools.ToolGrepChunks:          true,
+	agenttools.ToolListKnowledgeChunks: true,
+	agenttools.ToolQueryKnowledgeGraph: true,
+	agenttools.ToolGetDocumentInfo:     true,
+}
+
+// redactHistoryKBResults replaces full KB tool results in historical context
+// with brief markers. This prevents the LLM from reusing stale retrieval data
+// when the knowledge base has been modified or switched between turns.
+func redactHistoryKBResults(llmContext []chat.Message) []chat.Message {
+	redacted := make([]chat.Message, 0, len(llmContext))
+	for _, msg := range llmContext {
+		if msg.Role == "tool" && kbToolNames[msg.Name] {
+			redacted = append(redacted, chat.Message{
+				Role:       msg.Role,
+				Content:    "[Previous retrieval result omitted — knowledge base may have changed. Please perform a fresh search.]",
+				ToolCallID: msg.ToolCallID,
+				Name:       msg.Name,
+			})
+		} else {
+			redacted = append(redacted, msg)
+		}
+	}
+	return redacted
+}
+
 // buildMessagesWithLLMContext builds the message array with LLM context
 func (e *AgentEngine) buildMessagesWithLLMContext(
 	systemPrompt, currentQuery, sessionID string,
@@ -335,7 +366,10 @@ func (e *AgentEngine) buildMessagesWithLLMContext(
 	}
 
 	if len(llmContext) > 0 {
-		for _, msg := range llmContext {
+		// Redact KB tool results from previous turns to prevent the LLM
+		// from reusing stale retrieval data when the KB has been modified.
+		sanitized := redactHistoryKBResults(llmContext)
+		for _, msg := range sanitized {
 			if msg.Role == "system" {
 				continue
 			}
@@ -343,7 +377,7 @@ func (e *AgentEngine) buildMessagesWithLLMContext(
 				messages = append(messages, msg)
 			}
 		}
-		logger.Infof(context.Background(), "Added %d history messages to context", len(llmContext))
+		logger.Infof(context.Background(), "Added %d history messages to context (KB tool results redacted)", len(llmContext))
 	}
 
 	// Build user message with runtime context safety tag
