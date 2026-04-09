@@ -333,6 +333,8 @@ var kbToolNames = map[string]bool{
 	agenttools.ToolListKnowledgeChunks: true,
 	agenttools.ToolQueryKnowledgeGraph: true,
 	agenttools.ToolGetDocumentInfo:     true,
+	agenttools.ToolWikiSearch:          true,
+	agenttools.ToolWikiReadPage:        true,
 }
 
 // redactHistoryKBResults replaces full KB tool results in historical context
