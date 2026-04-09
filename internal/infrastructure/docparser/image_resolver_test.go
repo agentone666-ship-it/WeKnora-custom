@@ -37,8 +37,8 @@ func TestIsIconImage(t *testing.T) {
 		expect bool
 	}{
 		{
-			name:   "tiny bytes (< 2KB)",
-			data:   make([]byte, 1024),
+			name:   "tiny bytes (< 512B)",
+			data:   make([]byte, 256),
 			expect: true,
 		},
 		{

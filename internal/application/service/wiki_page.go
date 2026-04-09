@@ -13,6 +13,7 @@ import (
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 )
 
 // wikiLinkRegex matches [[wiki-link]] syntax in markdown content
@@ -20,9 +21,10 @@ var wikiLinkRegex = regexp.MustCompile(`\[\[([^\]]+)\]\]`)
 
 // wikiPageService implements the WikiPageService interface
 type wikiPageService struct {
-	repo      interfaces.WikiPageRepository
-	chunkRepo interfaces.ChunkRepository
-	kbService interfaces.KnowledgeBaseService
+	repo        interfaces.WikiPageRepository
+	chunkRepo   interfaces.ChunkRepository
+	kbService   interfaces.KnowledgeBaseService
+	redisClient *redis.Client
 }
 
 // NewWikiPageService creates a new wiki page service
@@ -30,11 +32,13 @@ func NewWikiPageService(
 	repo interfaces.WikiPageRepository,
 	chunkRepo interfaces.ChunkRepository,
 	kbService interfaces.KnowledgeBaseService,
+	redisClient *redis.Client,
 ) interfaces.WikiPageService {
 	return &wikiPageService{
-		repo:      repo,
-		chunkRepo: chunkRepo,
-		kbService: kbService,
+		repo:        repo,
+		chunkRepo:   chunkRepo,
+		kbService:   kbService,
+		redisClient: redisClient,
 	}
 }
 
@@ -283,12 +287,22 @@ func (s *wikiPageService) GetStats(ctx context.Context, kbID string) (*types.Wik
 		return nil, err
 	}
 
+	var pendingTasks int64
+	var isActive bool
+	if s.redisClient != nil {
+		pendingTasks, _ = s.redisClient.LLen(ctx, "wiki:pending:"+kbID).Result()
+		activeFlag, _ := s.redisClient.Exists(ctx, "wiki:active:"+kbID).Result()
+		isActive = activeFlag > 0
+	}
+
 	return &types.WikiStats{
 		TotalPages:    total,
 		PagesByType:   counts,
 		TotalLinks:    totalLinks,
 		OrphanCount:   orphans,
 		RecentUpdates: recentPages,
+		PendingTasks:  pendingTasks,
+		IsActive:      isActive,
 	}, nil
 }
 

@@ -1838,6 +1838,7 @@ export default {
       showArrows: 'Показать стрелки',
       hideArrows: 'Скрыть стрелки',
       healthCheck: 'Проверка здоровья',
+      queueStatus: '{count} ожидающих задач в очереди Wiki',
     },
     buttons: {
       create: 'Создать базу знаний',

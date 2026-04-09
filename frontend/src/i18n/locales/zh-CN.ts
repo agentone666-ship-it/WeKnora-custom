@@ -2144,6 +2144,7 @@ export default {
       showArrows: '显示箭头',
       hideArrows: '隐藏箭头',
       healthCheck: "健康检查",
+      queueStatus: "Wiki 队列中 {count} 个待处理任务",
     },
     buttons: {
       create: "创建知识库",

@@ -1331,7 +1331,7 @@ func (s *knowledgeService) cleanupWikiOnKnowledgeDelete(ctx context.Context, kbI
 	if len(retractSlugs) > 0 {
 		lang, _ := types.LanguageFromContext(ctx)
 		tenantID, _ := types.TenantIDFromContext(ctx)
-		EnqueueWikiRetract(ctx, s.task, WikiRetractPayload{
+		EnqueueWikiRetract(ctx, s.task, s.redisClient, WikiRetractPayload{
 			TenantID:        tenantID,
 			KnowledgeBaseID: kbID,
 			KnowledgeID:     knowledgeID,
@@ -2494,11 +2494,53 @@ func (s *knowledgeService) ProcessSummaryGeneration(ctx context.Context, t *asyn
 
 // ProcessQuestionGeneration handles async question generation task
 func (s *knowledgeService) ProcessQuestionGeneration(ctx context.Context, t *asynq.Task) error {
-	ctx, span := tracing.ContextWithSpan(ctx, "knowledgeService.ProcessQuestionGeneration")
-	defer span.End()
+	taskStartedAt := time.Now()
+	retryCount, _ := asynq.GetRetryCount(ctx)
+	maxRetry, _ := asynq.GetMaxRetry(ctx)
 
 	var payload types.QuestionGenerationPayload
+	exitStatus := "success"
+	totalChunks := 0
+	totalTextChunks := 0
+	emptyContentChunks := 0
+	llmCallAttempts := 0
+	llmCallSuccess := 0
+	llmCallFailed := 0
+	llmCallEmpty := 0
+	generatedQuestionsTotal := 0
+	chunkMetadataSetFailed := 0
+	chunkUpdateFailed := 0
+	indexEntriesPrepared := 0
+	indexBatchAttempted := false
+	indexBatchSucceeded := false
+	defer func() {
+		logger.Infof(
+			ctx,
+			"Question generation stats: knowledge=%s kb=%s retry=%d/%d status=%s elapsed=%s chunks(total=%d,text=%d,empty_text=%d) llm(attempt=%d,success=%d,empty=%d,failed=%d) generated_questions=%d chunk_update_failed=%d metadata_set_failed=%d index(prepared=%d,attempted=%v,succeeded=%v)",
+			payload.KnowledgeID,
+			payload.KnowledgeBaseID,
+			retryCount,
+			maxRetry,
+			exitStatus,
+			time.Since(taskStartedAt).Round(time.Millisecond),
+			totalChunks,
+			totalTextChunks,
+			emptyContentChunks,
+			llmCallAttempts,
+			llmCallSuccess,
+			llmCallEmpty,
+			llmCallFailed,
+			generatedQuestionsTotal,
+			chunkUpdateFailed,
+			chunkMetadataSetFailed,
+			indexEntriesPrepared,
+			indexBatchAttempted,
+			indexBatchSucceeded,
+		)
+	}()
+
 	if err := json.Unmarshal(t.Payload(), &payload); err != nil {
+		exitStatus = "invalid_payload"
 		logger.Errorf(ctx, "Failed to unmarshal question generation payload: %v", err)
 		return nil // Don't retry on unmarshal error
 	}
@@ -2512,6 +2554,7 @@ func (s *knowledgeService) ProcessQuestionGeneration(ctx context.Context, t *asy
 	}
 
 	if strings.TrimSpace(s.config.Conversation.GenerateQuestionsPrompt) == "" {
+		exitStatus = "prompt_not_configured"
 		logger.Errorf(ctx, "GenerateQuestionsPrompt is empty: configure conversation.generate_questions_prompt_id")
 		return fmt.Errorf("generate questions prompt not configured")
 	}
@@ -2519,6 +2562,7 @@ func (s *knowledgeService) ProcessQuestionGeneration(ctx context.Context, t *asy
 	// Get knowledge base
 	kb, err := s.kbService.GetKnowledgeBaseByID(ctx, payload.KnowledgeBaseID)
 	if err != nil {
+		exitStatus = "kb_not_found"
 		logger.Errorf(ctx, "Failed to get knowledge base: %v", err)
 		return nil
 	}
@@ -2526,6 +2570,7 @@ func (s *knowledgeService) ProcessQuestionGeneration(ctx context.Context, t *asy
 	// Get knowledge
 	knowledge, err := s.repo.GetKnowledgeByID(ctx, payload.TenantID, payload.KnowledgeID)
 	if err != nil {
+		exitStatus = "knowledge_not_found"
 		logger.Errorf(ctx, "Failed to get knowledge: %v", err)
 		return nil
 	}
@@ -2533,9 +2578,11 @@ func (s *knowledgeService) ProcessQuestionGeneration(ctx context.Context, t *asy
 	// Get text chunks for this knowledge
 	chunks, err := s.chunkService.ListChunksByKnowledgeID(ctx, payload.KnowledgeID)
 	if err != nil {
+		exitStatus = "list_chunks_failed"
 		logger.Errorf(ctx, "Failed to get chunks: %v", err)
 		return nil
 	}
+	totalChunks = len(chunks)
 
 	// Filter text chunks only
 	textChunks := make([]*types.Chunk, 0)
@@ -2544,8 +2591,10 @@ func (s *knowledgeService) ProcessQuestionGeneration(ctx context.Context, t *asy
 			textChunks = append(textChunks, chunk)
 		}
 	}
+	totalTextChunks = len(textChunks)
 
 	if len(textChunks) == 0 {
+		exitStatus = "no_text_chunks"
 		logger.Infof(ctx, "No text chunks found for knowledge: %s", payload.KnowledgeID)
 		return nil
 	}
@@ -2558,6 +2607,7 @@ func (s *knowledgeService) ProcessQuestionGeneration(ctx context.Context, t *asy
 	// Initialize chat model
 	chatModel, err := s.modelService.GetChatModel(ctx, kb.SummaryModelID)
 	if err != nil {
+		exitStatus = "get_chat_model_failed"
 		logger.Errorf(ctx, "Failed to get chat model: %v", err)
 		return fmt.Errorf("failed to get chat model: %w", err)
 	}
@@ -2565,12 +2615,14 @@ func (s *knowledgeService) ProcessQuestionGeneration(ctx context.Context, t *asy
 	// Initialize embedding model and retrieval engine
 	embeddingModel, err := s.modelService.GetEmbeddingModel(ctx, kb.EmbeddingModelID)
 	if err != nil {
+		exitStatus = "get_embedding_model_failed"
 		logger.Errorf(ctx, "Failed to get embedding model: %v", err)
 		return fmt.Errorf("failed to get embedding model: %w", err)
 	}
 
 	tenantInfo, err := s.tenantRepo.GetTenantByID(ctx, payload.TenantID)
 	if err != nil {
+		exitStatus = "get_tenant_failed"
 		logger.Errorf(ctx, "Failed to get tenant info: %v", err)
 		return fmt.Errorf("failed to get tenant info: %w", err)
 	}
@@ -2578,6 +2630,7 @@ func (s *knowledgeService) ProcessQuestionGeneration(ctx context.Context, t *asy
 
 	retrieveEngine, err := retriever.NewCompositeRetrieveEngine(s.retrieveEngine, tenantInfo.GetEffectiveEngines())
 	if err != nil {
+		exitStatus = "init_retrieve_engine_failed"
 		logger.Errorf(ctx, "Failed to init retrieve engine: %v", err)
 		return fmt.Errorf("failed to init retrieve engine: %w", err)
 	}
@@ -2608,30 +2661,34 @@ func (s *knowledgeService) ProcessQuestionGeneration(ctx context.Context, t *asy
 	// Generate questions for each chunk with context
 	var indexInfoList []*types.IndexInfo
 	for i, chunk := range textChunks {
+		if strings.TrimSpace(chunk.Content) == "" {
+			emptyContentChunks++
+			continue
+		}
+
 		// Build context from adjacent chunks
 		var prevContent, nextContent string
 		if i > 0 {
 			prevContent = enrichContent(textChunks[i-1])
-			if len(prevContent) > 500 {
-				prevContent = prevContent[len(prevContent)-500:]
-			}
 		}
 		if i < len(textChunks)-1 {
 			nextContent = enrichContent(textChunks[i+1])
-			if len(nextContent) > 500 {
-				nextContent = nextContent[:500]
-			}
 		}
 
+		llmCallAttempts++
 		questions, err := s.generateQuestionsWithContext(ctx, chatModel, enrichContent(chunk), prevContent, nextContent, knowledge.Title, questionCount)
 		if err != nil {
+			llmCallFailed++
 			logger.Warnf(ctx, "Failed to generate questions for chunk %s: %v", chunk.ID, err)
 			continue
 		}
 
 		if len(questions) == 0 {
+			llmCallEmpty++
 			continue
 		}
+		llmCallSuccess++
+		generatedQuestionsTotal += len(questions)
 
 		// Update chunk metadata with unique IDs for each question
 		generatedQuestions := make([]types.GeneratedQuestion, len(questions))
@@ -2646,12 +2703,14 @@ func (s *knowledgeService) ProcessQuestionGeneration(ctx context.Context, t *asy
 			GeneratedQuestions: generatedQuestions,
 		}
 		if err := chunk.SetDocumentMetadata(meta); err != nil {
+			chunkMetadataSetFailed++
 			logger.Warnf(ctx, "Failed to set document metadata for chunk %s: %v", chunk.ID, err)
 			continue
 		}
 
 		// Update chunk in database
 		if err := s.chunkService.UpdateChunk(ctx, chunk); err != nil {
+			chunkUpdateFailed++
 			logger.Warnf(ctx, "Failed to update chunk %s: %v", chunk.ID, err)
 			continue
 		}
@@ -2671,13 +2730,17 @@ func (s *knowledgeService) ProcessQuestionGeneration(ctx context.Context, t *asy
 		}
 		logger.Debugf(ctx, "Generated %d questions for chunk %s", len(questions), chunk.ID)
 	}
+	indexEntriesPrepared = len(indexInfoList)
 
 	// Index generated questions
 	if len(indexInfoList) > 0 {
+		indexBatchAttempted = true
 		if err := retrieveEngine.BatchIndex(ctx, embeddingModel, indexInfoList); err != nil {
+			exitStatus = "index_questions_failed"
 			logger.Errorf(ctx, "Failed to index generated questions: %v", err)
 			return fmt.Errorf("failed to index questions: %w", err)
 		}
+		indexBatchSucceeded = true
 		logger.Infof(ctx, "Successfully indexed %d generated questions for knowledge: %s", len(indexInfoList), payload.KnowledgeID)
 	}
 
@@ -2702,10 +2765,10 @@ func (s *knowledgeService) generateQuestionsWithContext(ctx context.Context,
 	if prevContent != "" || nextContent != "" {
 		contextSection = "<surrounding_context>\n"
 		if prevContent != "" {
-			contextSection += fmt.Sprintf("[Preceding Content]\n%s\n\n", prevContent)
+			contextSection += fmt.Sprintf("<preceding_content>\n%s\n\n</preceding_content>\n\n", prevContent)
 		}
 		if nextContent != "" {
-			contextSection += fmt.Sprintf("[Following Content]\n%s\n\n", nextContent)
+			contextSection += fmt.Sprintf("<following_content>\n%s\n\n</following_content>\n\n", nextContent)
 		}
 		contextSection += "</surrounding_context>\n\n"
 	}

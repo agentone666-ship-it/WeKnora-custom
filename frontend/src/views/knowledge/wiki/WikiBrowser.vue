@@ -91,6 +91,10 @@
       <!-- Left Panel: Page List -->
       <aside class="wiki-sidebar">
         <div class="wiki-sidebar-header">
+          <div v-if="stats && (stats.pending_tasks > 0 || stats.is_active)" class="wiki-queue-status">
+            <t-loading size="small" />
+            <span class="queue-text">{{ $t('knowledgeEditor.wikiBrowser.queueStatus', { count: stats.pending_tasks || 0 }) }}</span>
+          </div>
           <t-input
             v-model="searchQuery"
             :placeholder="$t('knowledgeEditor.wikiBrowser.searchPlaceholder')"
@@ -255,7 +259,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch, nextTick, reactive } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick, reactive } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { marked } from 'marked'
 import { hydrateProtectedFileImages } from '@/utils/security'
@@ -477,10 +481,26 @@ async function loadPages() {
   }
 }
 
+let statsTimer: ReturnType<typeof setInterval> | null = null
+
 async function loadStats() {
   try {
     const res = await getWikiStats(props.knowledgeBaseId)
     stats.value = (res as any).data || res as any
+    
+    // Poll if there are pending tasks or wiki ingest is active
+    if (stats.value && (stats.value.pending_tasks > 0 || stats.value.is_active)) {
+      if (!statsTimer) {
+        statsTimer = setInterval(() => {
+          loadStats()
+        }, 5000)
+      }
+    } else if (statsTimer) {
+      // If completed, clear timer and reload pages once to get new content
+      clearInterval(statsTimer)
+      statsTimer = null
+      loadPages()
+    }
   } catch (e) { /* ignore */ }
 }
 
@@ -1300,6 +1320,12 @@ onMounted(() => {
   loadStats()
   if (props.view === 'graph') loadGraph()
 })
+
+onUnmounted(() => {
+  if (statsTimer) {
+    clearInterval(statsTimer)
+  }
+})
 </script>
 
 <style scoped lang="less">
@@ -1323,6 +1349,24 @@ onMounted(() => {
 
 .wiki-sidebar-header {
   padding: 16px 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.wiki-queue-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--td-bg-color-secondarycontainer);
+  border-radius: 6px;
+  color: var(--td-text-color-secondary);
+  font-size: 13px;
+  
+  .queue-text {
+    line-height: 1.2;
+  }
 }
 
 .wiki-page-list {

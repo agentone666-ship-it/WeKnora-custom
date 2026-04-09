@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS wiki_pages (
     in_links        JSONB DEFAULT '[]'::JSONB,
     out_links       JSONB DEFAULT '[]'::JSONB,
     page_metadata   JSONB DEFAULT '{}'::JSONB,
+    aliases         JSONB DEFAULT '[]'::JSONB,
     version         INT NOT NULL DEFAULT 1,
     created_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),

@@ -2159,6 +2159,7 @@ export default {
       showArrows: '화살표 표시',
       hideArrows: '화살표 숨기기',
       healthCheck: "상태 점검",
+      queueStatus: "Wiki 대기열에 {count}개의 보류 중인 작업",
     },
     buttons: {
       create: "지식베이스 생성",

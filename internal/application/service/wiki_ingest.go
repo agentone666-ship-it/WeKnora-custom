@@ -38,10 +38,6 @@ const (
 	// wikiPendingTTL prevents stale pending lists from accumulating.
 	wikiPendingTTL = 24 * time.Hour
 
-	// wikiActiveTTL is the max time the "batch in progress" flag stays set.
-	// Safety net — auto-expires if a batch crashes without cleanup.
-	wikiActiveTTL = 60 * time.Minute
-
 	// wikiMaxDocsPerBatch limits how many documents a single batch processes.
 	// Prevents unbounded execution time. Remaining docs stay in the pending list
 	// and are picked up by the follow-up task.
@@ -54,8 +50,9 @@ const (
 type WikiIngestPayload struct {
 	TenantID        uint64 `json:"tenant_id"`
 	KnowledgeBaseID string `json:"knowledge_base_id"`
-	KnowledgeID     string `json:"knowledge_id,omitempty"` // Lite mode only
 	Language        string `json:"language,omitempty"`
+	// Fallback for Lite mode (no Redis)
+	LiteOps []WikiPendingOp `json:"lite_ops,omitempty"`
 }
 
 // WikiRetractPayload is the asynq task payload for wiki content retraction
@@ -67,6 +64,23 @@ type WikiRetractPayload struct {
 	DocSummary      string   `json:"doc_summary,omitempty"` // one-line summary of the deleted document
 	Language        string   `json:"language,omitempty"`
 	PageSlugs       []string `json:"page_slugs"`
+}
+
+const (
+	WikiOpIngest  = "ingest"
+	WikiOpRetract = "retract"
+)
+
+// WikiPendingOp represents a single operation in the Redis pending queue
+type WikiPendingOp struct {
+	Op          string `json:"op"`
+	KnowledgeID string `json:"knowledge_id"`
+	// Ingest fields
+	Language string `json:"language,omitempty"`
+	// Retract fields
+	DocTitle   string   `json:"doc_title,omitempty"`
+	DocSummary string   `json:"doc_summary,omitempty"`
+	PageSlugs  []string `json:"page_slugs,omitempty"`
 }
 
 // wikiIngestService handles the LLM-powered wiki generation pipeline
@@ -124,24 +138,37 @@ func NewWikiIngestService(
 func EnqueueWikiIngest(ctx context.Context, task interfaces.TaskEnqueuer, redisClient *redis.Client, tenantID uint64, kbID, knowledgeID string) {
 	lang, _ := types.LanguageFromContext(ctx)
 
-	// Push to Redis pending list (if Redis available)
-	if redisClient != nil {
-		pendingKey := wikiPendingKeyPrefix + kbID
-		redisClient.RPush(ctx, pendingKey, knowledgeID)
-		redisClient.Expire(ctx, pendingKey, wikiPendingTTL)
-	}
-
 	payload := WikiIngestPayload{
 		TenantID:        tenantID,
 		KnowledgeBaseID: kbID,
-		KnowledgeID:     knowledgeID, // fallback for Lite mode
 		Language:        lang,
 	}
+
+	// Push to Redis pending list (if Redis available)
+	if redisClient != nil {
+		pendingKey := wikiPendingKeyPrefix + kbID
+		op := WikiPendingOp{
+			Op:          WikiOpIngest,
+			KnowledgeID: knowledgeID,
+			Language:    lang,
+		}
+		opBytes, _ := json.Marshal(op)
+		redisClient.RPush(ctx, pendingKey, string(opBytes))
+		redisClient.Expire(ctx, pendingKey, wikiPendingTTL)
+	} else {
+		// Fallback for Lite mode (no Redis)
+		payload.LiteOps = []WikiPendingOp{{
+			Op:          WikiOpIngest,
+			KnowledgeID: knowledgeID,
+			Language:    lang,
+		}}
+	}
+
 	payloadBytes, _ := json.Marshal(payload)
 
 	t := asynq.NewTask(types.TypeWikiIngest, payloadBytes,
 		asynq.Queue("low"),
-		asynq.MaxRetry(3),
+		asynq.MaxRetry(10), // Increased from 3 to 10 to ensure it can outlast the 5-minute active lock TTL
 		asynq.Timeout(60*time.Minute),
 		asynq.ProcessIn(wikiIngestDelay),
 	)
@@ -151,13 +178,39 @@ func EnqueueWikiIngest(ctx context.Context, task interfaces.TaskEnqueuer, redisC
 }
 
 // EnqueueWikiRetract enqueues an async wiki content retraction task
-func EnqueueWikiRetract(ctx context.Context, task interfaces.TaskEnqueuer, payload WikiRetractPayload) {
-	payloadBytes, err := json.Marshal(payload)
-	if err != nil {
-		logger.Errorf(ctx, "wiki retract: failed to marshal payload: %v", err)
-		return
+func EnqueueWikiRetract(ctx context.Context, task interfaces.TaskEnqueuer, redisClient *redis.Client, payload WikiRetractPayload) {
+	ingestPayload := WikiIngestPayload{
+		TenantID:        payload.TenantID,
+		KnowledgeBaseID: payload.KnowledgeBaseID,
+		Language:        payload.Language,
 	}
-	t := asynq.NewTask(types.TypeWikiRetract, payloadBytes, asynq.Queue("low"), asynq.MaxRetry(3), asynq.Timeout(60*time.Minute))
+
+	op := WikiPendingOp{
+		Op:          WikiOpRetract,
+		KnowledgeID: payload.KnowledgeID,
+		DocTitle:    payload.DocTitle,
+		DocSummary:  payload.DocSummary,
+		PageSlugs:   payload.PageSlugs,
+		Language:    payload.Language,
+	}
+
+	if redisClient != nil {
+		pendingKey := wikiPendingKeyPrefix + payload.KnowledgeBaseID
+		opBytes, _ := json.Marshal(op)
+		redisClient.RPush(ctx, pendingKey, string(opBytes))
+		redisClient.Expire(ctx, pendingKey, wikiPendingTTL)
+	} else {
+		// Fallback for Lite mode (no Redis)
+		ingestPayload.LiteOps = []WikiPendingOp{op}
+	}
+
+	payloadBytes, _ := json.Marshal(ingestPayload)
+	t := asynq.NewTask(types.TypeWikiIngest, payloadBytes,
+		asynq.Queue("low"),
+		asynq.MaxRetry(10), // Increased from 3 to 10 to outlast the active lock TTL
+		asynq.Timeout(60*time.Minute),
+		asynq.ProcessIn(5*time.Second), // Retract can trigger the batch quickly
+	)
 	if _, err := task.Enqueue(t); err != nil {
 		logger.Warnf(ctx, "wiki retract: failed to enqueue task: %v", err)
 	}
@@ -167,71 +220,7 @@ func EnqueueWikiRetract(ctx context.Context, task interfaces.TaskEnqueuer, paylo
 // Wiki ingest tasks are debounced via asynq.Unique + ProcessIn, so at most
 // one ingest task runs per KB at a time. No distributed lock needed.
 func (s *wikiIngestService) Handle(ctx context.Context, t *asynq.Task) error {
-	switch t.Type() {
-	case types.TypeWikiRetract:
-		return s.ProcessWikiRetract(ctx, t)
-	default:
-		return s.ProcessWikiIngest(ctx, t)
-	}
-}
-
-// ProcessWikiRetract uses LLM to remove deleted document's contributions from wiki pages
-func (s *wikiIngestService) ProcessWikiRetract(ctx context.Context, t *asynq.Task) error {
-	var payload WikiRetractPayload
-	if err := json.Unmarshal(t.Payload(), &payload); err != nil {
-		return fmt.Errorf("wiki retract: unmarshal payload: %w", err)
-	}
-
-	logger.Infof(ctx, "wiki retract: starting for knowledge %s (%s), %d pages",
-		payload.KnowledgeID, payload.DocTitle, len(payload.PageSlugs))
-
-	// Inject context values
-	ctx = context.WithValue(ctx, types.TenantIDContextKey, payload.TenantID)
-	if payload.Language != "" {
-		ctx = context.WithValue(ctx, types.LanguageContextKey, payload.Language)
-	}
-
-	// Get KB and synthesis model
-	kb, err := s.kbService.GetKnowledgeBaseByIDOnly(ctx, payload.KnowledgeBaseID)
-	if err != nil {
-		return fmt.Errorf("wiki retract: get KB: %w", err)
-	}
-	synthesisModelID := kb.WikiConfig.SynthesisModelID
-	if synthesisModelID == "" {
-		synthesisModelID = kb.SummaryModelID
-	}
-	if synthesisModelID == "" {
-		return fmt.Errorf("wiki retract: no synthesis model for KB %s", kb.ID)
-	}
-	chatModel, err := s.modelService.GetChatModel(ctx, synthesisModelID)
-	if err != nil {
-		return fmt.Errorf("wiki retract: get chat model: %w", err)
-	}
-
-	lang := types.LanguageNameFromContext(ctx)
-
-	s.retractPagesContent(ctx, chatModel, payload.KnowledgeBaseID, payload.DocTitle, payload.DocSummary, payload.PageSlugs, lang)
-
-	// Rebuild index page to reflect changes
-	retractChangeDesc := fmt.Sprintf("Removed document '%s': %s", payload.DocTitle, payload.DocSummary)
-	if err := s.rebuildIndexPage(ctx, chatModel, WikiIngestPayload{
-		TenantID:        payload.TenantID,
-		KnowledgeBaseID: payload.KnowledgeBaseID,
-	}, retractChangeDesc, lang); err != nil {
-		logger.Warnf(ctx, "wiki retract: rebuild index failed: %v", err)
-	}
-
-	// Append log entry
-	s.appendLogEntry(ctx, WikiIngestPayload{
-		TenantID:        payload.TenantID,
-		KnowledgeBaseID: payload.KnowledgeBaseID,
-		KnowledgeID:     payload.KnowledgeID,
-	}, "retract", payload.DocTitle, payload.PageSlugs, "")
-
-	// Clean up dead links pointing to archived/deleted pages
-	s.cleanDeadLinks(ctx, payload.KnowledgeBaseID)
-
-	return nil
+	return s.ProcessWikiIngest(ctx, t)
 }
 
 // retractPagesContent uses LLM to remove a deleted/stale document's contributions
@@ -247,9 +236,19 @@ func (s *wikiIngestService) retractPagesContent(
 ) {
 	allPages, _ := s.wikiService.ListAllPages(ctx, kbID)
 	slugTitleMap := make(map[string]string)
+	summaryContentByKnowledgeID := make(map[string]string)
 	for _, p := range allPages {
 		if p.PageType != types.WikiPageTypeIndex && p.PageType != types.WikiPageTypeLog && p.Status != types.WikiPageStatusArchived {
 			slugTitleMap[p.Slug] = p.Title
+		}
+		if p.PageType == types.WikiPageTypeSummary && p.Content != "" {
+			for _, ref := range p.SourceRefs {
+				kid := ref
+				if pipeIdx := strings.Index(ref, "|"); pipeIdx > 0 {
+					kid = ref[:pipeIdx]
+				}
+				summaryContentByKnowledgeID[kid] = p.Content
+			}
 		}
 	}
 
@@ -259,17 +258,25 @@ func (s *wikiIngestService) retractPagesContent(
 			continue
 		}
 
-		var remainingSources string
+		var remainingSourcesContent strings.Builder
 		for _, ref := range page.SourceRefs {
 			pipeIdx := strings.Index(ref, "|")
+			var refKnowledgeID, refTitle string
 			if pipeIdx > 0 {
-				remainingSources += "- " + ref[pipeIdx+1:] + "\n"
+				refKnowledgeID = ref[:pipeIdx]
+				refTitle = ref[pipeIdx+1:]
 			} else {
-				remainingSources += "- " + ref + "\n"
+				refKnowledgeID = ref
+				refTitle = ref
+			}
+			if content, ok := summaryContentByKnowledgeID[refKnowledgeID]; ok {
+				fmt.Fprintf(&remainingSourcesContent, "<source title=%q>\n%s\n</source>\n\n", refTitle, content)
+			} else {
+				fmt.Fprintf(&remainingSourcesContent, "<source title=%q>\n(summary not available)\n</source>\n\n", refTitle)
 			}
 		}
-		if remainingSources == "" {
-			remainingSources = "(no other sources)"
+		if remainingSourcesContent.Len() == 0 {
+			remainingSourcesContent.WriteString("(no remaining sources)")
 		}
 
 		var relatedSlugs strings.Builder
@@ -280,12 +287,12 @@ func (s *wikiIngestService) retractPagesContent(
 		}
 
 		updatedContent, err := s.generateWithTemplate(ctx, chatModel, agent.WikiPageRetractPrompt, map[string]string{
-			"ExistingContent":   page.Content,
-			"DeletedDocTitle":   docTitle,
-			"DeletedDocContent": docContent,
-			"RemainingSources":  remainingSources,
-			"AvailableSlugs":    relatedSlugs.String(),
-			"Language":          lang,
+			"ExistingContent":         page.Content,
+			"DeletedDocTitle":         docTitle,
+			"DeletedDocContent":       docContent,
+			"RemainingSourcesContent": remainingSourcesContent.String(),
+			"AvailableSlugs":          relatedSlugs.String(),
+			"Language":                lang,
 		})
 		if err != nil {
 			logger.Warnf(ctx, "wiki retract: LLM call failed for page %s: %v", slug, err)
@@ -322,8 +329,57 @@ func (s *wikiIngestService) retractPagesContent(
 //
 // This ensures: one batch per KB at a time, no locks, no blocking, no timeouts.
 func (s *wikiIngestService) ProcessWikiIngest(ctx context.Context, t *asynq.Task) error {
+	taskStartedAt := time.Now()
+	retryCount, _ := asynq.GetRetryCount(ctx)
+	maxRetry, _ := asynq.GetMaxRetry(ctx)
+
 	var payload WikiIngestPayload
+	exitStatus := "success"
+	mode := "redis"
+	lockAcquired := false
+	pendingOpsCount := 0
+	ingestOps := 0
+	retractOps := 0
+	ingestSucceeded := 0
+	ingestFailed := 0
+	retractHandled := 0
+	indexRebuildAttempted := false
+	indexRebuildSucceeded := false
+	followUpScheduled := false
+	ingestPagesCount := 0
+	retractPagesCount := 0
+	totalPagesAffected := 0
+	docPreview := make([]string, 0, 6)
+	defer func() {
+		logger.Infof(
+			ctx,
+			"wiki ingest stats: kb=%s tenant=%d retry=%d/%d status=%s elapsed=%s mode=%s lock_acquired=%v pending_ops=%d ops(ingest=%d,retract=%d) ingest(success=%d,failed=%d) retract_handled=%d pages(ingest=%d,retract=%d,total=%d) index(rebuild_attempted=%v,rebuild_succeeded=%v) followup=%v preview=%s",
+			payload.KnowledgeBaseID,
+			payload.TenantID,
+			retryCount,
+			maxRetry,
+			exitStatus,
+			time.Since(taskStartedAt).Round(time.Millisecond),
+			mode,
+			lockAcquired,
+			pendingOpsCount,
+			ingestOps,
+			retractOps,
+			ingestSucceeded,
+			ingestFailed,
+			retractHandled,
+			ingestPagesCount,
+			retractPagesCount,
+			totalPagesAffected,
+			indexRebuildAttempted,
+			indexRebuildSucceeded,
+			followUpScheduled,
+			previewStringSlice(docPreview, 6),
+		)
+	}()
+
 	if err := json.Unmarshal(t.Payload(), &payload); err != nil {
+		exitStatus = "invalid_payload"
 		return fmt.Errorf("wiki ingest: unmarshal payload: %w", err)
 	}
 
@@ -336,30 +392,61 @@ func (s *wikiIngestService) ProcessWikiIngest(ctx context.Context, t *asynq.Task
 	// Try to acquire the "active batch" flag (non-blocking)
 	if s.redisClient != nil {
 		activeKey := wikiActiveKeyPrefix + payload.KnowledgeBaseID
-		acquired, err := s.redisClient.SetNX(ctx, activeKey, "1", wikiActiveTTL).Result()
+		// Use a 5-minute initial TTL
+		acquired, err := s.redisClient.SetNX(ctx, activeKey, "1", 5*time.Minute).Result()
 		if err != nil {
 			logger.Warnf(ctx, "wiki ingest: redis SetNX failed: %v", err)
 			// Proceed anyway — better to risk brief overlap than drop documents
 		} else if !acquired {
-			// Another batch is actively processing this KB — bail out.
-			// Our documents are safe in the pending list; the active batch will
-			// pick them up via its follow-up check, or a future task will.
-			logger.Infof(ctx, "wiki ingest: another batch active for KB %s, skipping (docs safe in pending list)", payload.KnowledgeBaseID)
-			return nil
+			exitStatus = "active_lock_conflict"
+			// Another batch is actively processing this KB.
+			// By returning an error, we leverage Asynq's built-in exponential backoff to retry this task later.
+			// This ensures that if the active task crashes (leaking the lock until its TTL expires),
+			// this task will eventually retry and process the remaining items in the queue, preventing a stalled queue.
+			logger.Infof(ctx, "wiki ingest: another batch active for KB %s, deferring to asynq retry", payload.KnowledgeBaseID)
+			return fmt.Errorf("concurrent wiki task active, please retry")
 		}
+		lockAcquired = acquired
+
+		// Create a context to cancel the keep-alive goroutine when we're done
+		lockCtx, cancelLock := context.WithCancel(context.Background())
+
 		// We own the flag — make sure to release it when done
-		defer s.redisClient.Del(ctx, activeKey)
+		defer func() {
+			cancelLock()
+			// Use context.Background() to ensure release even if ctx is cancelled
+			s.redisClient.Del(context.Background(), activeKey)
+		}()
+
+		// Keep-alive goroutine to extend lock TTL while the task is running
+		go func() {
+			ticker := time.NewTicker(2 * time.Minute)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-lockCtx.Done():
+					return
+				case <-ticker.C:
+					s.redisClient.Expire(context.Background(), activeKey, 5*time.Minute)
+				}
+			}
+		}()
+	} else {
+		mode = "lite"
 	}
 
 	// Get KB and validate
 	kb, err := s.kbService.GetKnowledgeBaseByIDOnly(ctx, payload.KnowledgeBaseID)
 	if err != nil {
+		exitStatus = "get_kb_failed"
 		return fmt.Errorf("wiki ingest: get KB: %w", err)
 	}
 	if !kb.IsWikiEnabled() {
+		exitStatus = "kb_not_wiki_enabled"
 		return fmt.Errorf("wiki ingest: KB %s is not wiki type", kb.ID)
 	}
 	if kb.WikiConfig == nil || !kb.WikiConfig.AutoIngest {
+		exitStatus = "auto_ingest_disabled"
 		logger.Infof(ctx, "wiki ingest: auto_ingest disabled for KB %s, skipping", kb.ID)
 		return nil
 	}
@@ -370,80 +457,154 @@ func (s *wikiIngestService) ProcessWikiIngest(ctx context.Context, t *asynq.Task
 		synthesisModelID = kb.SummaryModelID
 	}
 	if synthesisModelID == "" {
+		exitStatus = "missing_synthesis_model"
 		return fmt.Errorf("wiki ingest: no synthesis model configured for KB %s", kb.ID)
 	}
 	chatModel, err := s.modelService.GetChatModel(ctx, synthesisModelID)
 	if err != nil {
+		exitStatus = "get_chat_model_failed"
 		return fmt.Errorf("wiki ingest: get chat model: %w", err)
 	}
 
 	lang := types.LanguageNameFromContext(ctx)
 
-	// Drain Redis pending list to get all documents queued for this KB
-	knowledgeIDs := s.drainPendingList(ctx, payload.KnowledgeBaseID)
-	if len(knowledgeIDs) == 0 {
+	// Peek Redis pending list to get all operations queued for this KB without removing them
+	pendingOps, peekedCount := s.peekPendingList(ctx, payload.KnowledgeBaseID)
+	pendingOpsCount = len(pendingOps)
+	if len(pendingOps) == 0 {
 		if s.redisClient != nil {
 			// Redis mode: list was already drained — nothing to do
+			exitStatus = "no_pending_ops"
+			logger.Infof(ctx, "wiki ingest: no pending operations for KB %s", payload.KnowledgeBaseID)
 			return nil
 		}
-		// Lite mode (no Redis): use the single KnowledgeID from payload
-		if payload.KnowledgeID != "" {
-			knowledgeIDs = []string{payload.KnowledgeID}
+		// Lite mode (no Redis): use LiteOps from payload
+		if len(payload.LiteOps) > 0 {
+			pendingOps = payload.LiteOps
+			peekedCount = len(pendingOps)
+			pendingOpsCount = len(pendingOps)
 		} else {
+			exitStatus = "no_lite_ops"
 			return nil
 		}
 	}
 
-	logger.Infof(ctx, "wiki ingest: batch processing %d documents for KB %s: %v",
-		len(knowledgeIDs), payload.KnowledgeBaseID, knowledgeIDs)
+	logger.Infof(ctx, "wiki ingest: batch processing %d ops for KB %s",
+		len(pendingOps), payload.KnowledgeBaseID)
 
-	// Process each document
-	var allPagesAffected []string
+	// Process each operation
+	var ingestPagesAffected []string
+	var retractPagesAffected []string
 	var docResults []*docIngestResult
-	for _, knowledgeID := range knowledgeIDs {
-		result, err := s.processOneDocument(ctx, chatModel, payload, knowledgeID, lang)
-		if err != nil {
-			logger.Warnf(ctx, "wiki ingest: failed to process knowledge %s: %v", knowledgeID, err)
-			continue
-		}
-		if result != nil {
-			allPagesAffected = append(allPagesAffected, result.Pages...)
-			docResults = append(docResults, result)
+	var retractChangeDesc strings.Builder
+
+	for _, op := range pendingOps {
+		if op.Op == WikiOpRetract {
+			retractOps++
+			logger.Infof(ctx, "wiki ingest: retracting document '%s' (%s)", op.DocTitle, op.KnowledgeID)
+			s.retractPagesContent(ctx, chatModel, payload.KnowledgeBaseID, op.DocTitle, op.DocSummary, op.PageSlugs, op.Language)
+			retractPagesAffected = append(retractPagesAffected, op.PageSlugs...)
+			retractPagesCount += len(op.PageSlugs)
+			retractHandled++
+			docPreview = append(docPreview,
+				fmt.Sprintf("retract[%s]: %s", previewText(op.KnowledgeID, 24), previewText(op.DocTitle, 48)))
+			fmt.Fprintf(&retractChangeDesc, "Removed document '%s': %s\n", op.DocTitle, op.DocSummary)
+			s.appendLogEntry(ctx, WikiIngestPayload{
+				TenantID:        payload.TenantID,
+				KnowledgeBaseID: payload.KnowledgeBaseID,
+			}, "retract", op.KnowledgeID, op.DocTitle, op.PageSlugs, "")
+		} else {
+			ingestOps++
+			// Default to ingest
+			logger.Infof(ctx, "wiki ingest: processing document '%s' (%s)", op.DocTitle, op.KnowledgeID)
+			result, err := s.processOneDocument(ctx, chatModel, payload, op.KnowledgeID, op.Language)
+			if err != nil {
+				ingestFailed++
+				logger.Warnf(ctx, "wiki ingest: failed to process knowledge %s: %v", op.KnowledgeID, err)
+				continue
+			}
+			if result != nil {
+				ingestSucceeded++
+				ingestPagesAffected = append(ingestPagesAffected, result.Pages...)
+				ingestPagesCount += len(result.Pages)
+				docResults = append(docResults, result)
+				docPreview = append(docPreview,
+					fmt.Sprintf(
+						"ingest[%s]: title=%s summary=%s pages=%s",
+						previewText(result.KnowledgeID, 24),
+						previewText(result.DocTitle, 40),
+						previewText(result.Summary, 64),
+						previewStringSlice(result.Pages, 4),
+					))
+			}
 		}
 	}
+
+	allPagesAffected := append(ingestPagesAffected, retractPagesAffected...)
+	totalPagesAffected = len(allPagesAffected)
 
 	// Batch post-processing (once for the whole batch, not per-doc)
 
 	// Build change description from processed documents
 	var changeDesc strings.Builder
-	fmt.Fprintf(&changeDesc, "Added %d documents:\n", len(docResults))
-	for _, r := range docResults {
-		fmt.Fprintf(&changeDesc, "- %s: %s\n", r.DocTitle, r.Summary)
+	if len(docResults) > 0 {
+		fmt.Fprintf(&changeDesc, "Added %d documents:\n", len(docResults))
+		for _, r := range docResults {
+			fmt.Fprintf(&changeDesc, "- %s: %s\n", r.DocTitle, r.Summary)
+		}
+	}
+	if retractChangeDesc.Len() > 0 {
+		changeDesc.WriteString(retractChangeDesc.String())
 	}
 
 	// Rebuild index page
-	if err := s.rebuildIndexPage(ctx, chatModel, payload, changeDesc.String(), lang); err != nil {
-		logger.Warnf(ctx, "wiki ingest: rebuild index failed: %v", err)
+	if changeDesc.Len() > 0 {
+		indexRebuildAttempted = true
+		logger.Infof(ctx, "wiki ingest: rebuilding index page")
+		if err := s.rebuildIndexPage(ctx, chatModel, payload, changeDesc.String(), lang); err != nil {
+			logger.Warnf(ctx, "wiki ingest: rebuild index failed: %v", err)
+			docPreview = append(docPreview,
+				fmt.Sprintf("index_change=%s", previewText(changeDesc.String(), 160)))
+		} else {
+			indexRebuildSucceeded = true
+			docPreview = append(docPreview,
+				fmt.Sprintf("index_change=%s", previewText(changeDesc.String(), 160)))
+		}
 	}
 
-	// Append log entry
-	s.appendLogEntry(ctx, payload, "ingest",
-		fmt.Sprintf("%d documents", len(knowledgeIDs)),
-		allPagesAffected, "")
+	// Append log entry for ingests
+	if len(docResults) > 0 {
+		s.appendLogEntry(ctx, payload, "ingest", "",
+			fmt.Sprintf("%d documents", len(docResults)),
+			ingestPagesAffected, "")
+	}
 
-	// Cross-link injection
-	s.injectCrossLinks(ctx, payload.KnowledgeBaseID, allPagesAffected)
+	// Clean dead links (needed after retracts)
+	if len(retractPagesAffected) > 0 {
+		logger.Infof(ctx, "wiki ingest: cleaning dead links")
+		s.cleanDeadLinks(ctx, payload.KnowledgeBaseID)
+	}
 
-	// Publish all draft pages
-	s.publishDraftPages(ctx, payload.KnowledgeBaseID, allPagesAffected)
+	if len(allPagesAffected) > 0 {
+		// Cross-link injection
+		logger.Infof(ctx, "wiki ingest: injecting cross links")
+		s.injectCrossLinks(ctx, payload.KnowledgeBaseID, allPagesAffected)
 
-	logger.Infof(ctx, "wiki ingest: batch completed for KB %s, %d docs, %d pages affected",
-		payload.KnowledgeBaseID, len(knowledgeIDs), len(allPagesAffected))
+		// Publish all draft pages
+		logger.Infof(ctx, "wiki ingest: publishing draft pages")
+		s.publishDraftPages(ctx, payload.KnowledgeBaseID, allPagesAffected)
+	}
+
+	// Trim the pending list now that processing is complete
+	s.trimPendingList(ctx, payload.KnowledgeBaseID, peekedCount)
+
+	logger.Infof(ctx, "wiki ingest: batch completed for KB %s, %d ops, %d pages affected",
+		payload.KnowledgeBaseID, len(pendingOps), len(allPagesAffected))
 
 	// After clearing active flag (via defer above), check for follow-up work.
 	// Note: this runs BEFORE defer, but defer runs LIFO so active flag is still set here.
 	// We need to clear it first, then check. Use a closure:
-	s.scheduleFollowUp(ctx, payload)
+	followUpScheduled = s.scheduleFollowUp(ctx, payload)
 
 	return nil
 }
@@ -451,14 +612,14 @@ func (s *wikiIngestService) ProcessWikiIngest(ctx context.Context, t *asynq.Task
 // scheduleFollowUp checks if documents arrived in the pending list during batch processing.
 // Called right before the active flag is released (via defer). Enqueues a new task with
 // minimal delay so the next batch picks up new docs promptly.
-func (s *wikiIngestService) scheduleFollowUp(ctx context.Context, payload WikiIngestPayload) {
+func (s *wikiIngestService) scheduleFollowUp(ctx context.Context, payload WikiIngestPayload) bool {
 	if s.redisClient == nil {
-		return
+		return false
 	}
 	pendingKey := wikiPendingKeyPrefix + payload.KnowledgeBaseID
 	count, err := s.redisClient.LLen(ctx, pendingKey).Result()
 	if err != nil || count == 0 {
-		return
+		return false
 	}
 
 	logger.Infof(ctx, "wiki ingest: %d more documents pending for KB %s, scheduling follow-up", count, payload.KnowledgeBaseID)
@@ -466,45 +627,77 @@ func (s *wikiIngestService) scheduleFollowUp(ctx context.Context, payload WikiIn
 	payloadBytes, _ := json.Marshal(payload)
 	t := asynq.NewTask(types.TypeWikiIngest, payloadBytes,
 		asynq.Queue("low"),
-		asynq.MaxRetry(3),
+		asynq.MaxRetry(10), // Increased from 3 to 10 to outlast the active lock TTL
 		asynq.Timeout(60*time.Minute),
 		asynq.ProcessIn(5*time.Second), // short delay — active flag will be released by then
 	)
 	if _, err := s.task.Enqueue(t); err != nil {
 		logger.Warnf(ctx, "wiki ingest: follow-up enqueue failed: %v", err)
+		return false
 	}
+	return true
 }
 
-// drainPendingList atomically pops up to wikiMaxDocsPerBatch entries from the
-// Redis pending list. Remaining entries stay in the list for the follow-up batch.
-func (s *wikiIngestService) drainPendingList(ctx context.Context, kbID string) []string {
+// peekPendingList gets up to wikiMaxDocsPerBatch entries from the Redis pending list
+// WITHOUT removing them. It returns the unique ops and the actual number of items peeked.
+func (s *wikiIngestService) peekPendingList(ctx context.Context, kbID string) ([]WikiPendingOp, int) {
 	if s.redisClient == nil {
-		return nil
+		return nil, 0
 	}
 	pendingKey := wikiPendingKeyPrefix + kbID
 
-	// Atomically pop up to N items: LRANGE + LTRIM in a single Lua script
-	script := redis.NewScript(`
-		local items = redis.call("LRANGE", KEYS[1], 0, tonumber(ARGV[1]) - 1)
-		redis.call("LTRIM", KEYS[1], tonumber(ARGV[1]), -1)
-		return items
-	`)
-	result, err := script.Run(ctx, s.redisClient, []string{pendingKey}, wikiMaxDocsPerBatch).StringSlice()
+	result, err := s.redisClient.LRange(ctx, pendingKey, 0, wikiMaxDocsPerBatch-1).Result()
 	if err != nil {
-		logger.Warnf(ctx, "wiki ingest: failed to drain pending list: %v", err)
-		return nil
+		logger.Warnf(ctx, "wiki ingest: failed to peek pending list: %v", err)
+		return nil, 0
 	}
 
-	// Deduplicate (same doc could be pushed multiple times if re-uploaded)
-	seen := make(map[string]bool)
-	var unique []string
-	for _, id := range result {
-		if !seen[id] {
-			seen[id] = true
-			unique = append(unique, id)
+	var ops []WikiPendingOp
+	for _, item := range result {
+		if !strings.HasPrefix(item, "{") {
+			// Backward compatibility: raw knowledgeID string
+			ops = append(ops, WikiPendingOp{
+				Op:          WikiOpIngest,
+				KnowledgeID: item,
+			})
+			continue
+		}
+		var op WikiPendingOp
+		if err := json.Unmarshal([]byte(item), &op); err == nil {
+			ops = append(ops, op)
 		}
 	}
-	return unique
+
+	// Deduplicate by KnowledgeID, keeping only the *last* operation for each document.
+	// This optimizes out redundant sequences (e.g., upload then immediate delete: [ingest, retract] -> [retract]).
+	seen := make(map[string]bool)
+	var reversedUnique []WikiPendingOp
+	for i := len(ops) - 1; i >= 0; i-- {
+		op := ops[i]
+		if !seen[op.KnowledgeID] {
+			seen[op.KnowledgeID] = true
+			reversedUnique = append(reversedUnique, op)
+		}
+	}
+
+	// Reverse back to maintain chronological order
+	var unique []WikiPendingOp
+	for i := len(reversedUnique) - 1; i >= 0; i-- {
+		unique = append(unique, reversedUnique[i])
+	}
+
+	return unique, len(result)
+}
+
+// trimPendingList removes the first `count` items from the Redis pending list.
+func (s *wikiIngestService) trimPendingList(ctx context.Context, kbID string, count int) {
+	if s.redisClient == nil || count <= 0 {
+		return
+	}
+	pendingKey := wikiPendingKeyPrefix + kbID
+	if err := s.redisClient.LTrim(ctx, pendingKey, int64(count), -1).Err(); err != nil {
+		logger.Warnf(ctx, "wiki ingest: failed to trim pending list: %v", err)
+	}
 }
 
 // docIngestResult captures per-document info for batch post-processing.
@@ -523,19 +716,25 @@ func (s *wikiIngestService) processOneDocument(
 	knowledgeID string,
 	lang string,
 ) (*docIngestResult, error) {
+	docStartedAt := time.Now()
 	// Get document chunks and reconstruct content
 	chunks, err := s.chunkRepo.ListChunksByKnowledgeID(ctx, payload.TenantID, knowledgeID)
 	if err != nil {
 		return nil, fmt.Errorf("get chunks: %w", err)
 	}
 	if len(chunks) == 0 {
+		logger.Infof(ctx, "wiki ingest: document %s has no chunks, skip", knowledgeID)
 		return nil, nil
 	}
 
 	content := reconstructContent(chunks)
+	rawRuneCount := len([]rune(content))
 	if len([]rune(content)) > maxContentForWiki {
 		content = string([]rune(content)[:maxContentForWiki])
 	}
+	logger.Infof(ctx,
+		"wiki ingest: doc %s chunks=%d content_len(raw=%d,truncated=%d) content_preview=%q",
+		knowledgeID, len(chunks), rawRuneCount, len([]rune(content)), previewText(content, 120))
 
 	// Get document title
 	docTitle := knowledgeID
@@ -561,15 +760,11 @@ func (s *wikiIngestService) processOneDocument(
 	oldPageSlugs := s.getExistingPageSlugsForKnowledge(ctx, payload.KnowledgeBaseID, knowledgeID)
 
 	// Build a per-doc payload for functions that still need KnowledgeID
-	docPayload := WikiIngestPayload{
-		TenantID:        payload.TenantID,
-		KnowledgeBaseID: payload.KnowledgeBaseID,
-		KnowledgeID:     knowledgeID,
-		Language:        payload.Language,
-	}
+	// (docPayload removed as WikiIngestPayload no longer holds KnowledgeID)
 
 	// Step 1: Extract entities and concepts
-	extractedPages, slugItems, err := s.extractEntitiesAndConcepts(ctx, chatModel, content, docTitle, lang, docPayload, sourceRef, oldPageSlugs)
+	logger.Infof(ctx, "wiki ingest: extracting entities and concepts for %s", knowledgeID)
+	extractedPages, slugItems, err := s.extractEntitiesAndConcepts(ctx, chatModel, content, docTitle, lang, payload, sourceRef, oldPageSlugs)
 	if err != nil {
 		logger.Warnf(ctx, "wiki ingest: knowledge extraction failed for %s: %v", knowledgeID, err)
 	} else {
@@ -577,6 +772,7 @@ func (s *wikiIngestService) processOneDocument(
 	}
 
 	// Step 2: Generate summary page
+	logger.Infof(ctx, "wiki ingest: generating summary page for %s", knowledgeID)
 	summarySlug := fmt.Sprintf("summary/%s", slugify(docTitle))
 	var slugListing string
 	for _, slug := range extractedPages {
@@ -609,35 +805,99 @@ func (s *wikiIngestService) processOneDocument(
 			sumLine = docTitle
 		}
 		docSummaryLine = sumLine
-		_, err := s.wikiService.CreatePage(ctx, &types.WikiPage{
-			ID:              uuid.New().String(),
-			TenantID:        payload.TenantID,
-			KnowledgeBaseID: payload.KnowledgeBaseID,
-			Slug:            summarySlug,
-			Title:           docTitle + " - Summary",
-			PageType:        types.WikiPageTypeSummary,
-			Status:          types.WikiPageStatusDraft,
-			Content:         sumBody,
-			Summary:         sumLine,
-			SourceRefs:      types.StringArray{sourceRef},
-		})
-		if err != nil {
-			logger.Warnf(ctx, "wiki ingest: create summary page failed for %s: %v", knowledgeID, err)
+		logger.Infof(ctx, "wiki ingest: summary preview for %s => line=%q body=%q",
+			knowledgeID, previewText(sumLine, 100), previewText(sumBody, 140))
+
+		existingSummary, err := s.wikiService.GetPageBySlug(ctx, payload.KnowledgeBaseID, summarySlug)
+		if err == nil && existingSummary != nil {
+			// Update existing summary page (idempotent for retries)
+			existingSummary.Title = docTitle + " - Summary"
+			existingSummary.Content = sumBody
+			existingSummary.Summary = sumLine
+			existingSummary.Status = types.WikiPageStatusDraft
+			existingSummary.SourceRefs = appendUnique(existingSummary.SourceRefs, sourceRef)
+
+			if _, err := s.wikiService.UpdatePage(ctx, existingSummary); err != nil {
+				logger.Warnf(ctx, "wiki ingest: update summary page failed for %s: %v", knowledgeID, err)
+			} else {
+				pagesAffected = append(pagesAffected, summarySlug)
+			}
 		} else {
-			pagesAffected = append(pagesAffected, summarySlug)
+			// Create new summary page
+			_, err = s.wikiService.CreatePage(ctx, &types.WikiPage{
+				ID:              uuid.New().String(),
+				TenantID:        payload.TenantID,
+				KnowledgeBaseID: payload.KnowledgeBaseID,
+				Slug:            summarySlug,
+				Title:           docTitle + " - Summary",
+				PageType:        types.WikiPageTypeSummary,
+				Status:          types.WikiPageStatusDraft,
+				Content:         sumBody,
+				Summary:         sumLine,
+				SourceRefs:      types.StringArray{sourceRef},
+			})
+			if err != nil {
+				logger.Warnf(ctx, "wiki ingest: create summary page failed for %s: %v", knowledgeID, err)
+			} else {
+				pagesAffected = append(pagesAffected, summarySlug)
+			}
 		}
 	}
 
 	// Retract stale pages (pages this doc previously contributed to but no longer does)
-	s.retractStalePages(ctx, chatModel, docPayload, oldPageSlugs, pagesAffected, docTitle, content, lang)
+	logger.Infof(ctx, "wiki ingest: retracting stale pages for %s", knowledgeID)
+	s.retractStalePages(ctx, chatModel, payload, knowledgeID, oldPageSlugs, pagesAffected, docTitle, content, lang)
 
-	logger.Infof(ctx, "wiki ingest: processed knowledge %s, %d pages affected", knowledgeID, len(pagesAffected))
+	logger.Infof(ctx,
+		"wiki ingest: processed knowledge %s title=%q affected_pages=%d page_preview=%s extracted_pages=%s elapsed=%s",
+		knowledgeID,
+		previewText(docTitle, 80),
+		len(pagesAffected),
+		previewStringSlice(pagesAffected, 6),
+		previewStringSlice(extractedPages, 6),
+		time.Since(docStartedAt).Round(time.Millisecond),
+	)
 	return &docIngestResult{
 		KnowledgeID: knowledgeID,
 		DocTitle:    docTitle,
 		Summary:     docSummaryLine,
 		Pages:       pagesAffected,
 	}, nil
+}
+
+func previewText(s string, maxRunes int) string {
+	s = strings.TrimSpace(s)
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.ReplaceAll(s, "\t", " ")
+	for strings.Contains(s, "  ") {
+		s = strings.ReplaceAll(s, "  ", " ")
+	}
+	r := []rune(s)
+	if maxRunes <= 0 || len(r) <= maxRunes {
+		return s
+	}
+	return string(r[:maxRunes]) + "...(truncated)"
+}
+
+func previewStringSlice(items []string, limit int) string {
+	if len(items) == 0 {
+		return "[]"
+	}
+	if limit <= 0 {
+		limit = 1
+	}
+	n := len(items)
+	if n > limit {
+		items = items[:limit]
+	}
+	out := make([]string, 0, len(items))
+	for _, it := range items {
+		out = append(out, previewText(it, 48))
+	}
+	if n > limit {
+		return fmt.Sprintf("[%s ...(+%d)]", strings.Join(out, ", "), n-limit)
+	}
+	return fmt.Sprintf("[%s]", strings.Join(out, ", "))
 }
 
 // cleanDeadLinks removes [[wiki-links]] that point to archived or deleted pages.
@@ -703,7 +963,7 @@ func (s *wikiIngestService) cleanDeadLinks(ctx context.Context, kbID string) {
 
 // injectCrossLinks scans affected pages and injects [[wiki-links]] for mentions
 // of other wiki page titles in the content. Pure text replacement, no LLM call.
-// Only processes entity/concept/synthesis/comparison pages (not index/log/summary).
+// Processes entity/concept/synthesis/comparison and summary pages (not index/log).
 func (s *wikiIngestService) injectCrossLinks(ctx context.Context, kbID string, affectedSlugs []string) {
 	// Build a title→slug lookup from ALL pages in this KB
 	allPages, err := s.wikiService.ListAllPages(ctx, kbID)
@@ -754,8 +1014,8 @@ func (s *wikiIngestService) injectCrossLinks(ctx context.Context, kbID string, a
 		if !affectedSet[p.Slug] {
 			continue
 		}
-		// Skip system pages and summary (summary already has links from the prompt)
-		if p.PageType == types.WikiPageTypeIndex || p.PageType == types.WikiPageTypeLog || p.PageType == types.WikiPageTypeSummary {
+		// Skip system pages (index, log). We allow summary to be processed so it gets links to other KB entities.
+		if p.PageType == types.WikiPageTypeIndex || p.PageType == types.WikiPageTypeLog {
 			continue
 		}
 
@@ -856,6 +1116,7 @@ func (s *wikiIngestService) retractStalePages(
 	ctx context.Context,
 	chatModel chat.Chat,
 	payload WikiIngestPayload,
+	knowledgeID string,
 	oldSlugs map[string]bool,
 	newSlugs []string,
 	docTitle, docContent, lang string,
@@ -884,8 +1145,8 @@ func (s *wikiIngestService) retractStalePages(
 	logger.Infof(ctx, "wiki ingest: %d stale pages detected after document update: %v", len(staleSlugs), staleSlugs)
 
 	var retractSlugs []string
-	sourceRef := fmt.Sprintf("%s|%s", payload.KnowledgeID, docTitle)
-	prefix := payload.KnowledgeID + "|"
+	sourceRef := fmt.Sprintf("%s|%s", knowledgeID, docTitle)
+	prefix := knowledgeID + "|"
 
 	for _, slug := range staleSlugs {
 		page, err := s.wikiService.GetPageBySlug(ctx, payload.KnowledgeBaseID, slug)
@@ -896,7 +1157,7 @@ func (s *wikiIngestService) retractStalePages(
 		// Remove this doc's source ref
 		var remaining types.StringArray
 		for _, ref := range page.SourceRefs {
-			if ref == payload.KnowledgeID || ref == sourceRef || strings.HasPrefix(ref, prefix) {
+			if ref == knowledgeID || ref == sourceRef || strings.HasPrefix(ref, prefix) {
 				continue
 			}
 			remaining = append(remaining, ref)
@@ -980,18 +1241,22 @@ func (s *wikiIngestService) extractEntitiesAndConcepts(
 	extractionJSON = strings.TrimSuffix(extractionJSON, "```")
 	extractionJSON = strings.TrimSpace(extractionJSON)
 
+	extractionJSON = sanitizeJSONString(extractionJSON)
+
 	var result combinedExtraction
 	if err := json.Unmarshal([]byte(extractionJSON), &result); err != nil {
-		logger.Warnf(ctx, "wiki ingest: failed to parse combined extraction JSON: %v\nRaw: %s", err, truncateString(extractionJSON, 500))
+		logger.Warnf(ctx, "wiki ingest: failed to parse combined extraction JSON: %v\nRaw: %s", err, extractionJSON)
 		return nil, nil, fmt.Errorf("parse combined extraction JSON: %w", err)
 	}
 
 	var affected []string
 
 	// Deduplicate entities against existing wiki pages (LLM-based)
+	logger.Infof(ctx, "wiki ingest: deduplicating %d entities", len(result.Entities))
 	result.Entities = s.deduplicateItems(ctx, chatModel, result.Entities, types.WikiPageTypeEntity, payload.KnowledgeBaseID)
 
 	// Deduplicate concepts against existing wiki pages (LLM-based)
+	logger.Infof(ctx, "wiki ingest: deduplicating %d concepts", len(result.Concepts))
 	result.Concepts = s.deduplicateItems(ctx, chatModel, result.Concepts, types.WikiPageTypeConcept, payload.KnowledgeBaseID)
 
 	// Build slug→item map for wiki-link generation in summary pages
@@ -1008,6 +1273,7 @@ func (s *wikiIngestService) extractEntitiesAndConcepts(
 	}
 
 	// Upsert entity pages
+	logger.Infof(ctx, "wiki ingest: upserting %d entity pages", len(result.Entities))
 	entitySlugs, err := s.upsertExtractedPages(ctx, chatModel, result.Entities, types.WikiPageTypeEntity, docTitle, lang, payload, sourceRef)
 	if err != nil {
 		logger.Warnf(ctx, "wiki ingest: entity upsert failed: %v", err)
@@ -1016,6 +1282,7 @@ func (s *wikiIngestService) extractEntitiesAndConcepts(
 	}
 
 	// Upsert concept pages
+	logger.Infof(ctx, "wiki ingest: upserting %d concept pages", len(result.Concepts))
 	conceptSlugs, err := s.upsertExtractedPages(ctx, chatModel, result.Concepts, types.WikiPageTypeConcept, docTitle, lang, payload, sourceRef)
 	if err != nil {
 		logger.Warnf(ctx, "wiki ingest: concept upsert failed: %v", err)
@@ -1258,7 +1525,7 @@ func splitSummaryLine(raw string) (summary string, content string) {
 // appendLogEntry appends a structured, grep-parseable entry to the log page.
 // Format: ## [2026-04-07 19:50:02] action | title
 // Followed by key-value metadata lines. No sub-headings — keeps `grep "^## \[" log.md` clean.
-func (s *wikiIngestService) appendLogEntry(ctx context.Context, payload WikiIngestPayload, action, docTitle string, pagesAffected []string, extra string) {
+func (s *wikiIngestService) appendLogEntry(ctx context.Context, payload WikiIngestPayload, action, knowledgeID, docTitle string, pagesAffected []string, extra string) {
 	logPage, _ := s.wikiService.GetLog(ctx, payload.KnowledgeBaseID)
 	if logPage == nil {
 		return
@@ -1270,7 +1537,9 @@ func (s *wikiIngestService) appendLogEntry(ctx context.Context, payload WikiInge
 		action,
 		docTitle,
 	)
-	fmt.Fprintf(&sb, "- **Source**: knowledge/%s\n", payload.KnowledgeID)
+	if knowledgeID != "" {
+		fmt.Fprintf(&sb, "- **Source**: knowledge/%s\n", knowledgeID)
+	}
 	if len(pagesAffected) > 0 {
 		fmt.Fprintf(&sb, "- **Pages affected**: %d (%s)\n", len(pagesAffected), strings.Join(pagesAffected, ", "))
 	}
@@ -1368,11 +1637,13 @@ func (s *wikiIngestService) deduplicateItems(
 	dedupeJSON = strings.TrimSuffix(dedupeJSON, "```")
 	dedupeJSON = strings.TrimSpace(dedupeJSON)
 
+	dedupeJSON = sanitizeJSONString(dedupeJSON)
+
 	var dedupeResult struct {
 		Merges map[string]string `json:"merges"`
 	}
 	if err := json.Unmarshal([]byte(dedupeJSON), &dedupeResult); err != nil {
-		logger.Warnf(ctx, "wiki ingest: failed to parse dedup JSON: %v", err)
+		logger.Warnf(ctx, "wiki ingest: failed to parse dedup JSON: %v\nRaw: %s", err, dedupeJSON)
 		return items
 	}
 
@@ -1559,4 +1830,54 @@ func appendUnique(arr types.StringArray, s string) types.StringArray {
 		}
 	}
 	return append(arr, s)
+}
+
+// sanitizeJSONString sanitizes a string that is intended to be parsed as JSON,
+// by properly escaping unescaped control characters (like newlines) inside string literals.
+func sanitizeJSONString(s string) string {
+	var buf strings.Builder
+	buf.Grow(len(s))
+	inString := false
+	escape := false
+	for _, r := range s {
+		if escape {
+			if r == '\n' {
+				buf.WriteString(`n`)
+			} else if r == '\r' {
+				buf.WriteString(`r`)
+			} else if r == '\t' {
+				buf.WriteString(`t`)
+			} else {
+				buf.WriteRune(r)
+			}
+			escape = false
+			continue
+		}
+		if r == '\\' {
+			escape = true
+			buf.WriteRune(r)
+			continue
+		}
+		if r == '"' {
+			inString = !inString
+			buf.WriteRune(r)
+			continue
+		}
+		if inString {
+			if r == '\n' {
+				buf.WriteString(`\n`)
+				continue
+			}
+			if r == '\r' {
+				buf.WriteString(`\r`)
+				continue
+			}
+			if r == '\t' {
+				buf.WriteString(`\t`)
+				continue
+			}
+		}
+		buf.WriteRune(r)
+	}
+	return buf.String()
 }

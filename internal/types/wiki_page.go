@@ -168,4 +168,6 @@ type WikiStats struct {
 	TotalLinks    int64            `json:"total_links"`
 	OrphanCount   int64            `json:"orphan_count"`    // pages with no inbound links
 	RecentUpdates []*WikiPage      `json:"recent_updates"`  // last N updated pages
+	PendingTasks  int64            `json:"pending_tasks"`   // number of documents waiting to be ingested
+	IsActive      bool             `json:"is_active"`       // whether wiki ingestion is currently running
 }

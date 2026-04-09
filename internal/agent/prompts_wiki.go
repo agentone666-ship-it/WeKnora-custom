@@ -85,6 +85,9 @@ Only include concepts that are substantively discussed. Skip trivial or overly g
 - If something is a specific named thing (person, company, product, place), put it ONLY in "entities".
 - If something is an abstract idea, methodology, or theory, put it ONLY in "concepts".
 - Never duplicate items across the two arrays.
+
+### JSON Formatting Rules
+- **CRITICAL**: Do NOT use literal newline characters inside JSON string values. If you need a newline in a string, you MUST use the escaped sequence \n.
 </instructions>
 
 Output ONLY valid JSON. Example:
@@ -139,6 +142,8 @@ const WikiPageUpdatePrompt = `You are a wiki editor tasked with updating an exis
 Output the SUMMARY line first, then the updated Markdown content. Do not include any other preamble.`
 
 // WikiPageRetractPrompt removes information contributed by a deleted document from an existing wiki page.
+// It includes the actual content of remaining source documents (from their summary pages) so the LLM
+// can accurately determine which facts are still supported and which should be removed.
 const WikiPageRetractPrompt = `You are a wiki editor. A source document has been DELETED from the knowledge base. You must update the existing wiki page to remove any information that came exclusively from this deleted document.
 
 <existing_page_content>
@@ -152,9 +157,9 @@ const WikiPageRetractPrompt = `You are a wiki editor. A source document has been
 </content>
 </deleted_document>
 
-<remaining_sources>
-{{.RemainingSources}}
-</remaining_sources>
+<remaining_source_documents>
+{{.RemainingSourcesContent}}
+</remaining_source_documents>
 
 <valid_wiki_links>
 {{.AvailableSlugs}}
@@ -162,9 +167,9 @@ const WikiPageRetractPrompt = `You are a wiki editor. A source document has been
 
 <instructions>
 1. The FIRST line of your output MUST be: SUMMARY: {one sentence, 15-40 words, describing what this page is about after retraction — for wiki index listing}
-2. Carefully review the existing page content and compare it with the deleted document content above.
-3. Remove any facts, claims, or details that were ONLY sourced from the deleted document.
-4. If a fact is also supported by the remaining source documents, KEEP it.
+2. Carefully review the existing page content. Compare it against BOTH the deleted document and the remaining source documents above.
+3. Remove any facts, claims, or details that were ONLY sourced from the deleted document and are NOT present in any remaining source document.
+4. If a fact appears in both the deleted document and a remaining source, KEEP it.
 5. If you are unsure whether a fact came from the deleted document, keep it as-is — do NOT add any review notes or annotations.
 6. Update or remove the "Source: {{.DeletedDocTitle}}" reference line if present.
 7. Keep [[slug|name]] wiki-link references ONLY if the slug appears in the <valid_wiki_links> list above. Remove any [[slug|name]] whose slug is NOT in that list.
@@ -284,6 +289,9 @@ For each newly extracted item, check if it refers to the same real-world entity 
 Return a JSON object with a "merges" map. The key is the NEW item's slug, the value is the EXISTING page's slug that it should merge into. Only include items that have a match.
 
 If no items match any existing pages, return: {"merges": {}}
+
+### JSON Formatting Rules
+- **CRITICAL**: Do NOT use literal newline characters inside JSON string values. If you need a newline in a string, you MUST use the escaped sequence \n.
 </instructions>
 
 Output ONLY valid JSON. Example:

@@ -40,6 +40,8 @@ export interface WikiStats {
   total_links: number;
   orphan_count: number;
   recent_updates: WikiPage[];
+  pending_tasks: number;
+  is_active: boolean;
 }
 
 // Wiki API Functions

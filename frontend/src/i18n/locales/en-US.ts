@@ -1636,6 +1636,7 @@ export default {
       showArrows: 'Show arrows',
       hideArrows: 'Hide arrows',
       healthCheck: 'Health Check',
+      queueStatus: '{count} pending tasks in Wiki queue',
     },
     buttons: {
       create: 'Create Knowledge Base',
