@@ -112,70 +112,49 @@ Output ONLY valid JSON. Example:
   ]
 }`
 
-// WikiPageUpdatePrompt incrementally updates an existing wiki page with new information.
-const WikiPageUpdatePrompt = `You are a wiki editor tasked with updating an existing wiki page with new information from a recently ingested document.
+// WikiPageModifyPrompt updates an existing wiki page with new additions and removes stale/deleted information in a single pass.
+const WikiPageModifyPrompt = `You are a wiki editor tasked with updating an existing wiki page. You must process a set of NEW information to add, AND/OR a set of deleted documents whose exclusive contributions must be REMOVED.
 
 <existing_page_content>
 {{.ExistingContent}}
 </existing_page_content>
 
+{{if .HasAdditions}}
 <new_information>
-<source_document>{{.NewDocTitle}}</source_document>
-<content>
 {{.NewContent}}
-</content>
 </new_information>
+{{end}}
 
-<instructions>
-1. The FIRST line of your output MUST be: SUMMARY: {one sentence, 15-40 words, describing what this page is about after the update — for wiki index listing}
-2. Merge the new information into the existing page content.
-3. Preserve all existing information that is still valid.
-4. If the new information contradicts existing content, prefer the newer information and silently replace the old claim.
-5. Add new facts, details, and context from the new document.
-6. Preserve any existing [[slug|name]] wiki-link references in the content. Do NOT invent new wiki-link slugs.
-7. Maintain the existing page structure and formatting style.
-8. Add a source reference to the new document at the bottom.
-9. **Image rule**: If the new document contains <images> tags with <image> elements, you SHOULD include the relevant images in your updated page using the Markdown syntax: ![caption](url). Place the images where they are contextually relevant to the text.
-10. Write in {{.Language}}.
-</instructions>
-
-Output the SUMMARY line first, then the updated Markdown content. Do not include any other preamble.`
-
-// WikiPageRetractPrompt removes information contributed by a deleted document from an existing wiki page.
-// It includes the actual content of remaining source documents (from their summary pages) so the LLM
-// can accurately determine which facts are still supported and which should be removed.
-const WikiPageRetractPrompt = `You are a wiki editor. A source document has been DELETED from the knowledge base. You must update the existing wiki page to remove any information that came exclusively from this deleted document.
-
-<existing_page_content>
-{{.ExistingContent}}
-</existing_page_content>
-
-<deleted_document>
-<title>{{.DeletedDocTitle}}</title>
-<content>
-{{.DeletedDocContent}}
-</content>
-</deleted_document>
+{{if .HasRetractions}}
+<deleted_documents>
+{{.DeletedContent}}
+</deleted_documents>
 
 <remaining_source_documents>
 {{.RemainingSourcesContent}}
 </remaining_source_documents>
+{{end}}
 
 <valid_wiki_links>
 {{.AvailableSlugs}}
 </valid_wiki_links>
 
 <instructions>
-1. The FIRST line of your output MUST be: SUMMARY: {one sentence, 15-40 words, describing what this page is about after retraction — for wiki index listing}
-2. Carefully review the existing page content. Compare it against BOTH the deleted document and the remaining source documents above.
-3. Remove any facts, claims, or details that were ONLY sourced from the deleted document and are NOT present in any remaining source document.
-4. If a fact appears in both the deleted document and a remaining source, KEEP it.
-5. If you are unsure whether a fact came from the deleted document, keep it as-is — do NOT add any review notes or annotations.
-6. Update or remove the "Source: {{.DeletedDocTitle}}" reference line if present.
-7. Keep [[slug|name]] wiki-link references ONLY if the slug appears in the <valid_wiki_links> list above. Remove any [[slug|name]] whose slug is NOT in that list.
-8. Maintain the existing page structure, formatting style, and language.
-9. If after removing the deleted document's contributions the page becomes nearly empty, output just: "SUMMARY: (empty page)\n# [Title]\n\n*This page's primary source document was removed.*"
-10. Write in {{.Language}}.
+1. The FIRST line of your output MUST be: SUMMARY: {one sentence, 15-40 words, describing what this page is about after the update — for wiki index listing}
+{{if .HasRetractions}}
+2. REMOVE facts/claims that were ONLY sourced from the <deleted_documents> and are NOT present in any <remaining_source_documents> or <new_information>.
+{{end}}
+{{if .HasAdditions}}
+3. ADD and MERGE the facts, details, and context from the <new_information> into the page. If it contradicts old content, prefer the newer information.
+{{end}}
+4. Preserve existing information that is still valid.
+5. Keep [[slug|name]] wiki-link references ONLY if the slug appears in the <valid_wiki_links> list above. Remove any [[slug|name]] whose slug is NOT in that list. Do NOT invent new wiki-link slugs.
+6. Maintain the existing page structure and formatting style.
+7. **Image rule**: Include relevant images using Markdown syntax: ![caption](url) from new information if applicable.
+{{if .HasRetractions}}
+8. If after removing deleted content the page becomes nearly empty and there is no new information to add, output just: "SUMMARY: (empty page)\n# [Title]\n\n*This page's primary source document was removed.*"
+{{end}}
+9. Write in {{.Language}}.
 </instructions>
 
 Output the SUMMARY line first, then the updated Markdown content. Do not include any other preamble.`
