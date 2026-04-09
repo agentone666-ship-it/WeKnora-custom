@@ -335,6 +335,7 @@ var kbToolNames = map[string]bool{
 	agenttools.ToolGetDocumentInfo:     true,
 	agenttools.ToolWikiSearch:          true,
 	agenttools.ToolWikiReadPage:        true,
+	agenttools.ToolWikiReadSourceDoc:   true,
 }
 
 // redactHistoryKBResults replaces full KB tool results in historical context

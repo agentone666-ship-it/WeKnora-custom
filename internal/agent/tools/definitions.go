@@ -23,8 +23,9 @@ const (
 	ToolExecuteSkillScript = "execute_skill_script"
 	ToolReadSkill          = "read_skill"
 	// Wiki-related tools (only available when wiki KBs are in scope)
-	ToolWikiReadPage = "wiki_read_page"
-	ToolWikiSearch   = "wiki_search"
+	ToolWikiReadPage      = "wiki_read_page"
+	ToolWikiSearch        = "wiki_search"
+	ToolWikiReadSourceDoc = "wiki_read_source_doc"
 )
 
 // AvailableTool defines a simple tool metadata used by settings APIs.
@@ -53,6 +54,7 @@ func AvailableToolDefinitions() []AvailableTool {
 		{Name: ToolFinalAnswer, Label: "提交最终回答", Description: "提交最终回答给用户"},
 		{Name: ToolWikiReadPage, Label: "读取Wiki页面", Description: "读取指定的Wiki页面内容"},
 		{Name: ToolWikiSearch, Label: "搜索Wiki", Description: "在Wiki中搜索页面"},
+		{Name: ToolWikiReadSourceDoc, Label: "精读源文档", Description: "使用知识点深入阅读特定原始文档"},
 	}
 }
 

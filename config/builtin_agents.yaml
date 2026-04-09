@@ -173,6 +173,7 @@ builtin_agents:
         - "todo_write"
         - "wiki_search"
         - "wiki_read_page"
+        - "wiki_read_source_doc"
       web_search_enabled: false
       web_search_max_results: 0
       reflection_enabled: false

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 
@@ -112,6 +113,25 @@ func (t *wikiReadPageTool) Execute(ctx context.Context, args json.RawMessage) (*
 				outLinksDesc := formatLinks(page.OutLinks, kbID)
 				inLinksDesc := formatLinks(page.InLinks, kbID)
 
+				// Render source refs
+				var sourcesDesc []string
+				if len(page.SourceRefs) > 0 {
+					for _, ref := range page.SourceRefs {
+						// SourceRefs might be "knowledgeID" or "knowledgeID|Title"
+						kid := ref
+						title := ""
+						if pipeIdx := strings.Index(ref, "|"); pipeIdx > 0 {
+							kid = ref[:pipeIdx]
+							title = ref[pipeIdx+1:]
+						}
+						if title != "" {
+							sourcesDesc = append(sourcesDesc, fmt.Sprintf(`<source knowledge_id="%s">%s</source>`, kid, title))
+						} else {
+							sourcesDesc = append(sourcesDesc, fmt.Sprintf(`<source knowledge_id="%s"/>`, kid))
+						}
+					}
+				}
+
 				output := fmt.Sprintf(`<wiki_page>
 <metadata>
 <title>%s</title>
@@ -122,6 +142,9 @@ func (t *wikiReadPageTool) Execute(ctx context.Context, args json.RawMessage) (*
 <links_to>%s</links_to>
 <linked_from>%s</linked_from>
 </relationships>
+<sources>
+%s
+</sources>
 <content>
 %s
 </content>
@@ -129,6 +152,7 @@ func (t *wikiReadPageTool) Execute(ctx context.Context, args json.RawMessage) (*
 					page.Title, page.Slug, page.PageType,
 					strings.Join(outLinksDesc, ", "),
 					strings.Join(inLinksDesc, ", "),
+					strings.Join(sourcesDesc, "\n"),
 					page.Content,
 				)
 				outputs = append(outputs, output)
@@ -244,10 +268,16 @@ func (t *wikiSearchTool) Execute(ctx context.Context, args json.RawMessage) (*ty
 			t.seenSlugs[p.Slug] = true
 			t.mu.Unlock()
 
+			snippet := extractSnippet(p.Content, query)
+			snippetTag := ""
+			if snippet != "" {
+				snippetTag = fmt.Sprintf("\n<match_snippet>%s</match_snippet>", snippet)
+			}
+
 			if seen {
-				fmt.Fprintf(&sb, "<page>\n<title>%s</title>\n<slug>%s</slug>\n<type>%s</type>\n<summary>(summary omitted, already seen in previous search)</summary>\n</page>\n", p.Title, p.Slug, p.PageType)
+				fmt.Fprintf(&sb, "<page>\n<title>%s</title>\n<slug>%s</slug>\n<type>%s</type>\n<summary>(summary omitted, already seen in previous search)</summary>%s\n</page>\n", p.Title, p.Slug, p.PageType, snippetTag)
 			} else {
-				fmt.Fprintf(&sb, "<page>\n<title>%s</title>\n<slug>%s</slug>\n<type>%s</type>\n<summary>%s</summary>\n</page>\n", p.Title, p.Slug, p.PageType, p.Summary)
+				fmt.Fprintf(&sb, "<page>\n<title>%s</title>\n<slug>%s</slug>\n<type>%s</type>\n<summary>%s</summary>%s\n</page>\n", p.Title, p.Slug, p.PageType, p.Summary, snippetTag)
 			}
 		}
 		sb.WriteString("</search_results>")
@@ -291,4 +321,45 @@ func parseStringOrArray(val any) []string {
 		return res
 	}
 	return nil
+}
+
+func extractSnippet(content string, query string) string {
+	if content == "" || query == "" {
+		return ""
+	}
+	re, err := regexp.Compile("(?i)" + query)
+	if err != nil {
+		return ""
+	}
+	loc := re.FindStringIndex(content)
+	if loc == nil {
+		return ""
+	}
+
+	matchStr := content[loc[0]:loc[1]]
+	before := content[:loc[0]]
+	after := content[loc[1]:]
+
+	beforeRunes := []rune(before)
+	if len(beforeRunes) > 60 {
+		beforeRunes = beforeRunes[len(beforeRunes)-60:]
+	}
+
+	afterRunes := []rune(after)
+	if len(afterRunes) > 60 {
+		afterRunes = afterRunes[:60]
+	}
+
+	matchRunes := []rune(matchStr)
+	if len(matchRunes) > 100 {
+		matchRunes = append(matchRunes[:100], []rune("...")...)
+	}
+
+	snippet := string(beforeRunes) + string(matchRunes) + string(afterRunes)
+	snippet = strings.ReplaceAll(snippet, "\n", " ")
+	for strings.Contains(snippet, "  ") {
+		snippet = strings.ReplaceAll(snippet, "  ", " ")
+	}
+
+	return "... " + strings.TrimSpace(snippet) + " ..."
 }

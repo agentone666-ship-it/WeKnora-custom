@@ -381,6 +381,7 @@ func (s *agentService) registerTools(
 		allowedTools = append(allowedTools,
 			tools.ToolWikiReadPage,
 			tools.ToolWikiSearch,
+			tools.ToolWikiReadSourceDoc,
 		)
 		logger.Infof(ctx, "Wiki KBs detected (%d), wiki tools added", len(wikiKBIDs))
 	}
@@ -450,6 +451,8 @@ func (s *agentService) registerTools(
 			toolToRegister = tools.NewWikiReadPageTool(s.wikiPageService, wikiKBIDs)
 		case tools.ToolWikiSearch:
 			toolToRegister = tools.NewWikiSearchTool(s.wikiPageService, wikiKBIDs)
+		case tools.ToolWikiReadSourceDoc:
+			toolToRegister = tools.NewWikiReadSourceDocTool(s.knowledgeService, s.chunkService)
 
 		default:
 			logger.Warnf(ctx, "Unknown tool: %s", toolName)
