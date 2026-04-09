@@ -56,10 +56,7 @@ func TestWikiToolConstants(t *testing.T) {
 	// Verify all wiki tool constants are defined and unique
 	names := []string{
 		ToolWikiReadPage,
-		ToolWikiWritePage,
 		ToolWikiSearch,
-		ToolWikiReadIndex,
-		ToolWikiLint,
 	}
 
 	seen := make(map[string]bool)
@@ -82,11 +79,8 @@ func TestWikiToolConstants(t *testing.T) {
 func TestWikiToolsInAvailableDefinitions(t *testing.T) {
 	defs := AvailableToolDefinitions()
 	wikiTools := map[string]bool{
-		ToolWikiReadPage:  false,
-		ToolWikiWritePage: false,
-		ToolWikiSearch:    false,
-		ToolWikiReadIndex: false,
-		ToolWikiLint:      false,
+		ToolWikiReadPage: false,
+		ToolWikiSearch:   false,
 	}
 
 	for _, def := range defs {

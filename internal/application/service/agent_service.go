@@ -117,15 +117,6 @@ func (s *agentService) CreateAgentEngine(
 		systemPromptTemplate = config.ResolveSystemPrompt(config.WebSearchEnabled)
 	}
 
-	// 4.5 Append wiki guidelines if any search target is a wiki KB
-	for _, target := range config.SearchTargets {
-		kb, err := s.knowledgeBaseService.GetKnowledgeBaseByIDOnly(ctx, target.KnowledgeBaseID)
-		if err == nil && kb != nil && kb.IsWikiEnabled() {
-			systemPromptTemplate += "\n" + agent.WikiAgentSystemPromptAddendum
-			break
-		}
-	}
-
 	// 5. Create engine
 	engine := agent.NewAgentEngine(
 		config, chatModel, toolRegistry, eventBus,
@@ -380,21 +371,16 @@ func (s *agentService) registerTools(
 
 	// If any search target is a wiki KB, add wiki tools automatically
 	var wikiKBIDs []string
-	var wikiTenantID uint64
 	for _, target := range config.SearchTargets {
 		kb, err := s.knowledgeBaseService.GetKnowledgeBaseByIDOnly(ctx, target.KnowledgeBaseID)
 		if err == nil && kb.IsWikiEnabled() {
 			wikiKBIDs = append(wikiKBIDs, kb.ID)
-			wikiTenantID = kb.TenantID
 		}
 	}
 	if len(wikiKBIDs) > 0 {
 		allowedTools = append(allowedTools,
 			tools.ToolWikiReadPage,
-			tools.ToolWikiWritePage,
 			tools.ToolWikiSearch,
-			tools.ToolWikiReadIndex,
-			tools.ToolWikiLint,
 		)
 		logger.Infof(ctx, "Wiki KBs detected (%d), wiki tools added", len(wikiKBIDs))
 	}
@@ -462,14 +448,8 @@ func (s *agentService) registerTools(
 		// Wiki tools — only registered when wiki KBs are detected
 		case tools.ToolWikiReadPage:
 			toolToRegister = tools.NewWikiReadPageTool(s.wikiPageService, wikiKBIDs)
-		case tools.ToolWikiWritePage:
-			toolToRegister = tools.NewWikiWritePageTool(s.wikiPageService, wikiKBIDs, wikiTenantID)
 		case tools.ToolWikiSearch:
 			toolToRegister = tools.NewWikiSearchTool(s.wikiPageService, wikiKBIDs)
-		case tools.ToolWikiReadIndex:
-			toolToRegister = tools.NewWikiReadIndexTool(s.wikiPageService, wikiKBIDs)
-		case tools.ToolWikiLint:
-			toolToRegister = tools.NewWikiLintTool(s.wikiPageService, wikiKBIDs)
 
 		default:
 			logger.Warnf(ctx, "Unknown tool: %s", toolName)
