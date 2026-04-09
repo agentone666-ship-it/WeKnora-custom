@@ -187,9 +187,10 @@ func (s *wikiIngestService) ProcessWikiIngest(ctx context.Context, t *asynq.Task
 
 	logger.Infof(ctx, "wiki ingest: batch processing %d ops for KB %s", len(pendingOps), payload.KnowledgeBaseID)
 
-	// Fetch all existing pages to pass to the Map-Reduce phases
+	// Fetch all existing pages once, shared across Map and Reduce phases
 	allPages, _ := s.wikiService.ListAllPages(ctx, payload.KnowledgeBaseID)
 	batchCtx := &WikiBatchContext{
+		AllPages:                    allPages,
 		SlugTitleMap:                make(map[string]string),
 		SummaryContentByKnowledgeID: make(map[string]string),
 	}
@@ -411,7 +412,7 @@ func (s *wikiIngestService) mapOneDocument(
 	oldPageSlugs := s.getExistingPageSlugsForKnowledge(ctx, payload.KnowledgeBaseID, knowledgeID)
 
 	logger.Infof(ctx, "wiki ingest: extracting entities and concepts for %s", knowledgeID)
-	extractedEntities, extractedConcepts, slugItems, err := s.extractEntitiesAndConceptsNoUpsert(ctx, chatModel, content, docTitle, lang, payload, oldPageSlugs)
+	extractedEntities, extractedConcepts, slugItems, err := s.extractEntitiesAndConceptsNoUpsert(ctx, chatModel, content, docTitle, lang, oldPageSlugs, batchCtx)
 	if err != nil {
 		logger.Warnf(ctx, "wiki ingest: knowledge extraction failed for %s: %v", knowledgeID, err)
 		return nil, nil, err
@@ -538,8 +539,8 @@ func (s *wikiIngestService) extractEntitiesAndConceptsNoUpsert(
 	ctx context.Context,
 	chatModel chat.Chat,
 	content, docTitle, lang string,
-	payload WikiIngestPayload,
 	oldPageSlugs map[string]bool,
+	batchCtx *WikiBatchContext,
 ) ([]extractedItem, []extractedItem, map[string]extractedItem, error) {
 	var prevSlugsText string
 	if len(oldPageSlugs) > 0 {
@@ -562,12 +563,7 @@ func (s *wikiIngestService) extractEntitiesAndConceptsNoUpsert(
 		return nil, nil, nil, fmt.Errorf("combined extraction failed: %w", err)
 	}
 
-	extractionJSON = strings.TrimSpace(extractionJSON)
-	extractionJSON = strings.TrimPrefix(extractionJSON, "```json")
-	extractionJSON = strings.TrimPrefix(extractionJSON, "```")
-	extractionJSON = strings.TrimSuffix(extractionJSON, "```")
-	extractionJSON = strings.TrimSpace(extractionJSON)
-	extractionJSON = sanitizeJSONString(extractionJSON)
+	extractionJSON = cleanLLMJSON(extractionJSON)
 
 	var result combinedExtraction
 	if err := json.Unmarshal([]byte(extractionJSON), &result); err != nil {
@@ -575,8 +571,9 @@ func (s *wikiIngestService) extractEntitiesAndConceptsNoUpsert(
 		return nil, nil, nil, fmt.Errorf("parse combined extraction JSON: %w", err)
 	}
 
-	result.Entities = s.deduplicateItems(ctx, chatModel, result.Entities, types.WikiPageTypeEntity, payload.KnowledgeBaseID)
-	result.Concepts = s.deduplicateItems(ctx, chatModel, result.Concepts, types.WikiPageTypeConcept, payload.KnowledgeBaseID)
+	result.Entities, result.Concepts = s.deduplicateExtractedBatch(
+		ctx, chatModel, result.Entities, result.Concepts, batchCtx.AllPages,
+	)
 
 	slugItems := make(map[string]extractedItem)
 	for _, item := range result.Entities {

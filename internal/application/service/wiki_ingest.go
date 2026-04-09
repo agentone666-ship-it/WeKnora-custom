@@ -292,8 +292,9 @@ type docIngestResult struct {
 	Pages       []string // affected page slugs
 }
 
-// WikiBatchContext holds data needed during the Reduce phase
+// WikiBatchContext holds shared data across Map and Reduce phases
 type WikiBatchContext struct {
+	AllPages                    []*types.WikiPage
 	SlugTitleMap                map[string]string
 	SummaryContentByKnowledgeID map[string]string
 }
@@ -773,96 +774,88 @@ func (s *wikiIngestService) publishDraftPages(ctx context.Context, kbID string, 
 	}
 }
 
-// deduplicateItems uses LLM to identify new items that refer to the same entity/concept
-// as existing wiki pages, and remaps their slugs so upsertExtractedPages merges them.
-func (s *wikiIngestService) deduplicateItems(
+// deduplicateExtractedBatch deduplicates both entities and concepts against
+// existing wiki pages in a single LLM call. Uses pre-loaded allPages to avoid
+// redundant DB queries. This replaces the two separate deduplicateItems calls
+// that each queried ListAllPages + made a separate LLM call.
+func (s *wikiIngestService) deduplicateExtractedBatch(
 	ctx context.Context,
 	chatModel chat.Chat,
-	items []extractedItem,
-	pageType string,
-	kbID string,
-) []extractedItem {
-	if len(items) == 0 {
-		return items
+	entities, concepts []extractedItem,
+	allPages []*types.WikiPage,
+) ([]extractedItem, []extractedItem) {
+	if len(entities) == 0 && len(concepts) == 0 {
+		return entities, concepts
 	}
 
-	// Get existing pages of the same type
-	allPages, err := s.wikiService.ListAllPages(ctx, kbID)
-	if err != nil || len(allPages) == 0 {
-		return items
-	}
-
-	// Filter to the target type
-	var typedPages []*types.WikiPage
-	for _, p := range allPages {
-		if p.PageType == pageType {
-			typedPages = append(typedPages, p)
-		}
-	}
-	if len(typedPages) == 0 {
-		return items // No existing pages of this type → nothing to deduplicate against
-	}
-
-	// Build existing pages listing
 	var existingBuf strings.Builder
-	for _, p := range typedPages {
+	for _, p := range allPages {
+		if p.PageType != types.WikiPageTypeEntity && p.PageType != types.WikiPageTypeConcept {
+			continue
+		}
 		aliases := ""
 		if len(p.Aliases) > 0 {
 			aliases = fmt.Sprintf(" | aliases: %s", strings.Join(p.Aliases, ", "))
 		}
-		fmt.Fprintf(&existingBuf, "- slug: %s | title: %s%s\n", p.Slug, p.Title, aliases)
+		fmt.Fprintf(&existingBuf, "- slug: %s | title: %s | type: %s%s\n", p.Slug, p.Title, p.PageType, aliases)
+	}
+	if existingBuf.Len() == 0 {
+		return entities, concepts
 	}
 
-	// Build new items listing
 	var newBuf strings.Builder
-	for _, item := range items {
+	for _, item := range entities {
 		aliases := ""
 		if len(item.Aliases) > 0 {
 			aliases = fmt.Sprintf(" | aliases: %s", strings.Join(item.Aliases, ", "))
 		}
-		fmt.Fprintf(&newBuf, "- slug: %s | name: %s%s\n", item.Slug, item.Name, aliases)
+		fmt.Fprintf(&newBuf, "- slug: %s | name: %s | type: entity%s\n", item.Slug, item.Name, aliases)
+	}
+	for _, item := range concepts {
+		aliases := ""
+		if len(item.Aliases) > 0 {
+			aliases = fmt.Sprintf(" | aliases: %s", strings.Join(item.Aliases, ", "))
+		}
+		fmt.Fprintf(&newBuf, "- slug: %s | name: %s | type: concept%s\n", item.Slug, item.Name, aliases)
 	}
 
-	// Call LLM for deduplication
 	dedupeJSON, err := s.generateWithTemplate(ctx, chatModel, agent.WikiDeduplicationPrompt, map[string]string{
 		"NewItems":      newBuf.String(),
 		"ExistingPages": existingBuf.String(),
 	})
 	if err != nil {
 		logger.Warnf(ctx, "wiki ingest: deduplication LLM call failed: %v", err)
-		return items
+		return entities, concepts
 	}
 
-	// Parse response
-	dedupeJSON = strings.TrimSpace(dedupeJSON)
-	dedupeJSON = strings.TrimPrefix(dedupeJSON, "```json")
-	dedupeJSON = strings.TrimPrefix(dedupeJSON, "```")
-	dedupeJSON = strings.TrimSuffix(dedupeJSON, "```")
-	dedupeJSON = strings.TrimSpace(dedupeJSON)
-
-	dedupeJSON = sanitizeJSONString(dedupeJSON)
+	dedupeJSON = cleanLLMJSON(dedupeJSON)
 
 	var dedupeResult struct {
 		Merges map[string]string `json:"merges"`
 	}
 	if err := json.Unmarshal([]byte(dedupeJSON), &dedupeResult); err != nil {
 		logger.Warnf(ctx, "wiki ingest: failed to parse dedup JSON: %v\nRaw: %s", err, dedupeJSON)
-		return items
+		return entities, concepts
 	}
 
 	if len(dedupeResult.Merges) == 0 {
-		return items
+		return entities, concepts
 	}
 
-	// Remap slugs for matched items
-	for i, item := range items {
+	for i, item := range entities {
 		if existingSlug, ok := dedupeResult.Merges[item.Slug]; ok {
 			logger.Infof(ctx, "wiki ingest: dedup merge %s → %s", item.Slug, existingSlug)
-			items[i].Slug = existingSlug
+			entities[i].Slug = existingSlug
+		}
+	}
+	for i, item := range concepts {
+		if existingSlug, ok := dedupeResult.Merges[item.Slug]; ok {
+			logger.Infof(ctx, "wiki ingest: dedup merge %s → %s", item.Slug, existingSlug)
+			concepts[i].Slug = existingSlug
 		}
 	}
 
-	return items
+	return entities, concepts
 }
 
 // generateWithTemplate executes a prompt template and calls the LLM
@@ -1033,6 +1026,17 @@ func appendUnique(arr types.StringArray, s string) types.StringArray {
 		}
 	}
 	return append(arr, s)
+}
+
+// cleanLLMJSON strips markdown code-fence wrappers and sanitizes control characters
+// from LLM-generated JSON output so it can be safely unmarshalled.
+func cleanLLMJSON(s string) string {
+	s = strings.TrimSpace(s)
+	s = strings.TrimPrefix(s, "```json")
+	s = strings.TrimPrefix(s, "```")
+	s = strings.TrimSuffix(s, "```")
+	s = strings.TrimSpace(s)
+	return sanitizeJSONString(s)
 }
 
 // sanitizeJSONString sanitizes a string that is intended to be parsed as JSON,
