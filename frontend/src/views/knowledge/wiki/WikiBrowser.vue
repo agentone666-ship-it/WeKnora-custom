@@ -889,7 +889,8 @@ function renderGraph() {
         let dx = graphNodes[j].x - graphNodes[i].x
         let dy = graphNodes[j].y - graphNodes[i].y
         const dist = Math.sqrt(dx * dx + dy * dy) || 1
-        const force = (200 * alpha) / (dist * dist) * 60
+        // Prevent extremely high repulsion when nodes are very close
+        const force = (200 * alpha) / Math.max(dist * dist, 100) * 60
         const fx = (dx / dist) * force
         const fy = (dy / dist) * force
         if (!graphNodes[i].pinned) { graphNodes[i].vx -= fx; graphNodes[i].vy -= fy }
@@ -913,10 +914,12 @@ function renderGraph() {
     }
 
     // Center gravity
+    // Increase gravity slightly when there are more nodes to prevent the graph from expanding too much
+    const gravityStrength = Math.min(0.01, 0.001 + graphNodes.length * 0.00002)
     for (const n of graphNodes) {
       if (n.pinned) continue
-      n.vx += (width / 2 - n.x) * 0.001 * alpha
-      n.vy += (height / 2 - n.y) * 0.001 * alpha
+      n.vx += (width / 2 - n.x) * gravityStrength * alpha
+      n.vy += (height / 2 - n.y) * gravityStrength * alpha
     }
 
     // Apply velocity
@@ -924,6 +927,12 @@ function renderGraph() {
       if (n.pinned) continue
       n.vx *= 0.6
       n.vy *= 0.6
+      // Cap velocity to prevent nodes from flying off screen during initial explosive layout
+      const v = Math.sqrt(n.vx * n.vx + n.vy * n.vy)
+      if (v > 20) {
+        n.vx = (n.vx / v) * 20
+        n.vy = (n.vy / v) * 20
+      }
       n.x += n.vx
       n.y += n.vy
     }
