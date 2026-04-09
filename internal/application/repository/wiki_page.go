@@ -242,12 +242,10 @@ func (r *wikiPageRepository) Search(ctx context.Context, kbID string, query stri
 		limit = 50
 	}
 
-	likePattern := "%" + query + "%"
-
 	var pages []*types.WikiPage
 	if err := r.db.WithContext(ctx).
-		Where("knowledge_base_id = ? AND (title ILIKE ? OR content ILIKE ? OR summary ILIKE ? OR slug ILIKE ?)",
-			kbID, likePattern, likePattern, likePattern, likePattern).
+		Where("knowledge_base_id = ? AND (title ~* ? OR content ~* ? OR summary ~* ? OR slug ~* ?)",
+			kbID, query, query, query, query).
 		Where("status != ?", "archived").
 		Order("updated_at DESC").
 		Limit(limit).

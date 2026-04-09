@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
@@ -16,41 +17,54 @@ type wikiReadPageTool struct {
 	BaseTool
 	wikiService interfaces.WikiPageService
 	kbIDs       []string
+	seenLinks   map[string]bool
+	mu          sync.Mutex
 }
 
 func NewWikiReadPageTool(wikiService interfaces.WikiPageService, kbIDs []string) types.Tool {
 	return &wikiReadPageTool{
 		BaseTool: NewBaseTool(
 			ToolWikiReadPage,
-			`Read a wiki page by its slug. Returns the full markdown content, metadata, and links.
-Use this to read specific wiki pages when you know their slug (e.g. "entity/acme-corp", "concept/rag", "summary/document-title").`,
+			`Read one or more wiki pages by their slugs. Returns the full markdown content, metadata, and links.
+Use this to read specific wiki pages when you know their slug (e.g. "entity/acme-corp", "concept/rag").`,
 			json.RawMessage(`{
   "type": "object",
   "properties": {
-    "slug": {
-      "type": "string",
-      "description": "The wiki page slug to read (e.g. 'entity/acme-corp', 'concept/rag')"
+    "slugs": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "List of wiki page slugs to read (e.g. ['entity/acme-corp', 'index'])"
     },
     "knowledge_base_id": {
       "type": "string",
       "description": "Optional: specific knowledge base ID. If omitted, searches all wiki KBs."
     }
   },
-  "required": ["slug"]
+  "required": ["slugs"]
 }`),
 		),
 		wikiService: wikiService,
 		kbIDs:       kbIDs,
+		seenLinks:   make(map[string]bool),
 	}
 }
 
 func (t *wikiReadPageTool) Execute(ctx context.Context, args json.RawMessage) (*types.ToolResult, error) {
 	var params struct {
-		Slug            string `json:"slug"`
+		Slug            any    `json:"slug"`
+		Slugs           any    `json:"slugs"`
 		KnowledgeBaseID string `json:"knowledge_base_id"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
 		return &types.ToolResult{Success: false, Error: "Invalid parameters: " + err.Error()}, nil
+	}
+
+	var slugsToFetch []string
+	slugsToFetch = append(slugsToFetch, parseStringOrArray(params.Slugs)...)
+	slugsToFetch = append(slugsToFetch, parseStringOrArray(params.Slug)...)
+
+	if len(slugsToFetch) == 0 {
+		return &types.ToolResult{Success: false, Error: "Missing 'slugs' parameter"}, nil
 	}
 
 	kbIDs := t.kbIDs
@@ -58,38 +72,47 @@ func (t *wikiReadPageTool) Execute(ctx context.Context, args json.RawMessage) (*
 		kbIDs = []string{params.KnowledgeBaseID}
 	}
 
-	for _, kbID := range kbIDs {
-		page, err := t.wikiService.GetPageBySlug(ctx, kbID, params.Slug)
-		if err == nil && page != nil {
-			// Resolve OutLinks summaries to provide 1-hop context
-			var outLinksDesc []string
-			if len(page.OutLinks) > 0 {
-				for _, outSlug := range page.OutLinks {
-					if linkPage, err := t.wikiService.GetPageBySlug(ctx, kbID, outSlug); err == nil && linkPage != nil {
-						outLinksDesc = append(outLinksDesc, fmt.Sprintf("[[%s]] (%s)", outSlug, linkPage.Summary))
-					} else {
-						outLinksDesc = append(outLinksDesc, fmt.Sprintf("[[%s]]", outSlug))
-					}
-				}
-			} else {
-				outLinksDesc = []string{"(none)"}
-			}
+	var outputs []string
+	var errs []string
 
-			// Resolve InLinks summaries to provide reverse 1-hop context
-			var inLinksDesc []string
-			if len(page.InLinks) > 0 {
-				for _, inSlug := range page.InLinks {
-					if linkPage, err := t.wikiService.GetPageBySlug(ctx, kbID, inSlug); err == nil && linkPage != nil {
-						inLinksDesc = append(inLinksDesc, fmt.Sprintf("[[%s]] (%s)", inSlug, linkPage.Summary))
-					} else {
-						inLinksDesc = append(inLinksDesc, fmt.Sprintf("[[%s]]", inSlug))
-					}
-				}
-			} else {
-				inLinksDesc = []string{"(none)"}
-			}
+	formatLinks := func(slugs []string, kbID string) []string {
+		var descs []string
+		for _, s := range slugs {
+			t.mu.Lock()
+			seen := t.seenLinks[s]
+			t.seenLinks[s] = true
+			t.mu.Unlock()
 
-			output := fmt.Sprintf(`<wiki_page>
+			if seen {
+				// We already injected the summary for this link in this session
+				descs = append(descs, fmt.Sprintf("[[%s]] (summary omitted, already seen)", s))
+			} else {
+				if linkPage, err := t.wikiService.GetPageBySlug(ctx, kbID, s); err == nil && linkPage != nil {
+					descs = append(descs, fmt.Sprintf("[[%s]] (%s)", s, linkPage.Summary))
+				} else {
+					descs = append(descs, fmt.Sprintf("[[%s]]", s))
+				}
+			}
+		}
+		if len(descs) == 0 {
+			return []string{"(none)"}
+		}
+		return descs
+	}
+
+	for _, slug := range slugsToFetch {
+		found := false
+		for _, kbID := range kbIDs {
+			page, err := t.wikiService.GetPageBySlug(ctx, kbID, slug)
+			if err == nil && page != nil {
+				t.mu.Lock()
+				t.seenLinks[slug] = true
+				t.mu.Unlock()
+
+				outLinksDesc := formatLinks(page.OutLinks, kbID)
+				inLinksDesc := formatLinks(page.InLinks, kbID)
+
+				output := fmt.Sprintf(`<wiki_page>
 <metadata>
 <title>%s</title>
 <slug>%s</slug>
@@ -103,16 +126,31 @@ func (t *wikiReadPageTool) Execute(ctx context.Context, args json.RawMessage) (*
 %s
 </content>
 </wiki_page>`,
-				page.Title, page.Slug, page.PageType,
-				strings.Join(outLinksDesc, ", "),
-				strings.Join(inLinksDesc, ", "),
-				page.Content,
-			)
-			return &types.ToolResult{Success: true, Output: output}, nil
+					page.Title, page.Slug, page.PageType,
+					strings.Join(outLinksDesc, ", "),
+					strings.Join(inLinksDesc, ", "),
+					page.Content,
+				)
+				outputs = append(outputs, output)
+				found = true
+				break
+			}
+		}
+		if !found {
+			errs = append(errs, fmt.Sprintf("Wiki page '%s' not found", slug))
 		}
 	}
 
-	return &types.ToolResult{Success: false, Error: fmt.Sprintf("Wiki page '%s' not found", params.Slug)}, nil
+	if len(outputs) == 0 {
+		return &types.ToolResult{Success: false, Error: strings.Join(errs, "; ")}, nil
+	}
+
+	finalOutput := strings.Join(outputs, "\n\n")
+	if len(errs) > 0 {
+		finalOutput += fmt.Sprintf("\n\n<errors>\n%s\n</errors>", strings.Join(errs, "\n"))
+	}
+
+	return &types.ToolResult{Success: true, Output: finalOutput}, nil
 }
 
 // ---- wiki_search ----
@@ -121,69 +159,102 @@ type wikiSearchTool struct {
 	BaseTool
 	wikiService interfaces.WikiPageService
 	kbIDs       []string
+	seenSlugs   map[string]bool
+	mu          sync.Mutex
 }
 
 func NewWikiSearchTool(wikiService interfaces.WikiPageService, kbIDs []string) types.Tool {
 	return &wikiSearchTool{
 		BaseTool: NewBaseTool(
 			ToolWikiSearch,
-			`Search wiki pages by keyword. Returns matching pages with titles, slugs, and summaries.
+			`Search wiki pages using PostgreSQL POSIX regular expressions (~* operator, case-insensitive).
+STRONGLY PREFER using regex to search for multiple concepts at once rather than simple plain text queries.
+Returns matching pages with titles, slugs, and summaries.
+Examples:
+- Alternation (RECOMMENDED): "stardust|skyvault" (matches either word)
+- Multiple terms (RECOMMENDED): "psionic.*engine" (matches both words in order)
+- Prefix matching: "^entity/.*" (finds all entities)
+- Plain text: "engine" (matches anywhere in title/content/slug/summary)
 Use this to find relevant wiki pages when you don't know the exact slug.`,
 			json.RawMessage(`{
   "type": "object",
   "properties": {
-    "query": {
-      "type": "string",
-      "description": "Search query (keywords or phrase)"
+    "queries": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "List of regex search queries to run"
     },
     "limit": {
       "type": "integer",
-      "description": "Max results to return (default 10)"
+      "description": "Max results to return per query (default 10)"
     }
   },
-  "required": ["query"]
+  "required": ["queries"]
 }`),
 		),
 		wikiService: wikiService,
 		kbIDs:       kbIDs,
+		seenSlugs:   make(map[string]bool),
 	}
 }
 
 func (t *wikiSearchTool) Execute(ctx context.Context, args json.RawMessage) (*types.ToolResult, error) {
 	var params struct {
-		Query string `json:"query"`
-		Limit int    `json:"limit"`
+		Query   any `json:"query"`
+		Queries any `json:"queries"`
+		Limit   int `json:"limit"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
 		return &types.ToolResult{Success: false, Error: "Invalid parameters: " + err.Error()}, nil
 	}
+
+	var queriesToRun []string
+	queriesToRun = append(queriesToRun, parseStringOrArray(params.Queries)...)
+	queriesToRun = append(queriesToRun, parseStringOrArray(params.Query)...)
+
+	if len(queriesToRun) == 0 {
+		return &types.ToolResult{Success: false, Error: "Missing 'queries' parameter"}, nil
+	}
+
 	if params.Limit <= 0 {
 		params.Limit = 10
 	}
 
-	var allPages []*types.WikiPage
-	for _, kbID := range t.kbIDs {
-		pages, err := t.wikiService.SearchPages(ctx, kbID, params.Query, params.Limit)
-		if err == nil {
-			allPages = append(allPages, pages...)
+	var allOutputs []string
+
+	for _, query := range queriesToRun {
+		var allPages []*types.WikiPage
+		for _, kbID := range t.kbIDs {
+			pages, err := t.wikiService.SearchPages(ctx, kbID, query, params.Limit)
+			if err == nil {
+				allPages = append(allPages, pages...)
+			}
 		}
+
+		if len(allPages) == 0 {
+			allOutputs = append(allOutputs, fmt.Sprintf("<search_results count=\"0\" query=\"%s\" />", query))
+			continue
+		}
+
+		var sb strings.Builder
+		sb.WriteString(fmt.Sprintf("<search_results count=\"%d\" query=\"%s\">\n", len(allPages), query))
+		for _, p := range allPages {
+			t.mu.Lock()
+			seen := t.seenSlugs[p.Slug]
+			t.seenSlugs[p.Slug] = true
+			t.mu.Unlock()
+
+			if seen {
+				fmt.Fprintf(&sb, "<page>\n<title>%s</title>\n<slug>%s</slug>\n<type>%s</type>\n<summary>(summary omitted, already seen in previous search)</summary>\n</page>\n", p.Title, p.Slug, p.PageType)
+			} else {
+				fmt.Fprintf(&sb, "<page>\n<title>%s</title>\n<slug>%s</slug>\n<type>%s</type>\n<summary>%s</summary>\n</page>\n", p.Title, p.Slug, p.PageType, p.Summary)
+			}
+		}
+		sb.WriteString("</search_results>")
+		allOutputs = append(allOutputs, sb.String())
 	}
 
-	if len(allPages) == 0 {
-		return &types.ToolResult{
-			Success: true,
-			Output:  fmt.Sprintf("<search_results count=\"0\" query=\"%s\" />", params.Query),
-		}, nil
-	}
-
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("<search_results count=\"%d\" query=\"%s\">\n", len(allPages), params.Query))
-	for _, p := range allPages {
-		fmt.Fprintf(&sb, "<page>\n<title>%s</title>\n<slug>%s</slug>\n<type>%s</type>\n<summary>%s</summary>\n</page>\n", p.Title, p.Slug, p.PageType, p.Summary)
-	}
-	sb.WriteString("</search_results>")
-
-	return &types.ToolResult{Success: true, Output: sb.String()}, nil
+	return &types.ToolResult{Success: true, Output: strings.Join(allOutputs, "\n\n")}, nil
 }
 
 // --- Helper ---
@@ -199,4 +270,25 @@ func truncateForSummary(content string, maxLen int) string {
 		return string(runes[:maxLen]) + "..."
 	}
 	return summary
+}
+
+func parseStringOrArray(val any) []string {
+	if val == nil {
+		return nil
+	}
+	switch v := val.(type) {
+	case string:
+		if v != "" {
+			return []string{v}
+		}
+	case []interface{}:
+		var res []string
+		for _, item := range v {
+			if s, ok := item.(string); ok && s != "" {
+				res = append(res, s)
+			}
+		}
+		return res
+	}
+	return nil
 }
