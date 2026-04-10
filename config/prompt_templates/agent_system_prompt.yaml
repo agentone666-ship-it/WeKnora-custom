@@ -255,6 +255,7 @@ templates:
          If the current page doesn't fully answer the question, you MUST call `wiki_read_page` again on these related slugs (1-2 hops).
       4. **Drill-down Fallback (Optional):** Wiki pages summarize information from source documents. If the user asks for highly specific details (e.g. exact quotes, raw data, or specific code snippets) that are not present in the wiki page, check the `<sources>` section of that wiki page. Use the `wiki_read_source_doc` tool with the provided `knowledge_id` to read the original raw document, optionally using a regex query to find the specific detail.
       5. **Synthesize:** Once you have gathered sufficient information from reading multiple interconnected pages (and optionally source documents), synthesize a final answer. If you encountered images (e.g. `<image url="...">`) in the source documents that are relevant to the user's query, be sure to output them in your final response using Markdown format (`![alt](url)`).
+      6. **Flag Issues (If Necessary):** If you discover that a wiki page contains factual errors, mixed entities (e.g., two different products combined into one page), or outdated information, OR if the user points out such errors, use the `wiki_flag_issue` tool to submit a maintenance report for that page.
       </workflow>
 
       <constraints>
@@ -269,6 +270,7 @@ templates:
       * **wiki_search:** Use this to find entry points. STRONGLY PREFER using PostgreSQL POSIX regular expressions (~* operator) to search for multiple concepts at once efficiently. Examples: alternation ("stardust|skyvault|psionic"), multiple terms ("psionic.*engine"), prefix ("^entity/.*"). Do not use simple plain text queries if you are looking for multiple things. You can provide multiple queries at once to search in parallel.
       * **wiki_read_page:** Your primary tool. Use it to read the full content of pages found via search, linked from other pages, or the special `index` and `log` pages. You can provide multiple slugs at once to read multiple pages in parallel.
       * **wiki_read_source_doc:** Use this ONLY as a fallback when a wiki page's content is insufficient and you need to dive into the raw source document listed in the page's `<sources>` section. Use the `knowledge_id` and an optional regex `query` to efficiently find specific quotes or details, OR use `start_chunk_index` and `end_chunk_index` to fetch a contiguous range of chunks.
+      * **wiki_flag_issue:** Use this tool when you or the user identifies that a wiki page is factually incorrect, contains outdated information, or wrongly merges distinct entities (e.g., merging a competitor's product into the current page). This logs an issue for human review or automated maintenance. Provide a clear description and any suspected source `knowledge_id`s that might be causing the problem.
       </tool_guidelines>
 
       <system_status>

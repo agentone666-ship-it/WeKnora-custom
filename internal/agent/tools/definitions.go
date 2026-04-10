@@ -26,6 +26,7 @@ const (
 	ToolWikiReadPage      = "wiki_read_page"
 	ToolWikiSearch        = "wiki_search"
 	ToolWikiReadSourceDoc = "wiki_read_source_doc"
+	ToolWikiFlagIssue     = "wiki_flag_issue"
 )
 
 // AvailableTool defines a simple tool metadata used by settings APIs.
@@ -55,6 +56,7 @@ func AvailableToolDefinitions() []AvailableTool {
 		{Name: ToolWikiReadPage, Label: "读取Wiki页面", Description: "读取指定的Wiki页面内容"},
 		{Name: ToolWikiSearch, Label: "搜索Wiki", Description: "在Wiki中搜索页面"},
 		{Name: ToolWikiReadSourceDoc, Label: "精读源文档", Description: "使用知识点深入阅读特定原始文档"},
+		{Name: ToolWikiFlagIssue, Label: "标记Wiki问题", Description: "标记页面中存在的事实错误或合并冲突问题"},
 	}
 }
 

@@ -373,6 +373,84 @@ func (h *WikiPageHandler) GetStats(c *gin.Context) {
 	c.JSON(http.StatusOK, stats)
 }
 
+// ListIssues godoc
+// @Summary      List wiki page issues
+// @Description  List issues flagged on wiki pages with optional filtering
+// @Tags         Wiki
+// @Produce      json
+// @Param        kb_id  path   string  true   "Knowledge base ID"
+// @Param        slug   query  string  false  "Filter by page slug"
+// @Param        status query  string  false  "Filter by status (pending, ignored, resolved)"
+// @Success      200  {array}  types.WikiPageIssue
+// @Security     Bearer
+// @Router       /api/v1/knowledgebase/{kb_id}/wiki/issues [get]
+func (h *WikiPageHandler) ListIssues(c *gin.Context) {
+	kbID, _, err := h.validateWikiKB(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	slug := c.Query("slug")
+	status := c.Query("status")
+
+	issues, err := h.wikiService.ListIssues(c.Request.Context(), kbID, slug, status)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, issues)
+}
+
+// UpdateIssueStatus godoc
+// @Summary      Update wiki page issue status
+// @Description  Update the status of a flagged wiki page issue
+// @Tags         Wiki
+// @Accept       json
+// @Produce      json
+// @Param        kb_id    path  string  true  "Knowledge base ID"
+// @Param        issue_id path  string  true  "Issue ID"
+// @Param        status   body  object  true  "New status {'status': 'ignored'}"
+// @Success      200  {object}  map[string]string
+// @Failure      400  {object}  errors.AppError
+// @Security     Bearer
+// @Router       /api/v1/knowledgebase/{kb_id}/wiki/issues/{issue_id}/status [put]
+func (h *WikiPageHandler) UpdateIssueStatus(c *gin.Context) {
+	_, _, err := h.validateWikiKB(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	issueID := secutils.SanitizeForLog(c.Param("issue_id"))
+	if issueID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Issue ID is required"})
+		return
+	}
+
+	var req struct {
+		Status string `json:"status" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body: " + err.Error()})
+		return
+	}
+
+	validStatuses := map[string]bool{"pending": true, "ignored": true, "resolved": true}
+	if !validStatuses[req.Status] {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid status. Must be pending, ignored, or resolved"})
+		return
+	}
+
+	if err := h.wikiService.UpdateIssueStatus(c.Request.Context(), issueID, req.Status); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Issue status updated successfully"})
+}
+
 // SearchPages godoc
 // @Summary      Search wiki pages
 // @Description  Full-text search over wiki pages

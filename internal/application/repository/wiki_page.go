@@ -292,3 +292,29 @@ func (r *wikiPageRepository) CountOrphans(ctx context.Context, kbID string) (int
 	}
 	return count, nil
 }
+
+func (r *wikiPageRepository) CreateIssue(ctx context.Context, issue *types.WikiPageIssue) error {
+	return r.db.WithContext(ctx).Create(issue).Error
+}
+
+func (r *wikiPageRepository) ListIssues(ctx context.Context, kbID string, slug string, status string) ([]*types.WikiPageIssue, error) {
+	query := r.db.WithContext(ctx).Where("knowledge_base_id = ?", kbID)
+	if slug != "" {
+		query = query.Where("slug = ?", slug)
+	}
+	if status != "" {
+		query = query.Where("status = ?", status)
+	}
+	
+	var issues []*types.WikiPageIssue
+	if err := query.Order("created_at DESC").Find(&issues).Error; err != nil {
+		return nil, err
+	}
+	return issues, nil
+}
+
+func (r *wikiPageRepository) UpdateIssueStatus(ctx context.Context, issueID string, status string) error {
+	return r.db.WithContext(ctx).Model(&types.WikiPageIssue{}).
+		Where("id = ?", issueID).
+		Update("status", status).Error
+}

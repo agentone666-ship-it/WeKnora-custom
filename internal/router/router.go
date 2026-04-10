@@ -860,5 +860,9 @@ func RegisterWikiPageRoutes(r *gin.RouterGroup, wikiHandler *handler.WikiPageHan
 		wiki.POST("/rebuild-links", wikiHandler.RebuildLinks)
 		wiki.GET("/lint", wikiHandler.Lint)
 		wiki.POST("/auto-fix", wikiHandler.AutoFix)
+
+		// Issues
+		wiki.GET("/issues", wikiHandler.ListIssues)
+		wiki.PUT("/issues/:issue_id/status", wikiHandler.UpdateIssueStatus)
 	}
 }

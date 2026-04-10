@@ -477,3 +477,24 @@ func removeString(slice []string, s string) types.StringArray {
 	}
 	return result
 }
+
+// CreateIssue logs a new issue for a wiki page
+func (s *wikiPageService) CreateIssue(ctx context.Context, issue *types.WikiPageIssue) (*types.WikiPageIssue, error) {
+	if issue.ID == "" {
+		issue.ID = uuid.New().String()
+	}
+	if err := s.repo.CreateIssue(ctx, issue); err != nil {
+		return nil, fmt.Errorf("create wiki page issue: %w", err)
+	}
+	return issue, nil
+}
+
+// ListIssues retrieves issues for a knowledge base
+func (s *wikiPageService) ListIssues(ctx context.Context, kbID string, slug string, status string) ([]*types.WikiPageIssue, error) {
+	return s.repo.ListIssues(ctx, kbID, slug, status)
+}
+
+// UpdateIssueStatus updates an issue's status
+func (s *wikiPageService) UpdateIssueStatus(ctx context.Context, issueID string, status string) error {
+	return s.repo.UpdateIssueStatus(ctx, issueID, status)
+}

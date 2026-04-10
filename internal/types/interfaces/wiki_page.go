@@ -58,6 +58,15 @@ type WikiPageService interface {
 
 	// SearchPages performs full-text search over wiki pages.
 	SearchPages(ctx context.Context, kbID string, query string, limit int) ([]*types.WikiPage, error)
+
+	// CreateIssue logs a new issue for a wiki page.
+	CreateIssue(ctx context.Context, issue *types.WikiPageIssue) (*types.WikiPageIssue, error)
+
+	// ListIssues retrieves issues for a knowledge base, optionally filtered by slug and status.
+	ListIssues(ctx context.Context, kbID string, slug string, status string) ([]*types.WikiPageIssue, error)
+
+	// UpdateIssueStatus updates the status of an issue (e.g. pending -> resolved/ignored).
+	UpdateIssueStatus(ctx context.Context, issueID string, status string) error
 }
 
 // WikiPageRepository defines the wiki page data persistence interface.
@@ -103,4 +112,13 @@ type WikiPageRepository interface {
 
 	// CountOrphans returns the number of pages with no inbound links.
 	CountOrphans(ctx context.Context, kbID string) (int64, error)
+
+	// CreateIssue inserts a new wiki page issue record.
+	CreateIssue(ctx context.Context, issue *types.WikiPageIssue) error
+
+	// ListIssues retrieves issues with optional filtering by slug and status.
+	ListIssues(ctx context.Context, kbID string, slug string, status string) ([]*types.WikiPageIssue, error)
+
+	// UpdateIssueStatus updates an issue's status.
+	UpdateIssueStatus(ctx context.Context, issueID string, status string) error
 }

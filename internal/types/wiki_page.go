@@ -171,3 +171,25 @@ type WikiStats struct {
 	PendingTasks  int64            `json:"pending_tasks"`   // number of documents waiting to be ingested
 	IsActive      bool             `json:"is_active"`       // whether wiki ingestion is currently running
 }
+
+// WikiPageIssue represents an issue flagged on a specific wiki page.
+// These issues are typically identified by agents or linters and stored for review.
+type WikiPageIssue struct {
+	ID                  string         `json:"id" gorm:"type:varchar(36);primaryKey"`
+	TenantID            uint64         `json:"tenant_id" gorm:"index"`
+	KnowledgeBaseID     string         `json:"knowledge_base_id" gorm:"type:varchar(36);index"`
+	Slug                string         `json:"slug" gorm:"type:varchar(255);index"`
+	IssueType           string         `json:"issue_type" gorm:"type:varchar(50)"`
+	Description         string         `json:"description" gorm:"type:text"`
+	SuspectedKnowledgeIDs StringArray  `json:"suspected_knowledge_ids" gorm:"type:json"`
+	Status              string         `json:"status" gorm:"type:varchar(20);default:'pending';index"`
+	ReportedBy          string         `json:"reported_by" gorm:"type:varchar(100)"`
+	CreatedAt           time.Time      `json:"created_at"`
+	UpdatedAt           time.Time      `json:"updated_at"`
+	DeletedAt           gorm.DeletedAt `json:"deleted_at" gorm:"index"`
+}
+
+// TableName specifies the database table name
+func (WikiPageIssue) TableName() string {
+	return "wiki_page_issues"
+}
