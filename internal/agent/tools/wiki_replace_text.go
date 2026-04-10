@@ -95,5 +95,20 @@ func (t *wikiReplaceTextTool) Execute(ctx context.Context, args json.RawMessage)
 		return &types.ToolResult{Success: false, Error: "Failed to update page: " + err.Error()}, nil
 	}
 
-	return &types.ToolResult{Success: true, Output: fmt.Sprintf("Successfully replaced text on page %s.", params.Slug)}, nil
+	oldPreview := truncateRunes(params.OldText, 80)
+	newPreview := truncateRunes(params.NewText, 80)
+
+	output := fmt.Sprintf("Successfully replaced text on page [[%s]].\n- Old: %s\n- New: %s", params.Slug, oldPreview, newPreview)
+
+	return &types.ToolResult{
+		Success: true,
+		Output:  output,
+		Data: map[string]interface{}{
+			"display_type": "wiki_replace_text",
+			"slug":         params.Slug,
+			"title":        existingPage.Title,
+			"old_text":     oldPreview,
+			"new_text":     newPreview,
+		},
+	}, nil
 }

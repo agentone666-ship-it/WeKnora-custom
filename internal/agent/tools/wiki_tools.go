@@ -404,3 +404,11 @@ func extractSnippet(content string, query string) string {
 
 	return "... " + strings.TrimSpace(snippet) + " ..."
 }
+
+func truncateRunes(s string, maxRunes int) string {
+	runes := []rune(s)
+	if len(runes) <= maxRunes {
+		return s
+	}
+	return string(runes[:maxRunes]) + "..."
+}

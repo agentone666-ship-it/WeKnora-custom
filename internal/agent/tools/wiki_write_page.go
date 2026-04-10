@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/Tencent/WeKnora/internal/application/repository"
 	"github.com/Tencent/WeKnora/internal/types"
@@ -142,8 +143,24 @@ func (t *wikiWritePageTool) Execute(ctx context.Context, args json.RawMessage) (
 	// Rebuild the index page to reflect the new/updated summary
 	_ = t.wikiPageService.RebuildIndexPage(ctx, kbID)
 
+	output := fmt.Sprintf("Successfully %s page [[%s]].\n- Title: %s\n- Type: %s\n- Summary: %s\n- Content length: %d chars", action, params.Slug, params.Title, params.PageType, params.Summary, len(params.Content))
+	if len(params.Aliases) > 0 {
+		output += fmt.Sprintf("\n- Aliases: %s", strings.Join(params.Aliases, ", "))
+	}
+	if len(resolvedRefs) > 0 {
+		output += fmt.Sprintf("\n- Source refs: %d document(s)", len(resolvedRefs))
+	}
+
 	return &types.ToolResult{
 		Success: true,
-		Output:  fmt.Sprintf("Successfully %s page %s.", action, params.Slug),
+		Output:  output,
+		Data: map[string]interface{}{
+			"display_type": "wiki_write_page",
+			"action":       action,
+			"slug":         params.Slug,
+			"title":        params.Title,
+			"page_type":    params.PageType,
+			"summary":      params.Summary,
+		},
 	}, nil
 }

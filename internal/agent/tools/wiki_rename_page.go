@@ -134,10 +134,21 @@ func (t *wikiRenamePageTool) Execute(ctx context.Context, args json.RawMessage) 
 	// Rebuild the index page to reflect the new/updated summary
 	_ = t.wikiPageService.RebuildIndexPage(ctx, kbID)
 
-	outputMsg := fmt.Sprintf("Successfully renamed page %s to %s and updated %d incoming links.", params.Slug, params.NewSlug, updatedCount)
+	outputMsg := fmt.Sprintf("Successfully renamed page [[%s]] → [[%s]] and updated %d incoming links.", params.Slug, params.NewSlug, updatedCount)
 	if updatedCount > 0 {
-		outputMsg += fmt.Sprintf(" Affected pages: %s", strings.Join(updatedSlugs, ", "))
+		outputMsg += fmt.Sprintf("\n- Affected pages: %s", strings.Join(updatedSlugs, ", "))
 	}
 
-	return &types.ToolResult{Success: true, Output: outputMsg}, nil
+	return &types.ToolResult{
+		Success: true,
+		Output:  outputMsg,
+		Data: map[string]interface{}{
+			"display_type":    "wiki_rename_page",
+			"old_slug":        params.Slug,
+			"new_slug":        params.NewSlug,
+			"title":           existingPage.Title,
+			"updated_count":   updatedCount,
+			"affected_pages":  updatedSlugs,
+		},
+	}, nil
 }
