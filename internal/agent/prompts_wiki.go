@@ -145,7 +145,9 @@ const WikiPageModifyPrompt = `You are a wiki editor tasked with updating an exis
 2. REMOVE facts/claims that were ONLY sourced from the <deleted_documents> and are NOT present in any <remaining_source_documents> or <new_information>.
 {{end}}
 {{if .HasAdditions}}
-3. ADD and MERGE the facts, details, and context from the <new_information> into the page. If it contradicts old content, prefer the newer information.
+3. ADD and MERGE the facts, details, and context from the <new_information> into the page.
+   - **CRITICAL CONFLICT CHECK**: First verify that the <new_information> describes the EXACT SAME core entity/concept as this page. If the new info clearly belongs to a DIFFERENT but related product/entity (e.g., this page is about "Hunyuan Model" but the new info is about "Qwen3"), you MUST REJECT that part of the new information and DO NOT add it.
+   - If it is the same core entity and contradicts old content, prefer the newer information.
 {{end}}
 4. Preserve existing information that is still valid.
 5. Keep [[slug|name]] wiki-link references ONLY if the slug appears in the <valid_wiki_links> list above. Remove any [[slug|name]] whose slug is NOT in that list. Do NOT invent new wiki-link slugs.
@@ -233,13 +235,16 @@ const WikiDeduplicationPrompt = `You are a strict deduplication system. Given a 
 - "苹果公司" → "Apple Inc." (same entity, translation)
 
 ### Examples of INCORRECT merges — do NOT merge these:
+- "Hunyuan Model" → "Qwen Model" (competing products in the same category are DIFFERENT entities, do not merge them)
+- "iPhone 15" → "Huawei Mate 60" (different specific instances in the same category)
+- "GPT-4" → "GPT-3.5" (different versions of a product are distinct entities)
 - "AI Safety" → "Content Review Mechanism" (related topics, but different concepts)
 - "Athlete Registration" → "Degree Verification" (both involve verification, but completely different domains)
 - "Competition Categories" → "Age Groups" (age groups are one aspect of categories, not the same concept)
 - "Performance Standard" → "Competition Rounds" (both relate to competitions, but are different concepts)
 - "Machine Learning" → "Neural Networks" (neural networks are a subset of ML, not the same concept)
 
-### Key principle: **related ≠ same**. When in doubt, do NOT merge. It is far better to have two separate pages for the same thing than to wrongly merge two different things.
+### Key principle: **related ≠ same**. **ABSOLUTELY DO NOT** merge different products, different companies, or different versions just because they belong to the same industry. When in doubt, do NOT merge. It is far better to have two separate pages for the same thing than to wrongly merge two different things.
 
 Return a JSON object with a "merges" map. The key is the NEW item's slug, the value is the EXISTING page's slug that it should merge into. Only include items where you are highly confident they are the same thing.
 
