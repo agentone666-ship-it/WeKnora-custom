@@ -285,6 +285,10 @@ const props = defineProps({
   assistantMessageId: {
     type: String,
     required: false
+  },
+  embeddedMode: {
+    type: Boolean,
+    default: false
   }
 });
 
@@ -1950,7 +1954,7 @@ defineExpose({
     <!-- 控制栏 -->
     <div class="control-bar">
       <!-- 左侧控制按钮 -->
-      <div class="control-left">
+      <div class="control-left" v-if="!embeddedMode">
         <!-- Agent 模式切换按钮 -->
         <div 
           ref="agentModeButtonRef"

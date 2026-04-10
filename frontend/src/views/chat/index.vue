@@ -164,10 +164,10 @@ const fetchSuggestedQuestions = async () => {
     suggestedQuestionsLoading.value = true;
     // 加载期间保留旧数据，不清空，避免布局抖动
     try {
-        const agentId = useSettingsStoreInstance.selectedAgentId;
+        const agentId = props.embeddedMode ? props.agentId : useSettingsStoreInstance.selectedAgentId;
         if (!agentId) return;
-        const selectedKBs = useSettingsStoreInstance.getSelectedKnowledgeBases();
-        const selectedFiles = useSettingsStoreInstance.getSelectedFiles();
+        const selectedKBs = props.embeddedMode ? props.kbIds : useSettingsStoreInstance.getSelectedKnowledgeBases();
+        const selectedFiles = props.embeddedMode ? [] : useSettingsStoreInstance.getSelectedFiles();
         const res = await getSuggestedQuestions(agentId, {
             knowledge_base_ids: selectedKBs.length > 0 ? selectedKBs : undefined,
             knowledge_ids: selectedFiles.length > 0 ? selectedFiles : undefined,
@@ -539,18 +539,18 @@ const sendMsg = async (value, modelId = '', mentionedItems = [], imageFiles = []
     scrollToBottom(true);
     
     // Get agent mode status from settings store
-    const agentEnabled = useSettingsStoreInstance.isAgentEnabled;
+    const agentEnabled = props.embeddedMode ? (props.agentId && props.agentId !== 'builtin-quick-answer') : useSettingsStoreInstance.isAgentEnabled;
     
     // Get web search status from settings store
-    const webSearchEnabled = useSettingsStoreInstance.isWebSearchEnabled;
+    const webSearchEnabled = props.embeddedMode ? false : useSettingsStoreInstance.isWebSearchEnabled;
     
     // Get memory status from settings store
-    const enableMemory = useSettingsStoreInstance.isMemoryEnabled;
+    const enableMemory = props.embeddedMode ? false : useSettingsStoreInstance.isMemoryEnabled;
     
     // Get knowledge_base_ids from settings store (selected by user via KnowledgeBaseSelector)
     // Merge @mentioned KB/file IDs so retrieval uses the same targets user @mentioned (including shared KBs)
-    const sidebarKbIds = useSettingsStoreInstance.settings.selectedKnowledgeBases || [];
-    const sidebarFileIds = useSettingsStoreInstance.settings.selectedFiles || [];
+    const sidebarKbIds = props.embeddedMode ? props.kbIds : (useSettingsStoreInstance.settings.selectedKnowledgeBases || []);
+    const sidebarFileIds = props.embeddedMode ? [] : (useSettingsStoreInstance.settings.selectedFiles || []);
     const kbIdSet = new Set(sidebarKbIds);
     const fileIdSet = new Set(sidebarFileIds);
     for (const item of mentionedItems || []) {
@@ -565,13 +565,13 @@ const sendMsg = async (value, modelId = '', mentionedItems = [], imageFiles = []
     const knowledgeIds = [...fileIdSet];
 
     // Get selected agent ID (backend resolves shared agent and its tenant from share relation)
-    const selectedAgentId = useSettingsStoreInstance.selectedAgentId || '';
+    const selectedAgentId = props.embeddedMode ? props.agentId : (useSettingsStoreInstance.selectedAgentId || '');
 
     // Use agent-chat endpoint when agent is enabled, otherwise use knowledge-chat
     const endpoint = agentEnabled ? '/api/v1/agent-chat' : '/api/v1/knowledge-chat';
     
     // Get selected MCP services from settings store (if available)
-    const mcpServiceIds = useSettingsStoreInstance.settings.selectedMCPServices || [];
+    const mcpServiceIds = props.embeddedMode ? [] : (useSettingsStoreInstance.settings.selectedMCPServices || []);
     
     await startStream({ 
         session_id: session_id.value, 

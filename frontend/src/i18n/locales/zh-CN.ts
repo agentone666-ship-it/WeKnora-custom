@@ -2164,9 +2164,9 @@ export default {
       issueFixSuggestions: "内容优化建议 ({count})",
       issueFixSingle: "修复",
       fixStartError: "启动修复助手失败",
-      issueFixPromptSingle: "请帮我修复页面 [[{slug}]] 上的以下问题：\n\n- [{type}] {desc}\n\n解决完毕后，请调用 `wiki_update_issue` 工具将该问题 (ID: {id}) 标记为已解决。",
-      issueFixPromptAutoStart: "请帮我修复页面 [[{slug}]] 上的所有待处理问题：",
-      issueFixPromptAutoEnd: "解决完毕后，请调用 `wiki_update_issue` 工具将这些问题标记为已解决。",
+      issueFixPromptSingle: "请修复页面 [[{slug}]] 上的问题 (ID: {id})。",
+      issueFixPromptAutoStart: "请修复页面 [[{slug}]] 上的以下问题：",
+      issueFixPromptAutoEnd: "",
     },
     buttons: {
       create: "创建知识库",

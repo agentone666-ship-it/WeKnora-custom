@@ -1858,9 +1858,9 @@ export default {
       issueFixSuggestions: 'Предложения по оптимизации ({count})',
       issueFixSingle: 'Исправить',
       fixStartError: 'Не удалось запустить помощник исправления',
-      issueFixPromptSingle: 'Пожалуйста, помогите исправить следующую проблему на странице [[{slug}]]:\n\n- [{type}] {desc}\n\nПосле устранения проблемы, пожалуйста, вызовите инструмент `wiki_update_issue`, чтобы пометить эту проблему (ID: {id}) как решенную.',
-      issueFixPromptAutoStart: 'Пожалуйста, помогите исправить все ожидающие проблемы на странице [[{slug}]]:',
-      issueFixPromptAutoEnd: 'После устранения проблем, пожалуйста, вызовите инструмент `wiki_update_issue`, чтобы пометить эти проблемы как решенные.',
+      issueFixPromptSingle: 'Пожалуйста, исправьте проблему (ID: {id}) на странице [[{slug}]].',
+      issueFixPromptAutoStart: 'Пожалуйста, исправьте следующие проблемы на странице [[{slug}]]:',
+      issueFixPromptAutoEnd: '',
     },
     buttons: {
       create: 'Создать базу знаний',

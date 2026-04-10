@@ -13,12 +13,13 @@ import (
 
 type wikiWritePageTool struct {
 	BaseTool
-	wikiPageService interfaces.WikiPageService
-	kbIDs           []string
+	wikiPageService  interfaces.WikiPageService
+	knowledgeService interfaces.KnowledgeService
+	kbIDs            []string
 }
 
 // NewWikiWritePageTool creates a new wiki_write_page tool
-func NewWikiWritePageTool(wikiPageService interfaces.WikiPageService, kbIDs []string) types.Tool {
+func NewWikiWritePageTool(wikiPageService interfaces.WikiPageService, kbIDs []string, knowledgeService interfaces.KnowledgeService) types.Tool {
 	return &wikiWritePageTool{
 		BaseTool: NewBaseTool(
 			ToolWikiWritePage,
@@ -54,14 +55,15 @@ func NewWikiWritePageTool(wikiPageService interfaces.WikiPageService, kbIDs []st
 					"source_refs": {
 						"type": "array",
 						"items": {"type": "string"},
-						"description": "A list of source knowledge IDs that contributed to this page. If provided, these will COMPLETELY REPLACE the existing source_refs of the page."
+						"description": "A list of source knowledge IDs (UUIDs only) that contributed to this page. If provided, these will COMPLETELY REPLACE the existing source_refs of the page."
 					}
 				},
 				"required": ["slug", "title", "summary", "content", "page_type"]
 			}`),
 		),
-		wikiPageService: wikiPageService,
-		kbIDs:           kbIDs,
+		wikiPageService:  wikiPageService,
+		knowledgeService: knowledgeService,
+		kbIDs:            kbIDs,
 	}
 }
 
@@ -95,6 +97,8 @@ func (t *wikiWritePageTool) Execute(ctx context.Context, args json.RawMessage) (
 		return &types.ToolResult{Success: false, Error: "Failed to check existing page: " + err.Error()}, nil
 	}
 
+	resolvedRefs := resolveSourceRefs(ctx, t.knowledgeService, params.SourceRefs)
+
 	var action string
 	if existingPage != nil {
 		// Update
@@ -104,8 +108,8 @@ func (t *wikiWritePageTool) Execute(ctx context.Context, args json.RawMessage) (
 		existingPage.PageType = params.PageType
 		existingPage.Aliases = params.Aliases
 
-		if len(params.SourceRefs) > 0 {
-			existingPage.SourceRefs = params.SourceRefs
+		if len(resolvedRefs) > 0 {
+			existingPage.SourceRefs = resolvedRefs
 		}
 
 		_, err = t.wikiPageService.UpdatePage(ctx, existingPage)
@@ -123,7 +127,7 @@ func (t *wikiWritePageTool) Execute(ctx context.Context, args json.RawMessage) (
 			Content:         params.Content,
 			PageType:        params.PageType,
 			Aliases:         params.Aliases,
-			SourceRefs:      params.SourceRefs,
+			SourceRefs:      resolvedRefs,
 		}
 		_, err = t.wikiPageService.CreatePage(ctx, newPage)
 		if err != nil {

@@ -1656,9 +1656,9 @@ export default {
       issueFixSuggestions: 'Content Optimization Suggestions ({count})',
       issueFixSingle: 'Fix',
       fixStartError: 'Failed to start fix assistant',
-      issueFixPromptSingle: 'Please help me fix the following issue on page [[{slug}]]:\n\n- [{type}] {desc}\n\nOnce resolved, please call the `wiki_update_issue` tool to mark this issue (ID: {id}) as resolved.',
-      issueFixPromptAutoStart: 'Please help me fix all pending issues on page [[{slug}]]:',
-      issueFixPromptAutoEnd: 'Once resolved, please call the `wiki_update_issue` tool to mark these issues as resolved.',
+      issueFixPromptSingle: 'Please fix the issue (ID: {id}) on page [[{slug}]].',
+      issueFixPromptAutoStart: 'Please fix the following issues on page [[{slug}]]:',
+      issueFixPromptAutoEnd: '',
     },
     buttons: {
       create: 'Create Knowledge Base',

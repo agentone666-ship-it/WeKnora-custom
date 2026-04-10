@@ -232,14 +232,12 @@
                     trigger="click"
                     :overlayInnerStyle="{ padding: 0, boxShadow: 'var(--td-shadow-3)', borderRadius: '8px', width: '560px', maxWidth: '90vw' }"
                   >
-                    <t-tag 
-                      theme="warning" 
-                      variant="light-outline" 
+                    <span 
                       class="wiki-issue-trigger"
+                      :title="$t('knowledgeEditor.wikiBrowser.issueTitle', { count: pageIssues.length })"
                     >
-                      <template #icon><t-icon name="error-circle" /></template>
-                      {{ $t('knowledgeEditor.wikiBrowser.issueTitle', { count: pageIssues.length }) }}
-                    </t-tag>
+                      <t-icon name="error-circle-filled" style="color: var(--td-warning-color);" />
+                    </span>
 
                     <template #content>
                       <div class="wiki-issue-popup-content">
@@ -248,34 +246,36 @@
                             <span>{{ $t('knowledgeEditor.wikiBrowser.issueFixSuggestions', { count: pageIssues.length }) }}</span>
                           </div>
                           <t-button size="small" theme="primary" variant="base" @click="triggerAutoFix">
-                            <template #icon><t-icon name="magic" /></template>
+                            <template #icon><t-icon name="tools" /></template>
                             {{ $t('knowledgeEditor.wikiBrowser.issueFixBtn') }}
                           </t-button>
                         </div>
-                        <div class="wiki-issue-popup-list">
-                          <div v-for="issue in pageIssues" :key="issue.id" class="wiki-issue-popup-item">
-                            <div class="wiki-issue-popup-main">
-                              <div class="wiki-issue-popup-tags">
-                                <t-tag v-if="issue.issue_type === 'mixed_entities'" theme="warning" variant="light" size="small">{{ $t('knowledgeEditor.wikiBrowser.issueMixed') }}</t-tag>
-                                <t-tag v-else-if="issue.issue_type === 'contradictory_facts'" theme="danger" variant="light" size="small">{{ $t('knowledgeEditor.wikiBrowser.issueConflict') }}</t-tag>
-                                <t-tag v-else-if="issue.issue_type === 'out_of_date'" theme="default" variant="light" size="small">{{ $t('knowledgeEditor.wikiBrowser.issueOutdated') }}</t-tag>
-                                <t-tag v-else theme="primary" variant="light" size="small">{{ $t('knowledgeEditor.wikiBrowser.issueAttention') }}</t-tag>
-                              </div>
-                              <div class="wiki-issue-popup-desc">
-                                {{ issue.description }}
-                              </div>
-                              <div class="wiki-issue-popup-meta">
-                                <span class="wiki-issue-popup-reporter">
-                                  {{ issue.reported_by === 'wiki-researcher-agent' ? $t('knowledgeEditor.wikiBrowser.issueAiLinter') : $t('knowledgeEditor.wikiBrowser.issueReportedBy', { reporter: issue.reported_by }) }}
-                                </span>
+                      <div class="wiki-issue-popup-list">
+                        <div v-for="issue in pageIssues" :key="issue.id" class="wiki-issue-popup-item">
+                          <div class="wiki-issue-popup-main">
+                            <div class="wiki-issue-popup-tags">
+                              <t-tag v-if="issue.issue_type === 'mixed_entities'" theme="warning" variant="light" size="small">{{ $t('knowledgeEditor.wikiBrowser.issueMixed') }}</t-tag>
+                              <t-tag v-else-if="issue.issue_type === 'contradictory_facts'" theme="danger" variant="light" size="small">{{ $t('knowledgeEditor.wikiBrowser.issueConflict') }}</t-tag>
+                              <t-tag v-else-if="issue.issue_type === 'out_of_date'" theme="default" variant="light" size="small">{{ $t('knowledgeEditor.wikiBrowser.issueOutdated') }}</t-tag>
+                              <t-tag v-else theme="primary" variant="light" size="small">{{ $t('knowledgeEditor.wikiBrowser.issueAttention') }}</t-tag>
+                            </div>
+                            <div class="wiki-issue-popup-desc">
+                              {{ issue.description }}
+                            </div>
+                            <div class="wiki-issue-popup-meta">
+                              <span class="wiki-issue-popup-reporter">
+                                {{ issue.reported_by === 'wiki-researcher-agent' ? $t('knowledgeEditor.wikiBrowser.issueAiLinter') : $t('knowledgeEditor.wikiBrowser.issueReportedBy', { reporter: issue.reported_by }) }}
+                              </span>
+                              <div class="wiki-issue-popup-actions">
                                 <span class="wiki-issue-popup-action" @click="triggerFixIssue(issue)" style="margin-right: 12px; font-weight: 500;">
-                                  <t-icon name="magic" style="margin-right: 2px;" />{{ $t('knowledgeEditor.wikiBrowser.issueFixSingle') }}
+                                  <t-icon name="tools" style="margin-right: 4px;" />{{ $t('knowledgeEditor.wikiBrowser.issueFixSingle') }}
                                 </span>
                                 <span class="wiki-issue-popup-action" style="color: var(--td-text-color-placeholder);" @click="handleIssueIgnore(issue.id)">{{ $t('knowledgeEditor.wikiBrowser.issueIgnore') }}</span>
                               </div>
                             </div>
                           </div>
                         </div>
+                      </div>
                       </div>
                     </template>
                   </t-popup>
@@ -377,10 +377,12 @@
               <span class="wiki-issue-popup-reporter">
                 {{ issue.reported_by === 'wiki-researcher-agent' ? $t('knowledgeEditor.wikiBrowser.issueAiLinter') : $t('knowledgeEditor.wikiBrowser.issueReportedBy', { reporter: issue.reported_by }) }}
               </span>
-              <span class="wiki-issue-popup-action" @click="navigateToSlugAndFix(issue.slug)" style="margin-right: 12px; font-weight: 500;">
-                <t-icon name="arrow-right-circle" style="margin-right: 2px;" />{{ $t('knowledgeEditor.wikiBrowser.issueGoFix') }}
-              </span>
-              <span class="wiki-issue-popup-action" style="color: var(--td-text-color-placeholder);" @click="handleGlobalIssueIgnore(issue.id)">{{ $t('knowledgeEditor.wikiBrowser.issueIgnore') }}</span>
+              <div class="wiki-issue-popup-actions">
+                <span class="wiki-issue-popup-action" @click="navigateToSlugAndFix(issue.slug)" style="margin-right: 12px; font-weight: 500;">
+                  <t-icon name="arrow-right-circle" style="margin-right: 4px;" />{{ $t('knowledgeEditor.wikiBrowser.issueGoFix') }}
+                </span>
+                <span class="wiki-issue-popup-action" style="color: var(--td-text-color-placeholder);" @click="handleGlobalIssueIgnore(issue.id)">{{ $t('knowledgeEditor.wikiBrowser.issueIgnore') }}</span>
+              </div>
             </div>
           </div>
         </div>
@@ -882,21 +884,8 @@ async function handleIssueIgnore(issueId: string) {
 }
 
 async function startFixSession(prompt: string) {
-  settingsStore.selectAgent("builtin-wiki-fixer", null)
-  
-  const sessionData: any = {
-    agent_config: {
-      enabled: true,
-      max_iterations: 30,
-      temperature: 0.7,
-      knowledge_bases: [props.knowledgeBaseId],
-      knowledge_ids: [],
-      allowed_tools: ["thinking", "wiki_read_page", "wiki_search", "wiki_read_source_doc", "wiki_edit_page", "wiki_read_issue", "wiki_update_issue"]
-    }
-  }
-
   try {
-    const res = await createSessions(sessionData)
+    const res = await createSessions({})
     if (res && (res as any).data && (res as any).data.id) {
       const sessionId = (res as any).data.id
       const now = new Date().toISOString()
@@ -930,8 +919,6 @@ function triggerFixIssue(issue: WikiPageIssue) {
   if (!selectedPage.value) return
   const prompt = t('knowledgeEditor.wikiBrowser.issueFixPromptSingle', {
     slug: selectedPage.value.slug,
-    type: issue.issue_type,
-    desc: issue.description,
     id: issue.id
   })
   startFixSession(prompt)
@@ -942,10 +929,9 @@ function triggerAutoFix() {
   let prompt = t('knowledgeEditor.wikiBrowser.issueFixPromptAutoStart', { slug: selectedPage.value.slug }) + '\n\n'
   
   pageIssues.value.forEach((issue, idx) => {
-    prompt += `${idx + 1}. [${issue.issue_type}] ${issue.description} (ID: ${issue.id})\n`
+    prompt += `${idx + 1}. Issue ID: ${issue.id}\n`
   })
   
-  prompt += '\n' + t('knowledgeEditor.wikiBrowser.issueFixPromptAutoEnd')
   startFixSession(prompt)
 }
 
@@ -2446,13 +2432,16 @@ onUnmounted(() => {
 
 // ── Issues Popup ──
 .wiki-issue-trigger {
-  margin-left: 12px;
+  margin-left: 8px;
   cursor: pointer;
-  transition: all 0.2s ease;
-  user-select: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  transition: opacity 0.2s ease;
   
   &:hover {
-    filter: brightness(0.95);
+    opacity: 0.8;
   }
 }
 
@@ -2492,21 +2481,21 @@ onUnmounted(() => {
   flex-direction: column;
   max-height: 400px;
   overflow-y: auto;
+  gap: 12px;
+  padding: 8px 12px;
 }
 
 .wiki-issue-popup-item {
   display: flex;
   padding: 16px;
   gap: 12px;
-  border-bottom: 1px solid var(--td-component-stroke);
-  transition: background-color 0.2s ease;
-  
-  &:last-child {
-    border-bottom: none;
-  }
+  border: 1px solid var(--td-component-border);
+  border-radius: 6px;
+  transition: box-shadow 0.2s ease, border-color 0.2s ease;
+  background: var(--td-bg-color-container);
   
   &:hover {
-    background: var(--td-bg-color-container-hover);
+    border-color: var(--td-brand-color-light);
   }
 }
 
@@ -2550,12 +2539,20 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 16px;
-  margin-top: 4px;
+  margin-top: 8px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--td-component-stroke);
 }
 
 .wiki-issue-popup-reporter {
   font-size: 12px;
   color: var(--td-text-color-placeholder);
+  flex: 1;
+}
+
+.wiki-issue-popup-actions {
+  display: flex;
+  align-items: center;
 }
 
 .wiki-issue-popup-action {

@@ -137,6 +137,7 @@ func (t *wikiReadPageTool) Execute(ctx context.Context, args json.RawMessage) (*
 <title>%s</title>
 <slug>%s</slug>
 <type>%s</type>
+<aliases>%s</aliases>
 </metadata>
 <relationships>
 <links_to>%s</links_to>
@@ -153,6 +154,7 @@ func (t *wikiReadPageTool) Execute(ctx context.Context, args json.RawMessage) (*
 </content>
 </wiki_page>`,
 					page.Title, page.Slug, page.PageType,
+					strings.Join(page.Aliases, ", "),
 					strings.Join(outLinksDesc, ", "),
 					strings.Join(inLinksDesc, ", "),
 					strings.Join(sourcesDesc, "\n"),
@@ -278,10 +280,15 @@ func (t *wikiSearchTool) Execute(ctx context.Context, args json.RawMessage) (*ty
 				snippetTag = fmt.Sprintf("\n<match_snippet>%s</match_snippet>", snippet)
 			}
 
+			aliasesTag := ""
+			if len(p.Aliases) > 0 {
+				aliasesTag = fmt.Sprintf("\n<aliases>%s</aliases>", strings.Join(p.Aliases, ", "))
+			}
+
 			if seen {
-				fmt.Fprintf(&sb, "<page>\n<title>%s</title>\n<slug>%s</slug>\n<type>%s</type>\n<summary>(summary omitted, already seen in previous search)</summary>%s\n</page>\n", p.Title, p.Slug, p.PageType, snippetTag)
+				fmt.Fprintf(&sb, "<page>\n<title>%s</title>\n<slug>%s</slug>\n<type>%s</type>%s\n<summary>(summary omitted, already seen in previous search)</summary>%s\n</page>\n", p.Title, p.Slug, p.PageType, aliasesTag, snippetTag)
 			} else {
-				fmt.Fprintf(&sb, "<page>\n<title>%s</title>\n<slug>%s</slug>\n<type>%s</type>\n<summary>%s</summary>%s\n</page>\n", p.Title, p.Slug, p.PageType, p.Summary, snippetTag)
+				fmt.Fprintf(&sb, "<page>\n<title>%s</title>\n<slug>%s</slug>\n<type>%s</type>%s\n<summary>%s</summary>%s\n</page>\n", p.Title, p.Slug, p.PageType, aliasesTag, p.Summary, snippetTag)
 			}
 		}
 		sb.WriteString("</search_results>")
@@ -325,6 +332,36 @@ func parseStringOrArray(val any) []string {
 		return res
 	}
 	return nil
+}
+
+// resolveSourceRefs enriches plain knowledge UUIDs to "uuid|title" format.
+// Refs already in "uuid|title" format are left unchanged.
+func resolveSourceRefs(ctx context.Context, knowledgeService interfaces.KnowledgeService, refs []string) []string {
+	if len(refs) == 0 || knowledgeService == nil {
+		return refs
+	}
+	resolved := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		if strings.Contains(ref, "|") {
+			resolved = append(resolved, ref)
+			continue
+		}
+		kn, err := knowledgeService.GetKnowledgeByIDOnly(ctx, ref)
+		if err != nil || kn == nil {
+			resolved = append(resolved, ref)
+			continue
+		}
+		title := kn.Title
+		if title == "" {
+			title = kn.FileName
+		}
+		if title != "" {
+			resolved = append(resolved, ref+"|"+title)
+		} else {
+			resolved = append(resolved, ref)
+		}
+	}
+	return resolved
 }
 
 func extractSnippet(content string, query string) string {

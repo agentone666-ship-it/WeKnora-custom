@@ -2179,9 +2179,9 @@ export default {
       issueFixSuggestions: "콘텐츠 최적화 제안 ({count})",
       issueFixSingle: "수정",
       fixStartError: "수정 도우미 시작 실패",
-      issueFixPromptSingle: "페이지 [[{slug}]] 의 다음 문제를 수정해 주세요:\n\n- [{type}] {desc}\n\n해결 완료 후 `wiki_update_issue` 도구를 호출하여 이 문제(ID: {id})를 해결됨으로 표시해 주세요.",
-      issueFixPromptAutoStart: "페이지 [[{slug}]] 의 모든 보류 중인 문제를 수정해 주세요:",
-      issueFixPromptAutoEnd: "해결 완료 후 `wiki_update_issue` 도구를 호출하여 이 문제들을 해결됨으로 표시해 주세요.",
+      issueFixPromptSingle: "페이지 [[{slug}]] 의 문제(ID: {id})를 수정해 주세요.",
+      issueFixPromptAutoStart: "페이지 [[{slug}]] 의 다음 문제들을 수정해 주세요:",
+      issueFixPromptAutoEnd: "",
     },
     buttons: {
       create: "지식베이스 생성",

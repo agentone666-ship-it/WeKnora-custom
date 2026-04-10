@@ -12,12 +12,13 @@ import (
 
 type wikiReplaceTextTool struct {
 	BaseTool
-	wikiPageService interfaces.WikiPageService
-	kbIDs           []string
+	wikiPageService  interfaces.WikiPageService
+	knowledgeService interfaces.KnowledgeService
+	kbIDs            []string
 }
 
 // NewWikiReplaceTextTool creates a new wiki_replace_text tool
-func NewWikiReplaceTextTool(wikiPageService interfaces.WikiPageService, kbIDs []string) types.Tool {
+func NewWikiReplaceTextTool(wikiPageService interfaces.WikiPageService, kbIDs []string, knowledgeService interfaces.KnowledgeService) types.Tool {
 	return &wikiReplaceTextTool{
 		BaseTool: NewBaseTool(
 			ToolWikiReplaceText,
@@ -40,14 +41,15 @@ func NewWikiReplaceTextTool(wikiPageService interfaces.WikiPageService, kbIDs []
 					"source_refs": {
 						"type": "array",
 						"items": {"type": "string"},
-						"description": "An optional list of source knowledge IDs that justify this change. If provided, these will COMPLETELY REPLACE the existing source_refs of the page."
+						"description": "An optional list of source knowledge IDs (UUIDs only) that justify this change. If provided, these will COMPLETELY REPLACE the existing source_refs of the page."
 					}
 				},
 				"required": ["slug", "old_text", "new_text"]
 			}`),
 		),
-		wikiPageService: wikiPageService,
-		kbIDs:           kbIDs,
+		wikiPageService:  wikiPageService,
+		knowledgeService: knowledgeService,
+		kbIDs:            kbIDs,
 	}
 }
 
@@ -85,13 +87,13 @@ func (t *wikiReplaceTextTool) Execute(ctx context.Context, args json.RawMessage)
 	existingPage.Content = strings.Replace(existingPage.Content, params.OldText, params.NewText, 1)
 
 	if len(params.SourceRefs) > 0 {
-		existingPage.SourceRefs = params.SourceRefs
+		existingPage.SourceRefs = resolveSourceRefs(ctx, t.knowledgeService, params.SourceRefs)
 	}
 
 	_, err = t.wikiPageService.UpdatePage(ctx, existingPage)
 	if err != nil {
 		return &types.ToolResult{Success: false, Error: "Failed to update page: " + err.Error()}, nil
 	}
-	
+
 	return &types.ToolResult{Success: true, Output: fmt.Sprintf("Successfully replaced text on page %s.", params.Slug)}, nil
 }
