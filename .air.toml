@@ -7,7 +7,7 @@ tmp_dir = "tmp"
   bin = "./tmp/main"
   cmd = "CGO_CFLAGS='-Wno-deprecated-declarations -Wno-gnu-folding-constant' $(uname | grep -q Darwin && echo \"CGO_LDFLAGS='-Wl,-no_warn_duplicate_libraries'\") go build -ldflags=\"$(./scripts/get_version.sh ldflags) -X 'google.golang.org/protobuf/reflect/protoregistry.conflictPolicy=warn'\" -o ./tmp/main ./cmd/server"
   delay = 1000
-  exclude_dir = ["assets", "tmp", "vendor", "testdata", "frontend", "migrations", "node_modules", "docs"]
+  exclude_dir = ["assets", "tmp", "vendor", "testdata", "frontend", "migrations", "node_modules", "docs", "logs"]
   exclude_file = []
   exclude_regex = ["_test.go"]
   exclude_unchanged = false
@@ -23,7 +23,7 @@ tmp_dir = "tmp"
   poll_interval = 0
   rerun = false
   rerun_delay = 500
-  send_interrupt = true
+  send_interrupt = false
   stop_on_error = false
 
 [color]
@@ -38,7 +38,7 @@ tmp_dir = "tmp"
   time = false
 
 [misc]
-  clean_on_exit = false
+  clean_on_exit = true
 
 [screen]
   clear_on_rebuild = false
