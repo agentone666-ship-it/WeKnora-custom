@@ -41,7 +41,22 @@ export interface WikiStats {
   orphan_count: number;
   recent_updates: WikiPage[];
   pending_tasks: number;
+  pending_issues: number;
   is_active: boolean;
+}
+
+export interface WikiPageIssue {
+  id: string;
+  tenant_id: number;
+  knowledge_base_id: string;
+  slug: string;
+  issue_type: string;
+  description: string;
+  suspected_knowledge_ids: string[];
+  status: string;
+  reported_by: string;
+  created_at: string;
+  updated_at: string;
 }
 
 // Wiki API Functions
@@ -102,6 +117,17 @@ export function searchWikiPages(kbId: string, q: string, limit?: number) {
   const params = new URLSearchParams({ q });
   if (limit) params.set('limit', String(limit));
   return get(`/api/v1/knowledgebase/${kbId}/wiki/search?${params.toString()}`);
+}
+
+export function listWikiIssues(kbId: string, slug?: string, status?: string) {
+  const params = new URLSearchParams();
+  if (slug) params.set('slug', slug);
+  if (status) params.set('status', status);
+  return get(`/api/v1/knowledgebase/${kbId}/wiki/issues?${params.toString()}`);
+}
+
+export function updateWikiIssueStatus(kbId: string, issueId: string, status: string) {
+  return put(`/api/v1/knowledgebase/${kbId}/wiki/issues/${issueId}/status`, { status });
 }
 
 export function rebuildWikiLinks(kbId: string) {

@@ -1,5 +1,5 @@
 <template>
-    <div class="user_msg_container" ref="containerRef">
+    <div class="user_msg_container" ref="containerRef" :class="{ 'is-embedded': embeddedMode }">
         <!-- 显示@的知识库和文件 -->
         <div v-if="mentioned_items && mentioned_items.length > 0" class="mentioned_items">
             <span 
@@ -84,6 +84,10 @@ const props = defineProps({
         type: String,
         required: false,
         default: ''
+    },
+    embeddedMode: {
+        type: Boolean,
+        default: false
     }
 });
 
@@ -216,6 +220,14 @@ const closePreImg = () => {
     }
 }
 
+.user_msg_container {
+    &.is-embedded {
+        .user_msg {
+            max-width: 100%;
+        }
+    }
+}
+
 .user_msg {
     width: max-content;
     max-width: 776px;
@@ -233,7 +245,6 @@ const closePreImg = () => {
     font-size: 15px;
     text-align: justify;
     word-break: break-all;
-    max-width: 100%;
     box-sizing: border-box;
 }
 

@@ -22,6 +22,10 @@ const (
 	BuiltinKnowledgeGraphExpertID = "builtin-knowledge-graph-expert"
 	// BuiltinDocumentAssistantID is the ID for the built-in document assistant agent
 	BuiltinDocumentAssistantID = "builtin-document-assistant"
+	// BuiltinWikiResearcherID is the ID for the built-in wiki researcher agent
+	BuiltinWikiResearcherID = "builtin-wiki-researcher"
+	// BuiltinWikiFixerID is the ID for the built-in wiki fixer agent
+	BuiltinWikiFixerID = "builtin-wiki-fixer"
 )
 
 // AgentMode constants for agent running mode
@@ -114,6 +118,9 @@ type CustomAgentConfig struct {
 	// When true, knowledge base retrieval only happens if user explicitly mentions KB/files with @
 	// When false, knowledge base retrieval happens according to KBSelectionMode
 	RetrieveKBOnlyWhenMentioned bool `yaml:"retrieve_kb_only_when_mentioned" json:"retrieve_kb_only_when_mentioned"`
+
+	// Whether to retain retrieval history across turns
+	RetainRetrievalHistory bool `yaml:"retain_retrieval_history" json:"retain_retrieval_history"`
 
 	// ===== Image Upload / Multimodal Settings =====
 	// Whether image upload is enabled for this agent (default: false)
@@ -288,6 +295,8 @@ var BuiltinAgentRegistry = map[string]func(uint64) *CustomAgent{}
 var builtinAgentIDsOrdered = []string{
 	BuiltinQuickAnswerID,
 	BuiltinSmartReasoningID,
+	BuiltinWikiResearcherID,
+	BuiltinWikiFixerID,
 	BuiltinDeepResearcherID,
 	BuiltinDataAnalystID,
 	BuiltinKnowledgeGraphExpertID,

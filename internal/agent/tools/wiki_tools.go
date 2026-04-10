@@ -145,6 +145,9 @@ func (t *wikiReadPageTool) Execute(ctx context.Context, args json.RawMessage) (*
 <sources>
 %s
 </sources>
+<summary>
+%s
+</summary>
 <content>
 %s
 </content>
@@ -153,6 +156,7 @@ func (t *wikiReadPageTool) Execute(ctx context.Context, args json.RawMessage) (*
 					strings.Join(outLinksDesc, ", "),
 					strings.Join(inLinksDesc, ", "),
 					strings.Join(sourcesDesc, "\n"),
+					page.Summary,
 					page.Content,
 				)
 				outputs = append(outputs, output)

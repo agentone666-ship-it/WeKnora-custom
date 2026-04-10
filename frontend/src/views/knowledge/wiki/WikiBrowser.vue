@@ -6,19 +6,25 @@
         <div ref="graphRef" class="wiki-graph-canvas"></div>
 
         <!-- Graph Search Overlay -->
-        <div v-if="graphReady" class="wiki-graph-search">
-          <t-select
-            v-model="graphSearchValue"
-            filterable
-            :options="graphSearchOptions"
-            :placeholder="$t('knowledgeEditor.wikiBrowser.searchPlaceholder')"
-            @change="handleGraphSearchSelect"
-            @enter="handleGraphSearchEnter"
-            :popup-props="{ zIndex: 100 }"
-            class="graph-search-select"
-          >
-            <template #prefixIcon><t-icon name="search" /></template>
-          </t-select>
+        <div v-if="graphReady" class="wiki-graph-search-container">
+          <div class="wiki-graph-search">
+            <t-select
+              v-model="graphSearchValue"
+              filterable
+              :options="graphSearchOptions"
+              :placeholder="$t('knowledgeEditor.wikiBrowser.searchPlaceholder')"
+              @change="handleGraphSearchSelect"
+              @enter="handleGraphSearchEnter"
+              :popup-props="{ zIndex: 100 }"
+              class="graph-search-select"
+            >
+              <template #prefixIcon><t-icon name="search" /></template>
+            </t-select>
+          </div>
+          <div v-if="stats && stats.pending_issues > 0" class="wiki-global-issues-status graph-issues-badge" @click="showGlobalIssuesDrawer = true">
+            <t-icon name="error-circle" style="color: var(--td-warning-color);" />
+            <span class="queue-text">{{ $t('knowledgeEditor.wikiBrowser.globalIssuesCount', { count: stats.pending_issues }) }}</span>
+          </div>
         </div>
 
         <!-- Legend Overlay -->
@@ -121,6 +127,11 @@
             <t-loading size="small" />
             <span class="queue-text">{{ $t('knowledgeEditor.wikiBrowser.queueStatus', { count: stats.pending_tasks || 0 }) }}</span>
           </div>
+          <!-- Global Issues -->
+          <div v-if="stats && stats.pending_issues > 0" class="wiki-global-issues-status" @click="showGlobalIssuesDrawer = true">
+            <t-icon name="error-circle" style="color: var(--td-warning-color);" />
+            <span class="queue-text">{{ $t('knowledgeEditor.wikiBrowser.globalIssuesCount', { count: stats.pending_issues }) }}</span>
+          </div>
           <t-input
             v-model="searchQuery"
             :placeholder="$t('knowledgeEditor.wikiBrowser.searchPlaceholder')"
@@ -211,7 +222,64 @@
 
               <!-- Page header -->
               <div class="wiki-reader-header">
-                <h2 class="wiki-reader-title">{{ selectedPage.title }}</h2>
+                <h2 class="wiki-reader-title" style="display: flex; align-items: center;">
+                  {{ selectedPage.title }}
+                  
+                  <t-popup
+                    v-if="pageIssues.length > 0"
+                    v-model="showIssuesBox"
+                    placement="bottom-left"
+                    trigger="click"
+                    :overlayInnerStyle="{ padding: 0, boxShadow: 'var(--td-shadow-3)', borderRadius: '8px', width: '560px', maxWidth: '90vw' }"
+                  >
+                    <t-tag 
+                      theme="warning" 
+                      variant="light-outline" 
+                      class="wiki-issue-trigger"
+                    >
+                      <template #icon><t-icon name="error-circle" /></template>
+                      {{ $t('knowledgeEditor.wikiBrowser.issueTitle', { count: pageIssues.length }) }}
+                    </t-tag>
+
+                    <template #content>
+                      <div class="wiki-issue-popup-content">
+                        <div class="wiki-issue-popup-header">
+                          <div class="wiki-issue-popup-title">
+                            <span>{{ $t('knowledgeEditor.wikiBrowser.issueFixSuggestions', { count: pageIssues.length }) }}</span>
+                          </div>
+                          <t-button size="small" theme="primary" variant="base" @click="triggerAutoFix">
+                            <template #icon><t-icon name="magic" /></template>
+                            {{ $t('knowledgeEditor.wikiBrowser.issueFixBtn') }}
+                          </t-button>
+                        </div>
+                        <div class="wiki-issue-popup-list">
+                          <div v-for="issue in pageIssues" :key="issue.id" class="wiki-issue-popup-item">
+                            <div class="wiki-issue-popup-main">
+                              <div class="wiki-issue-popup-tags">
+                                <t-tag v-if="issue.issue_type === 'mixed_entities'" theme="warning" variant="light" size="small">{{ $t('knowledgeEditor.wikiBrowser.issueMixed') }}</t-tag>
+                                <t-tag v-else-if="issue.issue_type === 'contradictory_facts'" theme="danger" variant="light" size="small">{{ $t('knowledgeEditor.wikiBrowser.issueConflict') }}</t-tag>
+                                <t-tag v-else-if="issue.issue_type === 'out_of_date'" theme="default" variant="light" size="small">{{ $t('knowledgeEditor.wikiBrowser.issueOutdated') }}</t-tag>
+                                <t-tag v-else theme="primary" variant="light" size="small">{{ $t('knowledgeEditor.wikiBrowser.issueAttention') }}</t-tag>
+                              </div>
+                              <div class="wiki-issue-popup-desc">
+                                {{ issue.description }}
+                              </div>
+                              <div class="wiki-issue-popup-meta">
+                                <span class="wiki-issue-popup-reporter">
+                                  {{ issue.reported_by === 'wiki-researcher-agent' ? $t('knowledgeEditor.wikiBrowser.issueAiLinter') : $t('knowledgeEditor.wikiBrowser.issueReportedBy', { reporter: issue.reported_by }) }}
+                                </span>
+                                <span class="wiki-issue-popup-action" @click="triggerFixIssue(issue)" style="margin-right: 12px; font-weight: 500;">
+                                  <t-icon name="magic" style="margin-right: 2px;" />{{ $t('knowledgeEditor.wikiBrowser.issueFixSingle') }}
+                                </span>
+                                <span class="wiki-issue-popup-action" style="color: var(--td-text-color-placeholder);" @click="handleIssueIgnore(issue.id)">{{ $t('knowledgeEditor.wikiBrowser.issueIgnore') }}</span>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </template>
+                  </t-popup>
+                </h2>
                 <div v-if="selectedPage.aliases && selectedPage.aliases.length" class="wiki-reader-aliases">
                   <span class="wiki-alias-label">{{ $t('knowledgeEditor.wikiBrowser.aliases') }}:</span>
                   <t-tag v-for="alias in selectedPage.aliases" :key="alias" size="small" variant="light" class="wiki-alias-tag">
@@ -281,25 +349,95 @@
     <Teleport to="body">
       <picturePreview v-if="imagePreviewVisible" :reviewImg="imagePreviewVisible" :reviewUrl="imagePreviewUrl" @closePreImg="closeImagePreview" />
     </Teleport>
+    
+    <!-- Global Issues Drawer -->
+    <t-drawer
+      v-model:visible="showGlobalIssuesDrawer"
+      :header="$t('knowledgeEditor.wikiBrowser.globalIssuesTitle')"
+      size="480px"
+      :footer="false"
+      class="wiki-global-issues-drawer"
+    >
+      <div class="wiki-issue-popup-list">
+        <div v-for="issue in globalIssues" :key="issue.id" class="wiki-issue-popup-item">
+          <div class="wiki-issue-popup-main">
+            <div class="wiki-issue-popup-tags">
+              <t-tag v-if="issue.issue_type === 'mixed_entities'" theme="warning" variant="light" size="small">{{ $t('knowledgeEditor.wikiBrowser.issueMixed') }}</t-tag>
+              <t-tag v-else-if="issue.issue_type === 'contradictory_facts'" theme="danger" variant="light" size="small">{{ $t('knowledgeEditor.wikiBrowser.issueConflict') }}</t-tag>
+              <t-tag v-else-if="issue.issue_type === 'out_of_date'" theme="default" variant="light" size="small">{{ $t('knowledgeEditor.wikiBrowser.issueOutdated') }}</t-tag>
+              <t-tag v-else theme="primary" variant="light" size="small">{{ $t('knowledgeEditor.wikiBrowser.issueAttention') }}</t-tag>
+            </div>
+            <div class="wiki-issue-popup-desc">
+              <div style="font-weight: 500; margin-bottom: 4px; color: var(--td-brand-color); cursor: pointer;" @click="navigateToSlugAndFix(issue.slug)">
+                <t-icon name="link" size="12px"/> {{ $t('knowledgeEditor.wikiBrowser.issuePagePrefix') }}{{ slugDisplayName(issue.slug) }}
+              </div>
+              {{ issue.description }}
+            </div>
+            <div class="wiki-issue-popup-meta">
+              <span class="wiki-issue-popup-reporter">
+                {{ issue.reported_by === 'wiki-researcher-agent' ? $t('knowledgeEditor.wikiBrowser.issueAiLinter') : $t('knowledgeEditor.wikiBrowser.issueReportedBy', { reporter: issue.reported_by }) }}
+              </span>
+              <span class="wiki-issue-popup-action" @click="navigateToSlugAndFix(issue.slug)" style="margin-right: 12px; font-weight: 500;">
+                <t-icon name="arrow-right-circle" style="margin-right: 2px;" />{{ $t('knowledgeEditor.wikiBrowser.issueGoFix') }}
+              </span>
+              <span class="wiki-issue-popup-action" style="color: var(--td-text-color-placeholder);" @click="handleGlobalIssueIgnore(issue.id)">{{ $t('knowledgeEditor.wikiBrowser.issueIgnore') }}</span>
+            </div>
+          </div>
+        </div>
+        <div v-if="globalIssues.length === 0" style="padding: 40px; text-align: center; color: var(--td-text-color-placeholder);">
+          {{ $t('knowledgeEditor.wikiBrowser.globalIssuesEmpty') }}
+        </div>
+      </div>
+    </t-drawer>
+
+    <!-- Fix Chat Drawer -->
+    <t-drawer
+      v-model:visible="showFixDrawer"
+      :header="$t('knowledgeEditor.wikiBrowser.fixAssistantTitle')"
+      size="700px"
+      :footer="false"
+      class="wiki-fix-drawer"
+    >
+      <ChatView 
+        v-if="showFixDrawer"
+        :session_id="currentFixSessionId" 
+        agentId="builtin-wiki-fixer" 
+        :kbIds="[props.knowledgeBaseId]"
+        :embeddedMode="true"
+      />
+    </t-drawer>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, nextTick, reactive } from 'vue'
+import { useRouter } from 'vue-router'
+import { useMenuStore } from '@/stores/menu'
+import { useSettingsStore } from '@/stores/settings'
 import { useI18n } from 'vue-i18n'
 import { marked } from 'marked'
+import { MessagePlugin } from 'tdesign-vue-next'
 import { hydrateProtectedFileImages } from '@/utils/security'
 import picturePreview from '@/components/picture-preview.vue'
+import { createSessions } from '@/api/chat'
+import ChatView from '@/views/chat/index.vue'
 import {
   listWikiPages,
   getWikiPage,
   getWikiGraph,
   getWikiStats,
   searchWikiPages,
+  listWikiIssues,
+  updateWikiIssueStatus,
   type WikiPage,
   type WikiGraphData,
   type WikiStats,
+  type WikiPageIssue,
 } from '@/api/wiki'
+
+const router = useRouter()
+const menuStore = useMenuStore()
+const settingsStore = useSettingsStore()
 
 const { t } = useI18n()
 
@@ -313,6 +451,12 @@ const emit = defineEmits<{
 }>()
 const pages = ref<WikiPage[]>([])
 const selectedPage = ref<WikiPage | null>(null)
+const pageIssues = ref<WikiPageIssue[]>([])
+const showIssuesBox = ref(false)
+const showFixDrawer = ref(false)
+const showGlobalIssuesDrawer = ref(false)
+const globalIssues = ref<WikiPageIssue[]>([])
+const currentFixSessionId = ref('')
 const stats = ref<WikiStats | null>(null)
 const graphData = ref<WikiGraphData | null>(null)
 const searchQuery = ref('')
@@ -327,6 +471,40 @@ const showArrows = ref(true)
 
 // Graph filtering
 const graphFilterTypes = ref<Set<string>>(new Set(['summary', 'entity', 'concept', 'synthesis', 'comparison', 'index', 'log']))
+
+watch(showGlobalIssuesDrawer, async (val) => {
+  if (val) {
+    try {
+      const res = await listWikiIssues(props.knowledgeBaseId, '', 'pending')
+      globalIssues.value = (res as any).data || res as any || []
+    } catch (e) {
+      console.error('Failed to load global wiki issues:', e)
+      globalIssues.value = []
+    }
+  }
+})
+
+async function navigateToSlugAndFix(slug: string) {
+  showGlobalIssuesDrawer.value = false
+  if (props.view === 'graph') {
+    handleGraphSearchSelect(slug)
+  } else {
+    await navigateToSlug(slug)
+    showIssuesBox.value = true
+  }
+}
+
+async function handleGlobalIssueIgnore(issueId: string) {
+  try {
+    await updateWikiIssueStatus(props.knowledgeBaseId, issueId, 'ignored')
+    // Refresh list
+    const res = await listWikiIssues(props.knowledgeBaseId, '', 'pending')
+    globalIssues.value = (res as any).data || res as any || []
+    loadStats()
+  } catch (e) {
+    console.error('Failed to update issue status:', e)
+  }
+}
 
 function toggleGraphFilterType(type: string) {
   const newSet = new Set(graphFilterTypes.value)
@@ -646,6 +824,18 @@ async function loadGraph() {
   }
 }
 
+async function loadPageIssues(slug: string) {
+  try {
+    const res = await listWikiIssues(props.knowledgeBaseId, slug, 'pending')
+    pageIssues.value = (res as any).data || res as any || []
+    showIssuesBox.value = false
+  } catch (e) {
+    console.error('Failed to load wiki issues:', e)
+    pageIssues.value = []
+    showIssuesBox.value = false
+  }
+}
+
 async function selectPage(page: WikiPage) {
   try {
     if (selectedPage.value && selectedPage.value.id !== page.id) {
@@ -653,6 +843,7 @@ async function selectPage(page: WikiPage) {
     }
     const res = await getWikiPage(props.knowledgeBaseId, page.slug)
     selectedPage.value = (res as any).data || res as any
+    await loadPageIssues(page.slug)
   } catch (e) {
     console.error('Failed to load wiki page:', e)
   }
@@ -665,6 +856,7 @@ async function navigateToSlug(slug: string) {
     }
     const res = await getWikiPage(props.knowledgeBaseId, slug)
     selectedPage.value = (res as any).data || res as any
+    await loadPageIssues(slug)
   } catch (e) {
     console.error(`Failed to navigate to ${slug}:`, e)
   }
@@ -674,7 +866,87 @@ function goBack() {
   const prev = navHistory.value.pop()
   if (prev) {
     selectedPage.value = prev
+    loadPageIssues(prev.slug)
   }
+}
+
+async function handleIssueIgnore(issueId: string) {
+  try {
+    await updateWikiIssueStatus(props.knowledgeBaseId, issueId, 'ignored')
+    if (selectedPage.value) {
+      await loadPageIssues(selectedPage.value.slug)
+    }
+  } catch (e) {
+    console.error('Failed to update issue status:', e)
+  }
+}
+
+async function startFixSession(prompt: string) {
+  settingsStore.selectAgent("builtin-wiki-fixer", null)
+  
+  const sessionData: any = {
+    agent_config: {
+      enabled: true,
+      max_iterations: 30,
+      temperature: 0.7,
+      knowledge_bases: [props.knowledgeBaseId],
+      knowledge_ids: [],
+      allowed_tools: ["thinking", "wiki_read_page", "wiki_search", "wiki_read_source_doc", "wiki_edit_page", "wiki_read_issue", "wiki_update_issue"]
+    }
+  }
+
+  try {
+    const res = await createSessions(sessionData)
+    if (res && (res as any).data && (res as any).data.id) {
+      const sessionId = (res as any).data.id
+      const now = new Date().toISOString()
+      
+      menuStore.updataMenuChildren({
+        title: t('knowledgeEditor.wikiBrowser.fixAssistantTitle'),
+        path: `chat/${sessionId}`,
+        id: sessionId,
+        isMore: false,
+        isNoTitle: true,
+        created_at: now,
+        updated_at: now
+      })
+      
+      menuStore.changeIsFirstSession(true)
+      menuStore.changeFirstQuery(prompt, [], '', [])
+      
+      currentFixSessionId.value = sessionId
+      showFixDrawer.value = true
+      showIssuesBox.value = false // Hide issues box
+    } else {
+      MessagePlugin.error(t('knowledgeEditor.wikiBrowser.fixStartError'))
+    }
+  } catch (e) {
+    console.error('Failed to create fix session', e)
+    MessagePlugin.error(t('knowledgeEditor.wikiBrowser.fixStartError'))
+  }
+}
+
+function triggerFixIssue(issue: WikiPageIssue) {
+  if (!selectedPage.value) return
+  const prompt = t('knowledgeEditor.wikiBrowser.issueFixPromptSingle', {
+    slug: selectedPage.value.slug,
+    type: issue.issue_type,
+    desc: issue.description,
+    id: issue.id
+  })
+  startFixSession(prompt)
+}
+
+function triggerAutoFix() {
+  if (!selectedPage.value || pageIssues.value.length === 0) return
+  let prompt = t('knowledgeEditor.wikiBrowser.issueFixPromptAutoStart', { slug: selectedPage.value.slug }) + '\n\n'
+  
+  pageIssues.value.forEach((issue, idx) => {
+    prompt += `${idx + 1}. [${issue.issue_type}] ${issue.description} (ID: ${issue.id})\n`
+  })
+  
+  prompt += '\n' + t('knowledgeEditor.wikiBrowser.issueFixPromptAutoEnd')
+  startFixSession(prompt)
 }
 
 async function doSearch() {
@@ -1567,6 +1839,28 @@ onUnmounted(() => {
   }
 }
 
+.wiki-global-issues-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--td-warning-color-light);
+  border-radius: 6px;
+  color: var(--td-warning-color-8);
+  font-size: 13px;
+  cursor: pointer;
+  transition: filter 0.2s;
+
+  &:hover {
+    filter: brightness(0.95);
+  }
+
+  .queue-text {
+    line-height: 1.2;
+    font-weight: 500;
+  }
+}
+
 .wiki-page-list {
   flex: 1;
   overflow-y: auto;
@@ -2006,14 +2300,26 @@ onUnmounted(() => {
   height: 100%;
 }
 
-.wiki-graph-search {
+.wiki-graph-search-container {
   position: absolute;
   top: 16px;
   left: 16px;
-  width: 280px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
   z-index: 10;
+  width: 280px;
+}
+
+.wiki-graph-search {
+  width: 100%;
   box-shadow: var(--td-shadow-1);
   border-radius: 4px;
+}
+
+.graph-issues-badge {
+  box-shadow: var(--td-shadow-1);
+  opacity: 0.95;
 }
 
 :deep(.wiki-graph-drawer) {
@@ -2136,5 +2442,171 @@ onUnmounted(() => {
 .node-active-ring {
   transform-origin: 0 0;
   animation: node-active-pulse 1.5s cubic-bezier(0.25, 0.46, 0.45, 0.94) infinite;
+}
+
+// ── Issues Popup ──
+.wiki-issue-trigger {
+  margin-left: 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  user-select: none;
+  
+  &:hover {
+    filter: brightness(0.95);
+  }
+}
+
+.wiki-issue-popup-content {
+  display: flex;
+  flex-direction: column;
+  background: var(--td-bg-color-container);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.wiki-issue-popup-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  background: var(--td-bg-color-secondarycontainer);
+  border-bottom: 1px solid var(--td-component-stroke);
+}
+
+.wiki-issue-popup-title {
+  display: flex;
+  align-items: center;
+  font-weight: 500;
+  font-size: 14px;
+  color: var(--td-text-color-primary);
+  
+  .wiki-issue-popup-icon {
+    color: var(--td-brand-color);
+    margin-right: 8px;
+    font-size: 16px;
+  }
+}
+
+.wiki-issue-popup-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.wiki-issue-popup-item {
+  display: flex;
+  padding: 16px;
+  gap: 12px;
+  border-bottom: 1px solid var(--td-component-stroke);
+  transition: background-color 0.2s ease;
+  
+  &:last-child {
+    border-bottom: none;
+  }
+  
+  &:hover {
+    background: var(--td-bg-color-container-hover);
+  }
+}
+
+.wiki-issue-popup-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.wiki-issue-popup-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.wiki-issue-popup-desc {
+  font-size: 13px;
+  color: var(--td-text-color-primary);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 150px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+/* 优化描述区域的滚动条样式 */
+.wiki-issue-popup-desc::-webkit-scrollbar {
+  width: 4px;
+}
+.wiki-issue-popup-desc::-webkit-scrollbar-thumb {
+  background: var(--td-scrollbar-color);
+  border-radius: 4px;
+}
+.wiki-issue-popup-desc::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.wiki-issue-popup-meta {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 4px;
+}
+
+.wiki-issue-popup-reporter {
+  font-size: 12px;
+  color: var(--td-text-color-placeholder);
+}
+
+.wiki-issue-popup-action {
+  font-size: 12px;
+  color: var(--td-brand-color);
+  cursor: pointer;
+  transition: opacity 0.2s ease;
+  
+  &:hover {
+    opacity: 0.8;
+  }
+}
+</style>
+
+<style lang="less">
+/* Fix Embedded Chat UI (unscoped because drawer attaches to body) */
+.wiki-fix-drawer {
+  .t-drawer__body {
+    padding: 20px !important;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    overflow: hidden;
+  }
+  
+  .chat {
+    max-width: 100% !important;
+    min-width: 100% !important;
+    padding: 0 !important;
+    height: 100% !important;
+    flex: 1 !important;
+    border-radius: 0 !important;
+  }
+  
+  .chat_scroll_box {
+    padding: 0 !important;
+  }
+
+  .chat > .input-container {
+    padding: 16px 0 0 0 !important;
+    box-sizing: border-box;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    overflow-x: hidden;
+  }
+
+  .msg_list {
+    max-width: 100% !important;
+    padding-bottom: 0 !important;
+    margin: 0 !important;
+  }
 }
 </style>

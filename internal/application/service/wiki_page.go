@@ -288,12 +288,16 @@ func (s *wikiPageService) GetStats(ctx context.Context, kbID string) (*types.Wik
 	}
 
 	var pendingTasks int64
+	var pendingIssues int64
 	var isActive bool
 	if s.redisClient != nil {
 		pendingTasks, _ = s.redisClient.LLen(ctx, "wiki:pending:"+kbID).Result()
 		activeFlag, _ := s.redisClient.Exists(ctx, "wiki:active:"+kbID).Result()
 		isActive = activeFlag > 0
 	}
+
+	issues, _ := s.ListIssues(ctx, kbID, "", "pending")
+	pendingIssues = int64(len(issues))
 
 	return &types.WikiStats{
 		TotalPages:    total,
@@ -302,6 +306,7 @@ func (s *wikiPageService) GetStats(ctx context.Context, kbID string) (*types.Wik
 		OrphanCount:   orphans,
 		RecentUpdates: recentPages,
 		PendingTasks:  pendingTasks,
+		PendingIssues: pendingIssues,
 		IsActive:      isActive,
 	}, nil
 }
@@ -497,4 +502,166 @@ func (s *wikiPageService) ListIssues(ctx context.Context, kbID string, slug stri
 // UpdateIssueStatus updates an issue's status
 func (s *wikiPageService) UpdateIssueStatus(ctx context.Context, issueID string, status string) error {
 	return s.repo.UpdateIssueStatus(ctx, issueID, status)
+}
+
+// InjectCrossLinks scans affected pages and injects [[wiki-links]] for mentions
+// of other wiki page titles in the content. Pure text replacement, no LLM call.
+func (s *wikiPageService) InjectCrossLinks(ctx context.Context, kbID string, affectedSlugs []string) {
+	// Build a title→slug lookup from ALL pages in this KB
+	allPages, err := s.ListAllPages(ctx, kbID)
+	if err != nil || len(allPages) < 2 {
+		return
+	}
+
+	type pageRef struct {
+		slug      string
+		matchText string
+	}
+	var allRefs []pageRef
+	for _, p := range allPages {
+		if p.PageType == types.WikiPageTypeIndex || p.PageType == types.WikiPageTypeLog {
+			continue
+		}
+		if p.Title != "" {
+			allRefs = append(allRefs, pageRef{slug: p.Slug, matchText: p.Title})
+		}
+		for _, alias := range p.Aliases {
+			if alias != "" {
+				allRefs = append(allRefs, pageRef{slug: p.Slug, matchText: alias})
+			}
+		}
+	}
+	if len(allRefs) == 0 {
+		return
+	}
+
+	// Sort by title length descending
+	for i := 0; i < len(allRefs); i++ {
+		for j := i + 1; j < len(allRefs); j++ {
+			if len([]rune(allRefs[j].matchText)) > len([]rune(allRefs[i].matchText)) {
+				allRefs[i], allRefs[j] = allRefs[j], allRefs[i]
+			}
+		}
+	}
+
+	affectedSet := make(map[string]bool, len(affectedSlugs))
+	for _, slug := range affectedSlugs {
+		affectedSet[slug] = true
+	}
+
+	var updated int
+	for _, p := range allPages {
+		if !affectedSet[p.Slug] {
+			continue
+		}
+		if p.PageType == types.WikiPageTypeIndex || p.PageType == types.WikiPageTypeLog {
+			continue
+		}
+
+		content := p.Content
+		changed := false
+
+		for _, ref := range allRefs {
+			if ref.slug == p.Slug {
+				continue
+			}
+			if strings.Contains(content, "[["+ref.slug+"|") || strings.Contains(content, "[["+ref.slug+"]]") {
+				continue
+			}
+			if strings.Contains(content, ref.matchText) {
+				content = replaceFirstOutsideLinks(content, ref.matchText, "[["+ref.slug+"|"+ref.matchText+"]]")
+				changed = true
+			}
+		}
+
+		if changed {
+			p.Content = content
+			if _, err := s.UpdatePage(ctx, p); err != nil {
+				logger.Warnf(ctx, "wiki: cross-link injection failed for %s: %v", p.Slug, err)
+			} else {
+				updated++
+			}
+		}
+	}
+
+	if updated > 0 {
+		logger.Infof(ctx, "wiki: injected cross-links in %d pages", updated)
+	}
+}
+
+// RebuildIndexPage regenerates the index page directory.
+func (s *wikiPageService) RebuildIndexPage(ctx context.Context, kbID string) error {
+	indexPage, err := s.GetIndex(ctx, kbID)
+	if err != nil {
+		return err
+	}
+
+	allPages, err := s.ListAllPages(ctx, kbID)
+	if err != nil {
+		return err
+	}
+
+	typeOrder := []string{
+		types.WikiPageTypeSummary, types.WikiPageTypeEntity, types.WikiPageTypeConcept,
+		types.WikiPageTypeSynthesis, types.WikiPageTypeComparison,
+	}
+	typeLabels := map[string]string{
+		types.WikiPageTypeSummary: "Summary", types.WikiPageTypeEntity: "Entity",
+		types.WikiPageTypeConcept: "Concept", types.WikiPageTypeSynthesis: "Synthesis",
+		types.WikiPageTypeComparison: "Comparison",
+	}
+
+	grouped := make(map[string][]*types.WikiPage)
+	totalPages := 0
+	for _, p := range allPages {
+		if p.PageType == types.WikiPageTypeIndex || p.PageType == types.WikiPageTypeLog {
+			continue
+		}
+		if p.Status == types.WikiPageStatusArchived {
+			continue
+		}
+		grouped[p.PageType] = append(grouped[p.PageType], p)
+		totalPages++
+	}
+
+	var dir strings.Builder
+	for _, pt := range typeOrder {
+		pages := grouped[pt]
+		if len(pages) == 0 {
+			continue
+		}
+		fmt.Fprintf(&dir, "\n## %s (%d)\n\n", typeLabels[pt], len(pages))
+		for _, p := range pages {
+			fmt.Fprintf(&dir, "[[%s]] — %s\n", p.Slug, p.Summary)
+		}
+	}
+	for pt, pages := range grouped {
+		inOrder := false
+		for _, o := range typeOrder {
+			if o == pt {
+				inOrder = true
+				break
+			}
+		}
+		if inOrder || len(pages) == 0 {
+			continue
+		}
+		fmt.Fprintf(&dir, "\n## %s (%d)\n\n", pt, len(pages))
+		for _, p := range pages {
+			fmt.Fprintf(&dir, "[[%s]] — %s\n", p.Slug, p.Summary)
+		}
+	}
+	if totalPages == 0 {
+		dir.WriteString("\n*No wiki pages yet. Upload documents to get started.*\n")
+	}
+
+	intro := indexPage.Summary
+	if intro == "" {
+		intro = "# Wiki Index\n\nThis wiki contains knowledge extracted from uploaded documents.\n"
+		indexPage.Summary = intro
+	}
+
+	indexPage.Content = intro + "\n" + dir.String()
+	_, err = s.UpdatePage(ctx, indexPage)
+	return err
 }

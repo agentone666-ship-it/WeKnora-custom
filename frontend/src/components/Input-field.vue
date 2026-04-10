@@ -1704,17 +1704,16 @@ const getBuiltinAgentNotReadyReasons = (agent: CustomAgent, isAgentMode: boolean
   const reasons: string[] = []
   const config = agent.config || {}
   
-  // 检查对话模型（Summary Model）
-  if (!config.model_id || config.model_id.trim() === '') {
-    reasons.push(t('input.customAgentMissingSummaryModel'))
-  }
+  // 内置智能体会自动回退到租户的默认模型，因此不再在前端强制校验 model_id
   
-  // 检查重排模型（Rerank Model）- 如果使用知识库则需要
-  if (config.kb_selection_mode !== 'none') {
-    if (!config.rerank_model_id || config.rerank_model_id.trim() === '') {
-      reasons.push(t('input.customAgentMissingRerankModel'))
-    }
-  }
+  // 检查重排模型（Rerank Model）- 仅当允许使用 knowledge_search 工具时需要
+  // 内置智能体允许重排模型为空（使用默认配置）
+  // const hasKnowledgeSearchTool = config.allowed_tools && config.allowed_tools.includes('knowledge_search')
+  // if (hasKnowledgeSearchTool) {
+  //   if (!config.rerank_model_id || config.rerank_model_id.trim() === '') {
+  //     reasons.push(t('input.customAgentMissingRerankModel'))
+  //   }
+  // }
   
   // Agent 模式还需要检查允许的工具
   if (isAgentMode) {
@@ -1735,8 +1734,9 @@ const getCustomAgentNotReadyReasons = (agent: CustomAgent): string[] => {
   if (!config.model_id || config.model_id.trim() === '') {
     reasons.push(t('input.customAgentMissingSummaryModel'))
   }
-  // 检查重排模型（Rerank Model）- 如果使用知识库则需要
-  if (config.kb_selection_mode !== 'none') {
+  // 检查重排模型（Rerank Model）- 仅当允许使用 knowledge_search 工具时需要
+  const hasKnowledgeSearchTool = config.allowed_tools && config.allowed_tools.includes('knowledge_search')
+  if (hasKnowledgeSearchTool) {
     if (!config.rerank_model_id || config.rerank_model_id.trim() === '') {
       reasons.push(t('input.customAgentMissingRerankModel'))
     }
@@ -2211,13 +2211,17 @@ const getImgSrc = (url: string) => {
   z-index: 99;
   bottom: 60px;
   left: 50%;
-  transform: translateX(-400px);
+  transform: translateX(-50%);
+  width: 100%;
+  display: flex;
+  justify-content: center;
 }
 
 /* 富文本输入框容器 */
 .rich-input-container {
   position: relative;
-  width: 800px;
+  width: 100%;
+  max-width: 800px;
   background: var(--td-bg-color-container, #FFF);
   border-radius: 12px;
   border: .5px solid var(--td-component-border, #E7E7E7);

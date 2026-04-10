@@ -52,6 +52,13 @@ type WikiPageService interface {
 	// RebuildLinks re-parses all pages and rebuilds bidirectional link references.
 	RebuildLinks(ctx context.Context, kbID string) error
 
+	// InjectCrossLinks scans specified pages and injects [[wiki-links]] for mentions
+	// of other wiki page titles/aliases in the content.
+	InjectCrossLinks(ctx context.Context, kbID string, affectedSlugs []string)
+
+	// RebuildIndexPage regenerates the index page.
+	RebuildIndexPage(ctx context.Context, kbID string) error
+
 	// ListAllPages retrieves all wiki pages in a knowledge base without pagination.
 	// Used for index rebuild, graph generation, cross-link injection, etc.
 	ListAllPages(ctx context.Context, kbID string) ([]*types.WikiPage, error)

@@ -369,9 +369,17 @@ func (e *AgentEngine) buildMessagesWithLLMContext(
 	}
 
 	if len(llmContext) > 0 {
-		// Redact KB tool results from previous turns to prevent the LLM
-		// from reusing stale retrieval data when the KB has been modified.
-		sanitized := redactHistoryKBResults(llmContext)
+		var sanitized []chat.Message
+		if e.config.RetainRetrievalHistory {
+			sanitized = llmContext
+			logger.Infof(context.Background(), "Retaining full retrieval history in context (RetainRetrievalHistory=true)")
+		} else {
+			// Redact KB tool results from previous turns to prevent the LLM
+			// from reusing stale retrieval data when the KB has been modified.
+			sanitized = redactHistoryKBResults(llmContext)
+			logger.Infof(context.Background(), "Added %d history messages to context (KB tool results redacted)", len(llmContext))
+		}
+
 		for _, msg := range sanitized {
 			if msg.Role == "system" {
 				continue
@@ -380,7 +388,6 @@ func (e *AgentEngine) buildMessagesWithLLMContext(
 				messages = append(messages, msg)
 			}
 		}
-		logger.Infof(context.Background(), "Added %d history messages to context (KB tool results redacted)", len(llmContext))
 	}
 
 	// Build user message with runtime context safety tag

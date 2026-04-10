@@ -456,6 +456,18 @@ func (s *agentService) registerTools(
 			toolToRegister = tools.NewWikiReadSourceDocTool(s.knowledgeService, s.chunkService)
 		case tools.ToolWikiFlagIssue:
 			toolToRegister = tools.NewWikiFlagIssueTool(s.wikiPageService, wikiKBIDs)
+		case tools.ToolWikiReadIssue:
+			toolToRegister = tools.NewWikiReadIssueTool(s.wikiPageService, wikiKBIDs)
+		case tools.ToolWikiUpdateIssue:
+			toolToRegister = tools.NewWikiUpdateIssueTool(s.wikiPageService, wikiKBIDs)
+		case tools.ToolWikiWritePage:
+			toolToRegister = tools.NewWikiWritePageTool(s.wikiPageService, wikiKBIDs)
+		case tools.ToolWikiReplaceText:
+			toolToRegister = tools.NewWikiReplaceTextTool(s.wikiPageService, wikiKBIDs)
+		case tools.ToolWikiRenamePage:
+			toolToRegister = tools.NewWikiRenamePageTool(s.wikiPageService, wikiKBIDs)
+		case tools.ToolWikiDeletePage:
+			toolToRegister = tools.NewWikiDeletePageTool(s.wikiPageService, wikiKBIDs)
 
 		default:
 			logger.Warnf(ctx, "Unknown tool: %s", toolName)
