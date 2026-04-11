@@ -1,28 +1,28 @@
 class WeknoraLite < Formula
   desc "Knowledge base management system — single-binary Lite edition"
   homepage "https://github.com/Tencent/WeKnora"
-  version "0.3.6-test2"
+  version "0.3.6-test"
   license "Apache-2.0"
 
   on_macos do
     on_arm do
       url "https://github.com/Tencent/WeKnora/releases/download/v#{version}/WeKnora-lite_v#{version}_darwin_arm64.tar.gz"
-      sha256 "16958263919f365a08a41765cd8d02bae5b370e346d2ee4fa233f9146efc25f2"
+      sha256 "a747142048175ca8d09b30a148a2ad857fe377050e584f6ea252ea3d17e950be"
     end
     on_intel do
       url "https://github.com/Tencent/WeKnora/releases/download/v#{version}/WeKnora-lite_v#{version}_darwin_amd64.tar.gz"
-      sha256 "a669f7c50044646d67d323a3c8d2315129d2fd7bdd18f9a0e1ec1661bce39f13"
+      sha256 "73cfb70e7bda0c4ee892755cbbe5c71e2b3a95f7540c1fe53c046538c6183f6f"
     end
   end
 
   on_linux do
     on_arm do
       url "https://github.com/Tencent/WeKnora/releases/download/v#{version}/WeKnora-lite_v#{version}_linux_arm64.tar.gz"
-      sha256 "3132f4e8f38f1ad0fc32c2121a680a39f698751c1f0dab63245d64534d9d87bb"
+      sha256 "1d89f68ab0a838e841280d1fd3d4396c5b84aaa9541aabf8cbffd0553e6e7c07"
     end
     on_intel do
       url "https://github.com/Tencent/WeKnora/releases/download/v#{version}/WeKnora-lite_v#{version}_linux_amd64.tar.gz"
-      sha256 "96541218f24f869a1706fb3df05a655fae73d6643aa2cb8d8cb4d8e5a9c110ed"
+      sha256 "7904fbcb4599441e0f27067c835dede44ce67054134b5e6efc62d1bc62089a98"
     end
   end
 
