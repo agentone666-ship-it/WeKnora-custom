@@ -7,22 +7,22 @@ class WeknoraLite < Formula
   on_macos do
     on_arm do
       url "https://github.com/Tencent/WeKnora/releases/download/v#{version}/WeKnora-lite_v#{version}_darwin_arm64.tar.gz"
-      sha256 "a747142048175ca8d09b30a148a2ad857fe377050e584f6ea252ea3d17e950be"
+      sha256 "5d7f4b82a82fce4dfbfd2a1045334d4cd61983c846f20413e69510716a4efb78"
     end
     on_intel do
       url "https://github.com/Tencent/WeKnora/releases/download/v#{version}/WeKnora-lite_v#{version}_darwin_amd64.tar.gz"
-      sha256 "73cfb70e7bda0c4ee892755cbbe5c71e2b3a95f7540c1fe53c046538c6183f6f"
+      sha256 "ee6a44ba2dfbef0cf14280f1942100f75a7eae6acb00b784ed1e8c9368fb9b0c"
     end
   end
 
   on_linux do
     on_arm do
       url "https://github.com/Tencent/WeKnora/releases/download/v#{version}/WeKnora-lite_v#{version}_linux_arm64.tar.gz"
-      sha256 "1d89f68ab0a838e841280d1fd3d4396c5b84aaa9541aabf8cbffd0553e6e7c07"
+      sha256 "55deb1d2ff33fa7f0b2775a52806768c7eae73f5a69c1ff381211d6c1a40fbf5"
     end
     on_intel do
       url "https://github.com/Tencent/WeKnora/releases/download/v#{version}/WeKnora-lite_v#{version}_linux_amd64.tar.gz"
-      sha256 "7904fbcb4599441e0f27067c835dede44ce67054134b5e6efc62d1bc62089a98"
+      sha256 "ad99d6e0c6b421ba31325a4eb1d580a69bc15a5f1d79d0d68a648bdfea18f9c1"
     end
   end
 
