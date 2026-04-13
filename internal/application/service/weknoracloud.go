@@ -7,29 +7,28 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Tencent/WeKnora/internal/infrastructure/crypto"
 	"github.com/Tencent/WeKnora/internal/models/provider"
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
+	"github.com/Tencent/WeKnora/internal/utils"
 	"github.com/google/uuid"
 )
+
+const WeKnoraCloudAPI = "https://weknora.woa.com/platform/openapi"
 
 type weKnoraCloudService struct {
 	repo       interfaces.ModelRepository
 	tenantRepo interfaces.TenantRepository
-	cryptoSvc  *crypto.CryptoService
 }
 
 // NewWeKnoraCloudService 构造 WeKnoraCloudService
 func NewWeKnoraCloudService(
 	repo interfaces.ModelRepository,
 	tenantRepo interfaces.TenantRepository,
-	cryptoSvc *crypto.CryptoService,
 ) interfaces.WeKnoraCloudService {
 	return &weKnoraCloudService{
 		repo:       repo,
 		tenantRepo: tenantRepo,
-		cryptoSvc:  cryptoSvc,
 	}
 }
 
@@ -99,9 +98,11 @@ func (s *weKnoraCloudService) prepareInitialize(ctx context.Context, appID, appS
 	}
 
 	// Step 2: Encrypt appSecret
-	encryptedSecret, err := s.cryptoSvc.EncryptString(appSecret)
-	if err != nil {
-		return nil, fmt.Errorf("encrypt AppSecret failed: %w", err)
+	encryptedSecret := appSecret
+	if key := utils.GetAESKey(); key != nil {
+		if encrypted, err := utils.EncryptAESGCM(appSecret, key); err == nil {
+			encryptedSecret = encrypted
+		}
 	}
 
 	// Step 3: Get tenantID and take snapshot
@@ -296,18 +297,19 @@ func (s *weKnoraCloudService) CheckStatus(ctx context.Context) (*types.WeKnoraCl
 		return &types.WeKnoraCloudStatusResult{
 			HasModels:   true,
 			NeedsReinit: true,
-			Reason:      "WeKnoraCloud 凭证为空，请重新填写 APPID 和 API Key",
+			Reason:      fmt.Sprintf("WeKnoraCloud 凭证为空，请重新填写 APPID 和 API Key, 请前往：%s", WeKnoraCloudAPI),
 		}, nil
 	}
 
 	// Try to decrypt the API key
-	_, decErr := s.cryptoSvc.DecryptString(tenant.ParserEngineConfig.DocreaderAPIKey)
-	if decErr != nil {
-		return &types.WeKnoraCloudStatusResult{
-			HasModels:   true,
-			NeedsReinit: true,
-			Reason:      "WeKnoraCloud 凭证解密失败（服务重启后加密密钥已变更），请重新填写 APPID 和 API Key",
-		}, nil
+	if key := utils.GetAESKey(); key != nil {
+		if _, err := utils.DecryptAESGCM(tenant.ParserEngineConfig.DocreaderAPIKey, key); err != nil {
+			return &types.WeKnoraCloudStatusResult{
+				HasModels:   true,
+				NeedsReinit: true,
+				Reason:      "WeKnoraCloud 凭证解密失败（服务重启后加密密钥已变更），请重新填写 APPID 和 API Key",
+			}, nil
+		}
 	}
 
 	return &types.WeKnoraCloudStatusResult{HasModels: true, NeedsReinit: false}, nil

@@ -13,7 +13,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Tencent/WeKnora/internal/infrastructure/crypto"
 	"github.com/Tencent/WeKnora/internal/logger"
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
@@ -34,13 +33,12 @@ type ListTenantsParams struct {
 
 // tenantService implements the TenantService interface
 type tenantService struct {
-	repo      interfaces.TenantRepository // Repository for tenant data operations
-	cryptoSvc *crypto.CryptoService
+	repo interfaces.TenantRepository // Repository for tenant data operations
 }
 
 // NewTenantService creates a new tenant service instance
-func NewTenantService(repo interfaces.TenantRepository, cryptoSvc *crypto.CryptoService) interfaces.TenantService {
-	return &tenantService{repo: repo, cryptoSvc: cryptoSvc}
+func NewTenantService(repo interfaces.TenantRepository) interfaces.TenantService {
+	return &tenantService{repo: repo}
 }
 
 // CreateTenant creates a new tenant
@@ -353,11 +351,12 @@ func (s *tenantService) GetDocreaderCredentials(ctx context.Context) *types.Docr
 			if appID == "" || tenant.ParserEngineConfig.DocreaderAPIKey == "" {
 				return nil
 			}
-			apiKey, err := s.cryptoSvc.DecryptString(tenant.ParserEngineConfig.DocreaderAPIKey)
-			if err != nil || apiKey == "" {
-				return nil
+			if key := utils.GetAESKey(); key != nil {
+				if encrypted, err := utils.DecryptAESGCM(tenant.ParserEngineConfig.DocreaderAPIKey, key); err == nil {
+					return &types.DocreaderCredentials{AppID: appID, APIKey: encrypted}
+				}
 			}
-			return &types.DocreaderCredentials{AppID: appID, APIKey: apiKey}
+			return &types.DocreaderCredentials{AppID: appID, APIKey: tenant.ParserEngineConfig.DocreaderAPIKey}
 		}
 	}
 
@@ -372,10 +371,12 @@ func (s *tenantService) GetDocreaderCredentials(ctx context.Context) *types.Docr
 	if err == nil && tenant != nil && tenant.ParserEngineConfig != nil {
 		appID := strings.TrimSpace(tenant.ParserEngineConfig.DocreaderAppID)
 		if appID != "" && tenant.ParserEngineConfig.DocreaderAPIKey != "" {
-			apiKey, err := s.cryptoSvc.DecryptString(tenant.ParserEngineConfig.DocreaderAPIKey)
-			if err == nil && apiKey != "" {
-				return &types.DocreaderCredentials{AppID: appID, APIKey: apiKey}
+			if key := utils.GetAESKey(); key != nil {
+				if encrypted, err := utils.DecryptAESGCM(tenant.ParserEngineConfig.DocreaderAPIKey, key); err == nil {
+					return &types.DocreaderCredentials{AppID: appID, APIKey: encrypted}
+				}
 			}
+			return &types.DocreaderCredentials{AppID: appID, APIKey: tenant.ParserEngineConfig.DocreaderAPIKey}
 		}
 	}
 

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 
-	"github.com/Tencent/WeKnora/internal/infrastructure/crypto"
 	"github.com/Tencent/WeKnora/internal/logger"
 	"github.com/Tencent/WeKnora/internal/models/asr"
 	"github.com/Tencent/WeKnora/internal/models/chat"
@@ -14,6 +13,7 @@ import (
 	"github.com/Tencent/WeKnora/internal/models/vlm"
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
+	"github.com/Tencent/WeKnora/internal/utils"
 )
 
 // ErrModelNotFound is returned when a model cannot be found in the repository
@@ -24,20 +24,17 @@ type modelService struct {
 	repo          interfaces.ModelRepository
 	ollamaService *ollama.OllamaService
 	pooler        embedding.EmbedderPooler
-	cryptoSvc     *crypto.CryptoService
 }
 
 // NewModelService creates a new model service instance
 func NewModelService(repo interfaces.ModelRepository,
 	ollamaService *ollama.OllamaService,
 	pooler embedding.EmbedderPooler,
-	cryptoSvc *crypto.CryptoService,
 ) interfaces.ModelService {
 	return &modelService{
 		repo:          repo,
 		ollamaService: ollamaService,
 		pooler:        pooler,
-		cryptoSvc:     cryptoSvc,
 	}
 }
 
@@ -46,11 +43,12 @@ func (s *modelService) decryptAppSecret(encrypted string) string {
 	if encrypted == "" {
 		return encrypted
 	}
-	plain, err := s.cryptoSvc.DecryptString(encrypted)
-	if err != nil {
-		return ""
+	if key := utils.GetAESKey(); key != nil {
+		if encrypted, err := utils.DecryptAESGCM(encrypted, key); err == nil {
+			return encrypted
+		}
 	}
-	return plain
+	return encrypted
 }
 
 // CreateModel creates a new model in the repository

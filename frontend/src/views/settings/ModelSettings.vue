@@ -28,7 +28,7 @@
         <t-icon name="error-circle" style="font-size: 16px; color: #f97316; flex-shrink: 0; margin-top: 1px;" />
         <div style="font-size: 13px; color: #9a3412; line-height: 1.5;">
           <strong>WeKnoraCloud 凭证已失效</strong><br />
-          {{ weKnoraCloudReinitReason || '服务重启后加密密钥已变更，已保存的凭证无法解密。' }}请重新填写 APPID 和 APPSECRET 并点击"保存并初始化"以恢复服务。
+          {{ weKnoraCloudReinitReason || '服务重启后加密密钥已变更，已保存的凭证无法解密。' }}
         </div>
       </div>
       <div class="weknoracloud-config-card" style="background: var(--td-bg-color-container); border: 1px solid var(--td-component-stroke); border-radius: 8px; padding: 20px;">
