@@ -39,10 +39,6 @@ func newOSSClient(endpoint, region, accessKey, secretKey string) (*s3.Client, er
 	cfg, err := config.LoadDefaultConfig(context.Background(),
 		config.WithRegion(region),
 		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(accessKey, secretKey, "")),
-		// OSS S3-compatible API does not support AWS-specific checksum headers.
-		// Disable automatic checksum calculation/validation to prevent signature mismatch (403).
-		config.WithRequestChecksumCalculation(aws.RequestChecksumCalculationWhenRequired),
-		config.WithResponseChecksumValidation(aws.ResponseChecksumValidationWhenRequired),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
@@ -50,7 +46,7 @@ func newOSSClient(endpoint, region, accessKey, secretKey string) (*s3.Client, er
 
 	client := s3.NewFromConfig(cfg, func(o *s3.Options) {
 		o.BaseEndpoint = aws.String(endpoint)
-		o.UsePathStyle = true
+		o.UsePathStyle = false
 	})
 
 	return client, nil
