@@ -169,6 +169,7 @@ func BuildContainer(container *dig.Container) *dig.Container {
 	must(container.Provide(service.NewDatasetService))
 	must(container.Provide(service.NewEvaluationService))
 	must(container.Provide(service.NewUserService))
+	must(container.Provide(service.NewWeKnoraCloudService))
 
 	// Extract services - register individual extracters with names
 	must(container.Provide(service.NewChunkExtractService, dig.Name("chunkExtractor")))
@@ -269,6 +270,7 @@ func BuildContainer(container *dig.Container) *dig.Container {
 	must(container.Provide(imPkg.NewService))
 	must(container.Invoke(registerIMAdapterFactories))
 	must(container.Provide(handler.NewIMHandler))
+	must(container.Provide(handler.NewWeKnoraCloudHandler))
 	logger.Debugf(ctx, "[Container] HTTP handlers registered")
 
 	// Router configuration
@@ -407,7 +409,7 @@ func initDatabase(cfg *config.Config) (*gorm.DB, error) {
 			dbPath = "./data/weknora.db"
 		}
 		if dir := filepath.Dir(dbPath); dir != "." && dir != "" {
-			if err := os.MkdirAll(dir, 0755); err != nil {
+			if err := os.MkdirAll(dir, 0o755); err != nil {
 				return nil, fmt.Errorf("failed to create SQLite data directory %s: %w", dir, err)
 			}
 		}
@@ -1079,6 +1081,7 @@ func registerIMAdapterFactories(imService *imPkg.Service) {
 				getString(creds, "token"),
 				getString(creds, "encoding_aes_key"),
 				corpAgentID,
+				getString(creds, "api_base_url"),
 			)
 			if err != nil {
 				return nil, nil, err
@@ -1086,12 +1089,16 @@ func registerIMAdapterFactories(imService *imPkg.Service) {
 			return adapter, nil, nil
 
 		case "websocket":
-			client := wecom.NewLongConnClient(
+			client, err := wecom.NewLongConnClient(
 				getString(creds, "bot_id"),
 				getString(creds, "bot_secret"),
+				getString(creds, "ws_endpoint"),
 				getString(creds, "bot_name"),
 				msgHandler,
 			)
+			if err != nil {
+				return nil, nil, err
+			}
 
 			wsCtx, wsCancel := context.WithCancel(context.Background())
 			go func() {

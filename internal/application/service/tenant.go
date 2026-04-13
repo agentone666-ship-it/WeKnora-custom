@@ -342,3 +342,43 @@ func (s *tenantService) GetTenantByIDForUser(ctx context.Context, tenantID uint6
 
 	return tenant, nil
 }
+
+func (s *tenantService) GetDocreaderCredentials(ctx context.Context) *types.DocreaderCredentials {
+	// Try to get tenant info directly first
+	if tenant, ok := types.TenantInfoFromContext(ctx); ok {
+		if tenant.ParserEngineConfig != nil {
+			appID := strings.TrimSpace(tenant.ParserEngineConfig.DocreaderAppID)
+			if appID == "" || tenant.ParserEngineConfig.DocreaderAPIKey == "" {
+				return nil
+			}
+			if key := utils.GetAESKey(); key != nil {
+				if encrypted, err := utils.DecryptAESGCM(tenant.ParserEngineConfig.DocreaderAPIKey, key); err == nil {
+					return &types.DocreaderCredentials{AppID: appID, APIKey: encrypted}
+				}
+			}
+			return &types.DocreaderCredentials{AppID: appID, APIKey: tenant.ParserEngineConfig.DocreaderAPIKey}
+		}
+	}
+
+	// If no tenant info in context, try to get tenant ID and load tenant
+	tenantID, ok := types.TenantIDFromContext(ctx)
+	if !ok {
+		return nil
+	}
+
+	// Load tenant from repo if we only have tenantID
+	tenant, err := s.repo.GetTenantByID(ctx, tenantID)
+	if err == nil && tenant != nil && tenant.ParserEngineConfig != nil {
+		appID := strings.TrimSpace(tenant.ParserEngineConfig.DocreaderAppID)
+		if appID != "" && tenant.ParserEngineConfig.DocreaderAPIKey != "" {
+			if key := utils.GetAESKey(); key != nil {
+				if encrypted, err := utils.DecryptAESGCM(tenant.ParserEngineConfig.DocreaderAPIKey, key); err == nil {
+					return &types.DocreaderCredentials{AppID: appID, APIKey: encrypted}
+				}
+			}
+			return &types.DocreaderCredentials{AppID: appID, APIKey: tenant.ParserEngineConfig.DocreaderAPIKey}
+		}
+	}
+
+	return nil
+}
