@@ -562,6 +562,7 @@ export default {
       requestFailed: "请求失败",
       cos: "腾讯云 COS",
       tos: "火山引擎 TOS",
+      oss: "阿里云 OSS",
     },
   },
   webSearchSettings: {

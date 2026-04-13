@@ -708,6 +708,7 @@ export default {
       requestFailed: 'Request failed',
       cos: 'Tencent Cloud COS',
       tos: 'Volcengine TOS',
+      oss: 'Alibaba Cloud OSS',
     },
   },
   webSearchSettings: {
