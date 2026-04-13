@@ -10,6 +10,11 @@ from typing import Dict, Optional
 from minio import Minio
 from qcloud_cos import CosConfig, CosS3Client
 
+try:
+    import oss2
+except ImportError:
+    oss2 = None  # type: ignore[assignment]
+
 from docreader.utils import endecode
 
 logger = logging.getLogger(__name__)
@@ -232,6 +237,91 @@ class MinioStorage(Storage):
             return ""
 
 
+class OssStorage(Storage):
+    """Alibaba Cloud OSS storage implementation"""
+
+    def __init__(self, storage_config: Optional[Dict] = None):
+        self.storage_config = storage_config
+        self.bucket, self.endpoint, self.prefix = self._init_oss_bucket()
+
+    def _init_oss_bucket(self):
+        try:
+            sc = self.storage_config
+            access_key = _cfg(sc, "access_key", "OSS_ACCESS_KEY")
+            secret_key = _cfg(sc, "secret_key", "OSS_SECRET_KEY")
+            endpoint_raw = _cfg(sc, "endpoint", "OSS_ENDPOINT")
+            bucket_name = _cfg(sc, "bucket_name", "OSS_BUCKET_NAME")
+            prefix_raw = _cfg(sc, "path_prefix", "OSS_PATH_PREFIX")
+
+            if not all([access_key, secret_key, endpoint_raw, bucket_name]):
+                logger.error(
+                    "Incomplete OSS configuration: "
+                    "access_key=%s, endpoint=%s, bucket=%s",
+                    bool(access_key), endpoint_raw, bucket_name,
+                )
+                return None, None, None
+
+            # oss2 requires endpoint to include the scheme (http:// or https://)
+            if not endpoint_raw.startswith(("http://", "https://")):
+                endpoint_raw = f"https://{endpoint_raw}"
+
+            auth = oss2.Auth(access_key, secret_key)
+            bucket = oss2.Bucket(auth, endpoint_raw, bucket_name)
+
+            # Verify bucket exists, create if missing
+            try:
+                bucket.get_bucket_info()
+            except oss2.exceptions.NoSuchBucket:
+                logger.info("OSS bucket %s not found, creating...", bucket_name)
+                bucket.create_bucket(oss2.models.BUCKET_ACL_PUBLIC_READ)
+
+            prefix = prefix_raw.strip().strip("/") if prefix_raw else ""
+            return bucket, endpoint_raw, prefix
+
+        except Exception as e:
+            logger.error("Failed to initialize OSS client: %s", e)
+            return None, None, None
+
+    def _get_download_url(self, object_key: str) -> str:
+        return f"{self.endpoint}/{self.bucket.bucket_name}/{object_key}"
+
+    def upload_file(self, file_path: str) -> str:
+        try:
+            if not self.bucket:
+                return ""
+            file_ext = os.path.splitext(file_path)[1]
+            object_key = (
+                f"{self.prefix}/images/{uuid.uuid4().hex}{file_ext}"
+                if self.prefix
+                else f"images/{uuid.uuid4().hex}{file_ext}"
+            )
+            self.bucket.put_object_from_file(object_key, file_path)
+            file_url = self._get_download_url(object_key)
+            logger.info("OSS upload_file ok: %s", file_url)
+            return file_url
+        except Exception as e:
+            logger.error("OSS upload_file failed: %s", e)
+            return ""
+
+    def upload_bytes(self, content: bytes, file_ext: str = ".png") -> str:
+        try:
+            if not self.bucket:
+                return ""
+            object_key = (
+                f"{self.prefix}/images/{uuid.uuid4().hex}{file_ext}"
+                if self.prefix
+                else f"images/{uuid.uuid4().hex}{file_ext}"
+            )
+            self.bucket.put_object(object_key, content)
+            file_url = self._get_download_url(object_key)
+            logger.info("OSS upload_bytes ok: %s", file_url)
+            return file_url
+        except Exception as e:
+            logger.error("OSS upload_bytes failed: %s", e)
+            traceback.print_exc()
+            return ""
+
+
 class LocalStorage(Storage):
     """Local file system storage implementation.
 
@@ -297,7 +387,7 @@ def create_storage(storage_config: Optional[Dict[str, str]] = None) -> Storage:
     """Create a storage instance based on storage_config dict.
 
     The ``provider`` key in storage_config determines the backend:
-      minio, cos, local, base64.
+      minio, cos, oss, local, base64.
     Falls back to STORAGE_TYPE env var, then ``local``.
     """
     storage_type = ""
@@ -315,6 +405,8 @@ def create_storage(storage_config: Optional[Dict[str, str]] = None) -> Storage:
         return MinioStorage(storage_config)
     elif storage_type == "cos":
         return CosStorage(storage_config)
+    elif storage_type == "oss":
+        return OssStorage(storage_config)
     elif storage_type == "local":
         return LocalStorage(storage_config)
     elif storage_type == "base64":
