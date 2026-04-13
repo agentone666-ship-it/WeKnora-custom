@@ -1059,6 +1059,7 @@ func registerIMAdapterFactories(imService *imPkg.Service) {
 				getString(creds, "token"),
 				getString(creds, "encoding_aes_key"),
 				corpAgentID,
+				getString(creds, "api_base_url"),
 			)
 			if err != nil {
 				return nil, nil, err
@@ -1066,12 +1067,16 @@ func registerIMAdapterFactories(imService *imPkg.Service) {
 			return adapter, nil, nil
 
 		case "websocket":
-			client := wecom.NewLongConnClient(
+			client, err := wecom.NewLongConnClient(
 				getString(creds, "bot_id"),
 				getString(creds, "bot_secret"),
+				getString(creds, "ws_endpoint"),
 				getString(creds, "bot_name"),
 				msgHandler,
 			)
+			if err != nil {
+				return nil, nil, err
+			}
 
 			wsCtx, wsCancel := context.WithCancel(context.Background())
 			go func() {
