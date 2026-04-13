@@ -688,7 +688,8 @@ export default {
       unknownError: 'Неизвестная ошибка',
       requestFailed: 'Ошибка запроса',
       cos: 'Tencent Cloud COS',
-      tos: 'Volcengine TOS'
+      tos: 'Volcengine TOS',
+      oss: 'Alibaba Cloud OSS',
     }
   },
   webSearchSettings: {

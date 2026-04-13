@@ -565,6 +565,7 @@ export default {
       requestFailed: '요청 실패',
       cos: 'Tencent Cloud COS',
       tos: 'Volcengine TOS',
+      oss: 'Alibaba Cloud OSS',
     },
   },
   webSearchSettings: {
