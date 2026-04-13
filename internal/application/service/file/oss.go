@@ -22,7 +22,7 @@ import (
 )
 
 // ossFileService implements the FileService interface for Aliyun OSS
-// using the S3-compatible protocol with path-style addressing.
+// using the S3-compatible protocol with virtual-hosted style addressing.
 type ossFileService struct {
 	client         *s3.Client
 	tempClient     *s3.Client
@@ -34,11 +34,14 @@ type ossFileService struct {
 const ossScheme = "oss://"
 
 // newOSSClient creates a bare s3.Client configured for OSS S3-compatible mode.
-// OSS always uses path-style addressing.
+// OSS uses virtual-hosted style addressing and does not support aws-chunked encoding.
 func newOSSClient(endpoint, region, accessKey, secretKey string) (*s3.Client, error) {
 	cfg, err := config.LoadDefaultConfig(context.Background(),
 		config.WithRegion(region),
 		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(accessKey, secretKey, "")),
+		// Disable automatic aws-chunked encoding — OSS does not support it.
+		config.WithRequestChecksumCalculation(aws.RequestChecksumCalculationWhenRequired),
+		config.WithResponseChecksumValidation(aws.ResponseChecksumValidationWhenRequired),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
@@ -202,11 +205,10 @@ func (s *ossFileService) SaveFile(ctx context.Context,
 	}
 
 	_, err = s.client.PutObject(ctx, &s3.PutObjectInput{
-		Bucket:        aws.String(s.bucketName),
-		Key:           aws.String(objectName),
-		Body:          src,
-		ContentLength: aws.Int64(file.Size),
-		ContentType:   aws.String(contentType),
+		Bucket:      aws.String(s.bucketName),
+		Key:         aws.String(objectName),
+		Body:        src,
+		ContentType: aws.String(contentType),
 	})
 	if err != nil {
 		return "", fmt.Errorf("failed to upload file to OSS: %w", err)
@@ -224,17 +226,15 @@ func (s *ossFileService) SaveBytes(ctx context.Context, data []byte, tenantID ui
 		return "", fmt.Errorf("invalid file name: %w", err)
 	}
 	ext := filepath.Ext(safeName)
-	reader := bytes.NewReader(data)
 
 	// If requesting temp bucket and it is configured, use it
 	if temp && s.tempClient != nil {
 		objectName := fmt.Sprintf("exports/%d/%s%s", tenantID, uuid.New().String(), ext)
 		_, err := s.tempClient.PutObject(ctx, &s3.PutObjectInput{
-			Bucket:        aws.String(s.tempBucketName),
-			Key:           aws.String(objectName),
-			Body:          reader,
-			ContentLength: aws.Int64(int64(len(data))),
-			ContentType:   aws.String("text/csv; charset=utf-8"),
+			Bucket:      aws.String(s.tempBucketName),
+			Key:         aws.String(objectName),
+			Body:        bytes.NewReader(data),
+			ContentType: aws.String("text/csv; charset=utf-8"),
 		})
 		if err != nil {
 			return "", fmt.Errorf("failed to upload bytes to OSS temp bucket: %w", err)
@@ -245,11 +245,10 @@ func (s *ossFileService) SaveBytes(ctx context.Context, data []byte, tenantID ui
 	// Save to main bucket
 	objectName := fmt.Sprintf("%s%d/exports/%s%s", s.pathPrefix, tenantID, uuid.New().String(), ext)
 	_, err = s.client.PutObject(ctx, &s3.PutObjectInput{
-		Bucket:        aws.String(s.bucketName),
-		Key:           aws.String(objectName),
-		Body:          reader,
-		ContentLength: aws.Int64(int64(len(data))),
-		ContentType:   aws.String("text/csv; charset=utf-8"),
+		Bucket:      aws.String(s.bucketName),
+		Key:         aws.String(objectName),
+		Body:        bytes.NewReader(data),
+		ContentType: aws.String("text/csv; charset=utf-8"),
 	})
 	if err != nil {
 		return "", fmt.Errorf("failed to upload bytes to OSS: %w", err)
