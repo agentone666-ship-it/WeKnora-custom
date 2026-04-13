@@ -34,7 +34,7 @@
               <t-option value="cos" :label="$t('settings.storage.engineCos')" />
               <t-option value="tos" :label="$t('settings.storage.engineTos')" />
               <t-option value="s3" label="AWS S3" />
-              <t-option value="oss" label="阿里云 OSS" />
+              <t-option value="oss" :label="$t('settings.storage.engineOss')" />
             </t-select>
           </div>
         </div>
@@ -428,13 +428,13 @@
         <div class="engine-header">
           <div class="engine-header-info">
             <div class="engine-title-row">
-              <h3>阿里云 OSS</h3>
+              <h3>{{ $t('settings.storage.ossTitle') }}</h3>
               <t-tag theme="success" variant="light" size="small">{{ $t('settings.storage.configurable') }}</t-tag>
             </div>
             <p>
-              阿里云对象存储服务
-              <a class="engine-link" href="https://oss.console.aliyun.com/" target="_blank" rel="noopener">控制台</a>
-              <a class="engine-link" href="https://help.aliyun.com/zh/oss/" target="_blank" rel="noopener">文档</a>
+              {{ $t('settings.storage.ossDesc') }}
+              <a class="engine-link" href="https://oss.console.aliyun.com/" target="_blank" rel="noopener">{{ $t('settings.storage.console') }} ↗</a>
+              <a class="engine-link" href="https://help.aliyun.com/zh/oss/" target="_blank" rel="noopener">{{ $t('settings.storage.docs') }} ↗</a>
             </p>
           </div>
         </div>
@@ -459,7 +459,7 @@
             <label>Access Key</label>
             <t-input
               v-model="config.oss.access_key"
-              :placeholder="$t('settings.storage.tosAccessKeyPlaceholder')"
+              :placeholder="$t('settings.storage.ossAccessKeyPlaceholder')"
               clearable
             />
           </div>
@@ -468,7 +468,7 @@
             <t-input
               v-model="config.oss.secret_key"
               type="password"
-              :placeholder="$t('settings.storage.tosSecretKeyPlaceholder')"
+              :placeholder="$t('settings.storage.ossSecretKeyPlaceholder')"
               clearable
             />
           </div>
@@ -757,6 +757,7 @@ function buildPayload(): StorageEngineConfig {
       secret_key: (config.value.oss?.secret_key || '').trim(),
       bucket_name: (config.value.oss?.bucket_name || '').trim(),
       path_prefix: (config.value.oss?.path_prefix || '').trim(),
+      // Temp bucket fields: not exposed in UI; server manages these independently
       use_temp_bucket: config.value.oss?.use_temp_bucket ?? false,
       temp_bucket_name: (config.value.oss?.temp_bucket_name || '').trim(),
       temp_region: (config.value.oss?.temp_region || '').trim(),
@@ -998,7 +999,7 @@ onMounted(loadAll)
   label {
     font-size: 13px;
     font-weight: 500;
-    color: var(--td-text-color-secondary)555;
+    color: var(--td-text-color-secondary);
   }
 
   &--inline {

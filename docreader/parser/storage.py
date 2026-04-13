@@ -245,6 +245,9 @@ class OssStorage(Storage):
         self.bucket, self.endpoint, self.prefix = self._init_oss_bucket()
 
     def _init_oss_bucket(self):
+        if oss2 is None:
+            logger.error("oss2 package not installed. Install with: pip install oss2")
+            return None, None, None
         try:
             sc = self.storage_config
             access_key = _cfg(sc, "access_key", "OSS_ACCESS_KEY")
@@ -268,12 +271,15 @@ class OssStorage(Storage):
             auth = oss2.Auth(access_key, secret_key)
             bucket = oss2.Bucket(auth, endpoint_raw, bucket_name)
 
-            # Verify bucket exists, create if missing
+            # Verify bucket exists; do NOT auto-create to avoid unintended public-read buckets
             try:
                 bucket.get_bucket_info()
             except oss2.exceptions.NoSuchBucket:
-                logger.info("OSS bucket %s not found, creating...", bucket_name)
-                bucket.create_bucket(oss2.models.BUCKET_ACL_PUBLIC_READ)
+                logger.error(
+                    "OSS bucket %s does not exist. Please create it manually in the console.",
+                    bucket_name,
+                )
+                return None, None, None
 
             prefix = prefix_raw.strip().strip("/") if prefix_raw else ""
             return bucket, endpoint_raw, prefix
@@ -283,7 +289,9 @@ class OssStorage(Storage):
             return None, None, None
 
     def _get_download_url(self, object_key: str) -> str:
-        return f"{self.endpoint}/{self.bucket.bucket_name}/{object_key}"
+        # Use virtual-hosted style URL: https://{bucket}.{endpoint_without_scheme}/{key}
+        endpoint_no_scheme = self.endpoint.removeprefix("https://").removeprefix("http://")
+        return f"https://{self.bucket.bucket_name}.{endpoint_no_scheme}/{object_key}"
 
     def upload_file(self, file_path: str) -> str:
         try:

@@ -629,6 +629,9 @@ func hasGetObjectAction(action interface{}) bool {
 // cosFieldPattern validates COS region and bucket name format to prevent URL injection.
 var cosFieldPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,62}$`)
 
+// ossFieldPattern validates OSS region and bucket name format to prevent URL injection.
+var ossFieldPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,62}$`)
+
 // sanitizeStorageCheckError converts a raw storage connectivity error into a safe
 // user-facing message that does not leak internal network details (hostnames, IPs, ports).
 func sanitizeStorageCheckError(err error) string {
@@ -964,9 +967,19 @@ func (h *SystemHandler) checkOSS(c *gin.Context, ctx context.Context, cfg *types
 		return
 	}
 
-	if blocked, reason := isBlockedStorageEndpoint(endpoint); blocked {
+	// Strip URL scheme before SSRF check — OSS endpoint may include http:// or https://
+	ssrfEndpoint := strings.TrimPrefix(strings.TrimPrefix(endpoint, "https://"), "http://")
+	if blocked, reason := isBlockedStorageEndpoint(ssrfEndpoint); blocked {
 		logger.Warnf(ctx, "Storage check: OSS endpoint blocked by SSRF protection", "endpoint", endpoint)
 		c.JSON(200, gin.H{"code": 0, "data": StorageCheckResponse{OK: false, Message: reason}})
+		return
+	}
+	if !ossFieldPattern.MatchString(cfg.Region) {
+		c.JSON(200, gin.H{"code": 0, "data": StorageCheckResponse{OK: false, Message: "Region 格式不正确，仅允许字母、数字、点、连字符"}})
+		return
+	}
+	if !ossFieldPattern.MatchString(cfg.BucketName) {
+		c.JSON(200, gin.H{"code": 0, "data": StorageCheckResponse{OK: false, Message: "Bucket 名称格式不正确，仅允许字母、数字、点、连字符"}})
 		return
 	}
 
