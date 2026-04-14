@@ -1026,6 +1026,8 @@ func (h *SystemHandler) checkOSS(c *gin.Context, ctx context.Context, cfg *types
 	}
 
 	c.JSON(200, gin.H{"code": 0, "data": StorageCheckResponse{OK: true, Message: fmt.Sprintf("连接成功，Bucket「%s」已确认存在", cfg.BucketName)}})
+}
+
 func (h *SystemHandler) ResolveDocumentReader(ctx context.Context, addr string) interfaces.DocumentReader {
 	if addr == "" {
 		return h.documentReader
