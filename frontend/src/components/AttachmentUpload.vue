@@ -106,6 +106,10 @@ const formatFileSize = (bytes: number): string => {
   return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
 };
 
+const getFileExt = (fileName: string): string => {
+  return fileName.split('.').pop()?.toUpperCase() || 'FILE';
+};
+
 const getFileIcon = (fileName: string): string => {
   const ext = fileName.split('.').pop()?.toLowerCase();
   if (['pdf'].includes(ext || '')) return 'file-pdf';
@@ -147,9 +151,19 @@ defineExpose({
         class="attachment-preview-item"
       >
         <div class="attachment-preview-icon">
-          <t-icon :name="getFileIcon(attachment.name)" />
+          <svg viewBox="0 0 40 48" fill="none" xmlns="http://www.w3.org/2000/svg" width="32" height="38">
+            <rect width="40" height="48" rx="4" fill="#4A90D9"/>
+            <path d="M8 6h16l8 8v28a2 2 0 01-2 2H8a2 2 0 01-2-2V8a2 2 0 012-2z" fill="#5BA3E8"/>
+            <path d="M24 6l8 8h-6a2 2 0 01-2-2V6z" fill="#3A7BC8"/>
+            <rect x="10" y="20" width="20" height="2" rx="1" fill="white" fill-opacity="0.9"/>
+            <rect x="10" y="26" width="20" height="2" rx="1" fill="white" fill-opacity="0.9"/>
+            <rect x="10" y="32" width="14" height="2" rx="1" fill="white" fill-opacity="0.9"/>
+          </svg>
         </div>
-        <div class="attachment-preview-name">{{ attachment.name }}</div>
+        <div class="attachment-preview-info">
+          <div class="attachment-preview-name">{{ attachment.name }}</div>
+          <div class="attachment-preview-meta">{{ getFileExt(attachment.name) }}&nbsp;·&nbsp;{{ formatFileSize(attachment.size) }}</div>
+        </div>
         <span class="attachment-preview-remove" @click="removeAttachment(attachment.id)" :aria-label="$t('common.remove')">×</span>
       </div>
     </div>
@@ -173,55 +187,66 @@ defineExpose({
 
 .attachment-preview-item {
   position: relative;
-  width: 60px;
-  height: 60px;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 32px 8px 10px;
   border-radius: 8px;
   border: 1px solid var(--td-border-level-1-color, #e7e7e7);
-  background: var(--td-bg-color-secondarycontainer, #f5f5f5);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  overflow: hidden;
+  background: var(--td-bg-color-container, #fff);
+  max-width: 240px;
+  min-width: 140px;
   cursor: default;
 
   .attachment-preview-icon {
-    font-size: 22px;
-    color: var(--td-brand-color, #07C05F);
-    line-height: 1;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .attachment-preview-info {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
   }
 
   .attachment-preview-name {
-    font-size: 10px;
-    color: var(--td-text-color-secondary, #666);
-    text-align: center;
-    width: 100%;
-    padding: 0 4px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--td-text-color-primary, #333);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    box-sizing: border-box;
+  }
+
+  .attachment-preview-meta {
+    font-size: 11px;
+    color: var(--td-text-color-secondary, #999);
+    white-space: nowrap;
   }
 
   .attachment-preview-remove {
     position: absolute;
-    top: 2px;
-    right: 2px;
-    width: 16px;
-    height: 16px;
-    background: rgba(0, 0, 0, 0.5);
+    top: 4px;
+    right: 6px;
+    width: 18px;
+    height: 18px;
+    background: rgba(0, 0, 0, 0.18);
     color: #fff;
     border-radius: 50%;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 12px;
+    font-size: 13px;
     cursor: pointer;
     line-height: 1;
 
     &:hover {
-      background: rgba(0, 0, 0, 0.7);
+      background: rgba(0, 0, 0, 0.4);
     }
   }
 }

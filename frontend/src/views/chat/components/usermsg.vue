@@ -31,9 +31,19 @@
         <div v-if="hasAttachments" class="user_attachments">
             <div v-for="(att, idx) in props.attachments" :key="idx" class="user_attachment_card">
                 <div class="attachment_card_icon">
-                    <t-icon :name="getAttachmentIcon(att.file_name || att.file_type)" />
+                    <svg viewBox="0 0 40 48" fill="none" xmlns="http://www.w3.org/2000/svg" width="36" height="44">
+                        <rect width="40" height="48" rx="4" fill="#4A90D9"/>
+                        <path d="M8 6h16l8 8v28a2 2 0 01-2 2H8a2 2 0 01-2-2V8a2 2 0 012-2z" fill="#5BA3E8"/>
+                        <path d="M24 6l8 8h-6a2 2 0 01-2-2V6z" fill="#3A7BC8"/>
+                        <rect x="10" y="20" width="20" height="2" rx="1" fill="white" fill-opacity="0.9"/>
+                        <rect x="10" y="26" width="20" height="2" rx="1" fill="white" fill-opacity="0.9"/>
+                        <rect x="10" y="32" width="14" height="2" rx="1" fill="white" fill-opacity="0.9"/>
+                    </svg>
                 </div>
-                <div class="attachment_card_name">{{ att.file_name }}</div>
+                <div class="attachment_card_info">
+                    <div class="attachment_card_name">{{ att.file_name }}</div>
+                    <div class="attachment_card_meta">{{ getFileExt(att.file_name) }}<span v-if="att.file_size">&nbsp;·&nbsp;{{ formatFileSize(att.file_size) }}</span></div>
+                </div>
             </div>
         </div>
         <div class="user_msg">
@@ -104,6 +114,10 @@ const getAttachmentIcon = (fileNameOrType) => {
     if (['txt', 'md'].includes(ext)) return 'file-text';
     if (['mp3', 'wav', 'm4a', 'flac', 'ogg', 'aac'].includes(ext)) return 'sound';
     return 'file';
+};
+
+const getFileExt = (fileName) => {
+    return (fileName || '').split('.').pop()?.toUpperCase() || 'FILE';
 };
 
 const formatFileSize = (bytes) => {
@@ -240,33 +254,45 @@ const closePreImg = () => {
 }
 
 .user_attachment_card {
-    width: 60px;
-    height: 60px;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
     border-radius: 8px;
     border: 1px solid var(--td-border-level-1-color, #e7e7e7);
-    background: var(--td-bg-color-secondarycontainer, #f5f5f5);
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 4px;
-    overflow: hidden;
+    background: var(--td-bg-color-container, #fff);
+    max-width: 260px;
+    min-width: 160px;
     cursor: default;
 
     .attachment_card_icon {
-        font-size: 22px;
-        color: var(--td-brand-color, #07C05F);
-        line-height: 1;
+        flex-shrink: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .attachment_card_info {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
     }
 
     .attachment_card_name {
-        font-size: 10px;
-        color: var(--td-text-color-secondary, #666);
-        text-align: center;
-        width: 100%;
-        padding: 0 4px;
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--td-text-color-primary, #333);
         overflow: hidden;
         text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .attachment_card_meta {
+        font-size: 11px;
+        color: var(--td-text-color-secondary, #999);
         white-space: nowrap;
         box-sizing: border-box;
     }
