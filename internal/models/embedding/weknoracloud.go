@@ -78,7 +78,7 @@ func (e *WeKnoraCloudEmbedder) Embed(ctx context.Context, text string) ([]float3
 }
 
 func (e *WeKnoraCloudEmbedder) BatchEmbed(ctx context.Context, texts []string) ([][]float32, error) {
-	reqBody := weKnoraCloudEmbedRequest{Model: e.effectiveModelName(), Input: texts, TruncatePromptTokens: 512}
+	reqBody := weKnoraCloudEmbedRequest{Model: e.effectiveModelName(), Input: texts}
 	bodyBytes, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("weknoracloud embedder: marshal: %w", err)
