@@ -57,6 +57,8 @@ const (
 	ProviderNvidia ProviderName = "nvidia"
 	// Novita AI
 	ProviderNovita ProviderName = "novita"
+	// Azure OpenAI
+	ProviderAzureOpenAI ProviderName = "azure_openai"
 )
 
 // AllProviders 返回所有注册的提供者名称
@@ -84,6 +86,8 @@ func AllProviders() []ProviderName {
 		ProviderGPUStack,
 		ProviderNvidia,
 		ProviderNovita,
+		ProviderAzureOpenAI,
+		ProviderWeKnoraCloud,
 	}
 }
 
@@ -221,6 +225,8 @@ func DetectProvider(baseURL string) ProviderName {
 		return ProviderSiliconFlow
 	case containsAny(baseURL, "api.jina.ai"):
 		return ProviderJina
+	case containsAny(baseURL, "openai.azure.com"):
+		return ProviderAzureOpenAI
 	case containsAny(baseURL, "api.openai.com"):
 		return ProviderOpenAI
 	case containsAny(baseURL, "api.deepseek.com"):

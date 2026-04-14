@@ -39,6 +39,8 @@ type RemoteAPIChat struct {
 	baseURL   string
 	apiKey    string
 	provider  provider.ProviderName
+	appID     string
+	appSecret string
 
 	// requestCustomizer 允许子类自定义请求
 	// 返回自定义请求体（如果为 nil 则使用标准请求）和是否需要使用原始 HTTP 请求
@@ -47,6 +49,9 @@ type RemoteAPIChat struct {
 	// endpointCustomizer 允许子类自定义请求的 endpoint
 	// 返回是否使用自定义请求地址, 返回空则使用默认OpenAI格式地址
 	endpointCustomizer func(baseURL string, modelID string, isStream bool) (endpoint string)
+
+	// headerCustomizer 允许子类自定义原始 HTTP 请求头（例如签名认证）
+	headerCustomizer func(req *http.Request, body []byte) error
 }
 
 // NewRemoteAPIChat 创建远程 API 聊天实例
@@ -58,23 +63,53 @@ func NewRemoteAPIChat(chatConfig *ChatConfig) (*RemoteAPIChat, error) {
 	}
 
 	apiKey := chatConfig.APIKey
-	config := openai.DefaultConfig(apiKey)
-	if baseURL := chatConfig.BaseURL; baseURL != "" {
-		config.BaseURL = baseURL
-	}
-
 	providerName := provider.ProviderName(chatConfig.Provider)
 	if providerName == "" {
 		providerName = provider.DetectProvider(chatConfig.BaseURL)
 	}
 
+	var config openai.ClientConfig
+	if providerName == provider.ProviderAzureOpenAI {
+		config = openai.DefaultAzureConfig(apiKey, chatConfig.BaseURL)
+		config.AzureModelMapperFunc = func(model string) string {
+			return model
+		}
+		if chatConfig.ExtraConfig != nil {
+			if v, ok := chatConfig.ExtraConfig["api_version"]; ok {
+				config.APIVersion = v
+			}
+		}
+	} else {
+		config = openai.DefaultConfig(apiKey)
+		if baseURL := chatConfig.BaseURL; baseURL != "" {
+			config.BaseURL = baseURL
+		}
+	}
+
+	modelName := chatConfig.ModelName
+	if chatConfig.ExtraConfig != nil {
+		if override := strings.TrimSpace(chatConfig.ExtraConfig["remote_model_name"]); override != "" {
+			modelName = override
+		}
+	}
+	if providerName == provider.ProviderWeKnoraCloud {
+		if chatConfig.AppID == "" {
+			return nil, fmt.Errorf("WeKnoraCloud provider: AppID is required")
+		}
+		if chatConfig.AppSecret == "" {
+			return nil, fmt.Errorf("WeKnoraCloud provider: AppSecret is required")
+		}
+	}
+
 	return &RemoteAPIChat{
-		modelName: chatConfig.ModelName,
+		modelName: modelName,
 		client:    openai.NewClientWithConfig(config),
 		modelID:   chatConfig.ModelID,
 		baseURL:   chatConfig.BaseURL,
 		apiKey:    apiKey,
 		provider:  providerName,
+		appID:     chatConfig.AppID,
+		appSecret: chatConfig.AppSecret,
 	}, nil
 }
 
@@ -86,6 +121,11 @@ func (c *RemoteAPIChat) SetRequestCustomizer(customizer func(req *openai.ChatCom
 // SetEndpointCustomizer 设置请求地址自定义器
 func (c *RemoteAPIChat) SetEndpointCustomizer(customizer func(baseURL string, modelID string, isStream bool) string) {
 	c.endpointCustomizer = customizer
+}
+
+// SetHeaderCustomizer 设置原始 HTTP 请求头自定义器
+func (c *RemoteAPIChat) SetHeaderCustomizer(customizer func(req *http.Request, body []byte) error) {
+	c.headerCustomizer = customizer
 }
 
 // ConvertMessages 转换消息格式为 OpenAI 格式（导出供子类使用）
@@ -315,7 +355,16 @@ func (c *RemoteAPIChat) chatWithRawHTTP(ctx context.Context, endpoint string, cu
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+
+	if c.headerCustomizer != nil {
+		if err := c.headerCustomizer(httpReq, jsonData); err != nil {
+			return nil, fmt.Errorf("customize headers: %w", err)
+		}
+	} else if c.provider == provider.ProviderAzureOpenAI {
+		httpReq.Header.Set("api-key", c.apiKey)
+	} else {
+		httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
 
 	resp, err := rawHTTPClient.Do(httpReq)
 	if err != nil {
@@ -467,7 +516,16 @@ func (c *RemoteAPIChat) chatStreamWithRawHTTP(ctx context.Context, endpoint stri
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+
+	if c.headerCustomizer != nil {
+		if err := c.headerCustomizer(httpReq, jsonData); err != nil {
+			return nil, fmt.Errorf("customize headers: %w", err)
+		}
+	} else if c.provider == provider.ProviderAzureOpenAI {
+		httpReq.Header.Set("api-key", c.apiKey)
+	} else {
+		httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
 	httpReq.Header.Set("Accept", "text/event-stream")
 
 	resp, err := rawHTTPClient.Do(httpReq)

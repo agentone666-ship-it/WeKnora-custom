@@ -1247,6 +1247,7 @@ import { listSkills, type SkillInfo } from '@/api/skill';
 import { listWebSearchProviders, type WebSearchProviderEntity } from '@/api/web-search-provider';
 import { getAgentConfig, getConversationConfig, getStorageEngineStatus, type StorageEngineStatusItem, type PromptTemplate } from '@/api/system';
 import { useUIStore } from '@/stores/ui';
+import { useAuthStore } from '@/stores/auth';
 import { useOrganizationStore } from '@/stores/organization';
 import AgentAvatar from '@/components/AgentAvatar.vue';
 import PromptTemplateSelector from '@/components/PromptTemplateSelector.vue';
@@ -1255,6 +1256,7 @@ import AgentShareSettings from '@/components/AgentShareSettings.vue';
 import IMChannelPanel from '@/components/IMChannelPanel.vue';
 
 const uiStore = useUIStore();
+const authStore = useAuthStore();
 const orgStore = useOrganizationStore();
 
 const { t } = useI18n();
@@ -1293,6 +1295,7 @@ const imageStorageOptions = computed(() => {
     { value: 'cos', label: t('settings.storage.engineCos'), disabled: statusMap.cos === false },
     { value: 'tos', label: t('settings.storage.engineTos'), disabled: statusMap.tos === false },
     { value: 's3', label: 'Amazon S3', disabled: statusMap.s3 === false },
+    { value: 'oss', label: t('settings.storage.engineOss'), disabled: statusMap.oss === false },
   ];
 });
 
@@ -1482,8 +1485,8 @@ const navItems = computed(() => {
   if (!isAgentMode.value) {
     items.push({ key: 'conversation', icon: 'chat', label: t('agent.editor.conversationSettings') });
   }
-  // 共享管理（仅编辑模式且非内置智能体）
-  if (props.mode === 'edit' && props.agent?.id && !props.agent?.is_builtin) {
+  // 共享管理（仅编辑模式且非内置智能体，Lite 模式下隐藏）
+  if (props.mode === 'edit' && props.agent?.id && !props.agent?.is_builtin && !authStore.isLiteMode) {
     items.push({ key: 'share', icon: 'share', label: t('knowledgeEditor.sidebar.share') });
   }
   // IM集成（仅编辑模式，创建时Agent还没有ID）

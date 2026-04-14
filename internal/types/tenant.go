@@ -233,7 +233,11 @@ func (c *ConversationConfig) Scan(value interface{}) error {
 // ParserEngineConfig holds tenant-level overrides for document parser engines (e.g. MinerU endpoint, API key).
 // These values take precedence over environment variables when parsing documents.
 type ParserEngineConfig struct {
-	DocReaderAddr  string `json:"docreader_addr"`  // 文档解析服务地址
+	DocReaderAddr string `json:"docreader_addr"` // 文档解析服务地址
+	// docreader 凭证
+	DocreaderAppID  string `json:"docreader_app_id,omitempty"`
+	DocreaderAPIKey string `json:"docreader_api_key,omitempty"`
+
 	MinerUEndpoint string `json:"mineru_endpoint"` // MinerU 自建服务端点
 	MinerUAPIKey   string `json:"mineru_api_key"`  // MinerU 云 API Key
 
@@ -259,6 +263,9 @@ func (c *ParserEngineConfig) ToOverridesMap() map[string]string {
 		return nil
 	}
 	m := make(map[string]string)
+	if c.DocReaderAddr != "" {
+		m["docreader_addr"] = c.DocReaderAddr
+	}
 	if c.MinerUEndpoint != "" {
 		m["mineru_endpoint"] = c.MinerUEndpoint
 	}
@@ -321,15 +328,16 @@ func (c *ParserEngineConfig) Scan(value interface{}) error {
 	return json.Unmarshal(b, c)
 }
 
-// StorageEngineConfig holds tenant-level storage engine parameters for Local, MinIO, COS, TOS, and S3.
+// StorageEngineConfig holds tenant-level storage engine parameters for Local, MinIO, COS, TOS, S3, and OSS.
 // Knowledge bases select which provider to use; parameters are read from here.
 type StorageEngineConfig struct {
-	DefaultProvider string             `json:"default_provider"` // "local", "minio", "cos", "tos", "s3"
+	DefaultProvider string             `json:"default_provider"` // "local", "minio", "cos", "tos", "s3", "oss"
 	Local           *LocalEngineConfig `json:"local,omitempty"`
 	MinIO           *MinIOEngineConfig `json:"minio,omitempty"`
 	COS             *COSEngineConfig   `json:"cos,omitempty"`
 	TOS             *TOSEngineConfig   `json:"tos,omitempty"`
 	S3              *S3EngineConfig    `json:"s3,omitempty"`
+	OSS             *OSSEngineConfig   `json:"oss,omitempty"`
 }
 
 // LocalEngineConfig is for local file system storage (single-machine deployment only).
@@ -377,6 +385,19 @@ type S3EngineConfig struct {
 	SecretKey  string `json:"secret_key"`
 	BucketName string `json:"bucket_name"`
 	PathPrefix string `json:"path_prefix"`
+}
+
+// OSSEngineConfig is for Alibaba Cloud OSS (对象存储服务).
+type OSSEngineConfig struct {
+	Endpoint       string `json:"endpoint"`
+	Region         string `json:"region"`
+	AccessKey      string `json:"access_key"`
+	SecretKey      string `json:"secret_key"`
+	BucketName     string `json:"bucket_name"`
+	PathPrefix     string `json:"path_prefix"`
+	UseTempBucket  bool   `json:"use_temp_bucket"`
+	TempBucketName string `json:"temp_bucket_name"`
+	TempRegion     string `json:"temp_region"`
 }
 
 // Value implements the driver.Valuer interface for StorageEngineConfig

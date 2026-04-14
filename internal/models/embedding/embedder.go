@@ -47,6 +47,9 @@ type Config struct {
 	Dimensions           int               `json:"dimensions"`
 	ModelID              string            `json:"model_id"`
 	Provider             string            `json:"provider"`
+	ExtraConfig          map[string]string `json:"extra_config"`
+	AppID                string
+	AppSecret            string // 加密值，工厂函数调用方传入，使用前已解密
 }
 
 // NewEmbedder creates an embedder based on the configuration
@@ -126,6 +129,22 @@ func NewEmbedder(config Config, pooler EmbedderPooler, ollamaService *ollama.Oll
 				config.ModelID,
 				pooler)
 			return embedder, err
+		case provider.ProviderAzureOpenAI:
+			apiVersion := "2024-10-21"
+			if config.ExtraConfig != nil {
+				if v, ok := config.ExtraConfig["api_version"]; ok {
+					apiVersion = v
+				}
+			}
+			embedder, err = NewAzureOpenAIEmbedder(config.APIKey,
+				config.BaseURL,
+				config.ModelName,
+				config.TruncatePromptTokens,
+				config.Dimensions,
+				config.ModelID,
+				apiVersion,
+				pooler)
+			return embedder, err
 		case provider.ProviderNvidia:
 			embedder, err = NewNvidiaEmbedder(config.APIKey,
 				config.BaseURL,
@@ -133,6 +152,9 @@ func NewEmbedder(config Config, pooler EmbedderPooler, ollamaService *ollama.Oll
 				config.Dimensions,
 				config.ModelID,
 				pooler)
+			return embedder, err
+		case provider.ProviderWeKnoraCloud:
+			embedder, err = NewWeKnoraCloudEmbedder(config)
 			return embedder, err
 		default:
 			// Use OpenAI-compatible embedder for other providers

@@ -31,37 +31,38 @@ import (
 type RouterParams struct {
 	dig.In
 
-	Config                *config.Config
-	UserService           interfaces.UserService
-	KBService             interfaces.KnowledgeBaseService
-	KnowledgeService      interfaces.KnowledgeService
-	ChunkService          interfaces.ChunkService
-	SessionService        interfaces.SessionService
-	MessageService        interfaces.MessageService
-	ModelService          interfaces.ModelService
-	EvaluationService     interfaces.EvaluationService
-	KBHandler             *handler.KnowledgeBaseHandler
-	KnowledgeHandler      *handler.KnowledgeHandler
-	TenantHandler         *handler.TenantHandler
-	TenantService         interfaces.TenantService
-	ChunkHandler          *handler.ChunkHandler
-	SessionHandler        *session.Handler
-	MessageHandler        *handler.MessageHandler
-	ModelHandler          *handler.ModelHandler
-	EvaluationHandler     *handler.EvaluationHandler
-	AuthHandler           *handler.AuthHandler
-	InitializationHandler *handler.InitializationHandler
-	SystemHandler         *handler.SystemHandler
-	MCPServiceHandler     *handler.MCPServiceHandler
-	WebSearchHandler              *handler.WebSearchHandler
-	WebSearchProviderHandler      *handler.WebSearchProviderHandler
-	FAQHandler            *handler.FAQHandler
-	TagHandler            *handler.TagHandler
-	CustomAgentHandler    *handler.CustomAgentHandler
-	SkillHandler          *handler.SkillHandler
-	OrganizationHandler   *handler.OrganizationHandler
-	IMHandler             *handler.IMHandler
-	DataSourceHandler     *handler.DataSourceHandler
+	Config                   *config.Config
+	UserService              interfaces.UserService
+	KBService                interfaces.KnowledgeBaseService
+	KnowledgeService         interfaces.KnowledgeService
+	ChunkService             interfaces.ChunkService
+	SessionService           interfaces.SessionService
+	MessageService           interfaces.MessageService
+	ModelService             interfaces.ModelService
+	EvaluationService        interfaces.EvaluationService
+	KBHandler                *handler.KnowledgeBaseHandler
+	KnowledgeHandler         *handler.KnowledgeHandler
+	TenantHandler            *handler.TenantHandler
+	TenantService            interfaces.TenantService
+	ChunkHandler             *handler.ChunkHandler
+	SessionHandler           *session.Handler
+	MessageHandler           *handler.MessageHandler
+	ModelHandler             *handler.ModelHandler
+	EvaluationHandler        *handler.EvaluationHandler
+	AuthHandler              *handler.AuthHandler
+	InitializationHandler    *handler.InitializationHandler
+	SystemHandler            *handler.SystemHandler
+	MCPServiceHandler        *handler.MCPServiceHandler
+	WebSearchHandler         *handler.WebSearchHandler
+	WebSearchProviderHandler *handler.WebSearchProviderHandler
+	FAQHandler               *handler.FAQHandler
+	TagHandler               *handler.TagHandler
+	CustomAgentHandler       *handler.CustomAgentHandler
+	SkillHandler             *handler.SkillHandler
+	OrganizationHandler      *handler.OrganizationHandler
+	IMHandler                *handler.IMHandler
+	DataSourceHandler        *handler.DataSourceHandler
+	WeKnoraCloudHandler         *handler.WeKnoraCloudHandler
 }
 
 // NewRouter 创建新的路由
@@ -144,6 +145,7 @@ func NewRouter(params RouterParams) *gin.Engine {
 		RegisterOrganizationRoutes(v1, params.OrganizationHandler)
 		RegisterIMChannelRoutes(v1, params.IMHandler)
 		RegisterDataSourceRoutes(v1, params.DataSourceHandler)
+		RegisterWeKnoraCloudRoutes(v1, params.WeKnoraCloudHandler)
 	}
 
 	return r
@@ -397,6 +399,7 @@ func RegisterEvaluationRoutes(r *gin.RouterGroup, handler *handler.EvaluationHan
 func RegisterAuthRoutes(r *gin.RouterGroup, handler *handler.AuthHandler) {
 	r.POST("/auth/register", handler.Register)
 	r.POST("/auth/login", handler.Login)
+	r.POST("/auth/auto-setup", handler.AutoSetup)
 	r.GET("/auth/oidc/config", handler.GetOIDCConfig)
 	r.GET("/auth/oidc/url", handler.GetOIDCAuthorizationURL)
 	r.GET("/auth/oidc/callback", handler.OIDCRedirectCallback)
@@ -640,6 +643,13 @@ func RegisterIMChannelRoutes(r *gin.RouterGroup, imHandler *handler.IMHandler) {
 		channels.DELETE("/:id", imHandler.DeleteIMChannel)
 		channels.POST("/:id/toggle", imHandler.ToggleIMChannel)
 	}
+
+	// WeChat QR code login (requires authentication)
+	wechatGroup := r.Group("/wechat")
+	{
+		wechatGroup.POST("/qrcode", imHandler.WeChatGetQRCode)
+		wechatGroup.POST("/qrcode/status", imHandler.WeChatPollQRCodeStatus)
+	}
 }
 
 // serveFrontendStatic registers a middleware that serves the frontend SPA
@@ -796,4 +806,10 @@ func RegisterDataSourceRoutes(r *gin.RouterGroup, handler *handler.DataSourceHan
 		ds.GET("/:id/logs", handler.GetSyncLogs)
 		ds.GET("/logs/:log_id", handler.GetSyncLog)
 	}
+}
+
+// RegisterWeKnoraCloudRoutes 注册 WeKnoraCloud 初始化路由
+func RegisterWeKnoraCloudRoutes(r *gin.RouterGroup, handler *handler.WeKnoraCloudHandler) {
+	r.POST("/models/weknoracloud/initialize", handler.Initialize)
+	r.GET("/models/weknoracloud/status", handler.Status)
 }

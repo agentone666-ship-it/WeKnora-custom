@@ -47,7 +47,6 @@ import (
 	"github.com/Tencent/WeKnora/internal/application/service/llmcontext"
 	memoryService "github.com/Tencent/WeKnora/internal/application/service/memory"
 	"github.com/Tencent/WeKnora/internal/application/service/retriever"
-	infra_web_search "github.com/Tencent/WeKnora/internal/infrastructure/web_search"
 	"github.com/Tencent/WeKnora/internal/config"
 	"github.com/Tencent/WeKnora/internal/database"
 	"github.com/Tencent/WeKnora/internal/datasource"
@@ -62,8 +61,10 @@ import (
 	"github.com/Tencent/WeKnora/internal/im/mattermost"
 	"github.com/Tencent/WeKnora/internal/im/slack"
 	"github.com/Tencent/WeKnora/internal/im/telegram"
+	"github.com/Tencent/WeKnora/internal/im/wechat"
 	"github.com/Tencent/WeKnora/internal/im/wecom"
 	"github.com/Tencent/WeKnora/internal/infrastructure/docparser"
+	infra_web_search "github.com/Tencent/WeKnora/internal/infrastructure/web_search"
 	"github.com/Tencent/WeKnora/internal/logger"
 	"github.com/Tencent/WeKnora/internal/mcp"
 	"github.com/Tencent/WeKnora/internal/models/embedding"
@@ -168,11 +169,13 @@ func BuildContainer(container *dig.Container) *dig.Container {
 	must(container.Provide(service.NewDatasetService))
 	must(container.Provide(service.NewEvaluationService))
 	must(container.Provide(service.NewUserService))
+	must(container.Provide(service.NewWeKnoraCloudService))
 
 	// Extract services - register individual extracters with names
 	must(container.Provide(service.NewChunkExtractService, dig.Name("chunkExtractor")))
 	must(container.Provide(service.NewDataTableSummaryService, dig.Name("dataTableSummary")))
 	must(container.Provide(service.NewImageMultimodalService, dig.Name("imageMultimodal")))
+	must(container.Provide(service.NewVideoMultimodalService, dig.Name("videoMultimodal")))
 
 	must(container.Provide(service.NewMessageService))
 	must(container.Provide(service.NewMCPServiceService))
@@ -267,6 +270,7 @@ func BuildContainer(container *dig.Container) *dig.Container {
 	must(container.Provide(imPkg.NewService))
 	must(container.Invoke(registerIMAdapterFactories))
 	must(container.Provide(handler.NewIMHandler))
+	must(container.Provide(handler.NewWeKnoraCloudHandler))
 	logger.Debugf(ctx, "[Container] HTTP handlers registered")
 
 	// Router configuration
@@ -354,6 +358,7 @@ func initContextStorage(redisClient *redis.Client) (llmcontext.ContextStorage, e
 func initDatabase(cfg *config.Config) (*gorm.DB, error) {
 	var dialector gorm.Dialector
 	var migrateDSN string
+	var sqliteDBPath string
 	switch os.Getenv("DB_DRIVER") {
 	case "postgres":
 		// DSN for GORM (key-value format)
@@ -404,13 +409,14 @@ func initDatabase(cfg *config.Config) (*gorm.DB, error) {
 			dbPath = "./data/weknora.db"
 		}
 		if dir := filepath.Dir(dbPath); dir != "." && dir != "" {
-			if err := os.MkdirAll(dir, 0755); err != nil {
+			if err := os.MkdirAll(dir, 0o755); err != nil {
 				return nil, fmt.Errorf("failed to create SQLite data directory %s: %w", dir, err)
 			}
 		}
 		sqlite_vec.Auto()
 		dsn := dbPath + "?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=on"
 		dialector = sqlite.Open(dsn)
+		sqliteDBPath = dbPath
 		migrateDSN = "sqlite3://" + dbPath
 		logger.Infof(context.Background(), "DB Config: driver=sqlite path=%s", dbPath)
 	default:
@@ -444,6 +450,7 @@ func initDatabase(cfg *config.Config) (*gorm.DB, error) {
 		autoRecover := os.Getenv("AUTO_RECOVER_DIRTY") != "false"
 		migrationOpts := database.MigrationOptions{
 			AutoRecoverDirty: autoRecover,
+			SQLiteDBPath:     sqliteDBPath,
 		}
 
 		// Run base migrations (all versioned migrations including embeddings)
@@ -503,6 +510,56 @@ func resolveStorageProviderPending(db *gorm.DB) {
 		logger.Warnf(context.Background(), "Failed to resolve __pending_env__ storage providers: %v", result.Error)
 	} else if result.RowsAffected > 0 {
 		logger.Infof(context.Background(), "Resolved %d knowledge bases with __pending_env__ storage provider → %s", result.RowsAffected, storageType)
+	}
+
+	// Reset any pending tasks left over from previous aborted runs (Lite App mode)
+	resetPendingTasks(db)
+}
+
+// resetPendingTasks resets the state of any knowledge items or sync logs stuck in processing
+// due to an unexpected application restart when using in-memory queues (Lite mode).
+func resetPendingTasks(db *gorm.DB) {
+	if os.Getenv("REDIS_ADDR") != "" {
+		return // Distributed queue (Asynq) will handle its own retries
+	}
+
+	// 1. Reset knowledge parsing tasks
+	result := db.Model(&types.Knowledge{}).
+		Where("parse_status IN ?", []string{types.ParseStatusPending, types.ParseStatusProcessing, types.ParseStatusDeleting}).
+		Updates(map[string]interface{}{
+			"parse_status":  types.ParseStatusFailed,
+			"error_message": "Task interrupted due to application restart",
+		})
+	if result.Error != nil {
+		logger.Warnf(context.Background(), "Failed to reset pending knowledge tasks: %v", result.Error)
+	} else if result.RowsAffected > 0 {
+		logger.Infof(context.Background(), "Reset %d stuck knowledge parsing tasks to failed state", result.RowsAffected)
+	}
+
+	// 2. Reset knowledge summary tasks
+	resultSummary := db.Model(&types.Knowledge{}).
+		Where("summary_status IN ?", []string{types.SummaryStatusPending, types.SummaryStatusProcessing}).
+		Updates(map[string]interface{}{
+			"summary_status": types.SummaryStatusFailed,
+		})
+	if resultSummary.Error != nil {
+		logger.Warnf(context.Background(), "Failed to reset pending summary tasks: %v", resultSummary.Error)
+	} else if resultSummary.RowsAffected > 0 {
+		logger.Infof(context.Background(), "Reset %d stuck summary generation tasks to failed state", resultSummary.RowsAffected)
+	}
+
+	// 3. Reset data source sync tasks
+	resultSync := db.Model(&types.SyncLog{}).
+		Where("status IN ?", []string{types.SyncLogStatusRunning, "pending"}).
+		Updates(map[string]interface{}{
+			"status":        types.SyncLogStatusFailed,
+			"error_message": "Sync interrupted due to application restart",
+			"end_time":      time.Now(),
+		})
+	if resultSync.Error != nil {
+		logger.Warnf(context.Background(), "Failed to reset pending data source sync tasks: %v", resultSync.Error)
+	} else if resultSync.RowsAffected > 0 {
+		logger.Infof(context.Background(), "Reset %d stuck data source sync tasks to failed state", resultSync.RowsAffected)
 	}
 }
 
@@ -589,6 +646,28 @@ func initFileService(cfg *config.Config) (interfaces.FileService, error) {
 			os.Getenv("S3_BUCKET_NAME"),
 			os.Getenv("S3_REGION"),
 			pathPrefix,
+		)
+	case "oss":
+		if os.Getenv("OSS_ENDPOINT") == "" ||
+			os.Getenv("OSS_REGION") == "" ||
+			os.Getenv("OSS_ACCESS_KEY") == "" ||
+			os.Getenv("OSS_SECRET_KEY") == "" ||
+			os.Getenv("OSS_BUCKET_NAME") == "" {
+			return nil, fmt.Errorf("missing OSS configuration")
+		}
+		pathPrefix := os.Getenv("OSS_PATH_PREFIX")
+		if pathPrefix == "" {
+			pathPrefix = "weknora/"
+		}
+		return file.NewOssFileServiceWithTempBucket(
+			os.Getenv("OSS_ENDPOINT"),
+			os.Getenv("OSS_REGION"),
+			os.Getenv("OSS_ACCESS_KEY"),
+			os.Getenv("OSS_SECRET_KEY"),
+			os.Getenv("OSS_BUCKET_NAME"),
+			pathPrefix,
+			os.Getenv("OSS_TEMP_BUCKET_NAME"),
+			os.Getenv("OSS_TEMP_REGION"),
 		)
 	case "local":
 		baseDir := os.Getenv("LOCAL_STORAGE_BASE_DIR")
@@ -964,6 +1043,8 @@ func registerWebSearchProviders(registry *infra_web_search.Registry) {
 	registry.Register("google", infra_web_search.NewGoogleProvider)
 	registry.Register("bing", infra_web_search.NewBingProvider)
 	registry.Register("tavily", infra_web_search.NewTavilyProvider)
+	registry.Register("ollama", infra_web_search.NewOllamaProvider)
+	registry.Register("baidu", infra_web_search.NewBaiduProvider)
 }
 
 // registerIMAdapterFactories registers adapter factories for each IM platform
@@ -1000,6 +1081,7 @@ func registerIMAdapterFactories(imService *imPkg.Service) {
 				getString(creds, "token"),
 				getString(creds, "encoding_aes_key"),
 				corpAgentID,
+				getString(creds, "api_base_url"),
 			)
 			if err != nil {
 				return nil, nil, err
@@ -1007,12 +1089,16 @@ func registerIMAdapterFactories(imService *imPkg.Service) {
 			return adapter, nil, nil
 
 		case "websocket":
-			client := wecom.NewLongConnClient(
+			client, err := wecom.NewLongConnClient(
 				getString(creds, "bot_id"),
 				getString(creds, "bot_secret"),
+				getString(creds, "ws_endpoint"),
 				getString(creds, "bot_name"),
 				msgHandler,
 			)
+			if err != nil {
+				return nil, nil, err
+			}
 
 			wsCtx, wsCancel := context.WithCancel(context.Background())
 			go func() {
@@ -1220,6 +1306,32 @@ func registerIMAdapterFactories(imService *imPkg.Service) {
 		postReplyToMain := credentialBool(creds, "post_to_main")
 		adapter := mattermost.NewAdapter(client, outgoingToken, botUserID, postReplyToMain)
 		return adapter, func() {}, nil
+	})
+	// Register WeChat adapter factory
+	imService.RegisterAdapterFactory("wechat", func(factoryCtx context.Context, channel *imPkg.IMChannel, msgHandler func(context.Context, *imPkg.IncomingMessage) error) (imPkg.Adapter, context.CancelFunc, error) {
+		creds, err := parseCredentials(channel.Credentials)
+		if err != nil {
+			return nil, nil, fmt.Errorf("parse wechat credentials: %w", err)
+		}
+
+		botToken := getString(creds, "bot_token")
+		ilinkBotID := getString(creds, "ilink_bot_id")
+
+		if botToken == "" || ilinkBotID == "" {
+			return nil, nil, fmt.Errorf("wechat credentials require bot_token and ilink_bot_id")
+		}
+
+		adapter := wechat.NewAdapter(botToken, ilinkBotID)
+		client := wechat.NewLongPollClient(botToken, ilinkBotID, msgHandler)
+
+		pollCtx, pollCancel := context.WithCancel(context.Background())
+		go func() {
+			if err := client.Start(pollCtx); err != nil && pollCtx.Err() == nil {
+				logger.Errorf(context.Background(), "[IM] WeChat long-poll stopped for channel %s: %v", channel.ID, err)
+			}
+		}()
+
+		return adapter, pollCancel, nil
 	})
 
 	// Load and start all enabled channels from database

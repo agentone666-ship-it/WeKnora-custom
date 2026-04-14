@@ -18,6 +18,8 @@ const (
 	WebSearchProviderTypeGoogle     WebSearchProviderType = "google"
 	WebSearchProviderTypeDuckDuckGo WebSearchProviderType = "duckduckgo"
 	WebSearchProviderTypeTavily     WebSearchProviderType = "tavily"
+	WebSearchProviderTypeOllama     WebSearchProviderType = "ollama"
+	WebSearchProviderTypeBaidu      WebSearchProviderType = "baidu"
 )
 
 // WebSearchProviderEntity represents a configured web search provider instance for a tenant.
@@ -152,6 +154,20 @@ func GetWebSearchProviderTypes() []WebSearchProviderTypeInfo {
 			RequiresAPIKey: true,
 			Description:    "Tavily Search API (requires API key)",
 			DocsURL:        "https://tavily.com/",
+		},
+		{
+			ID:             "ollama",
+			Name:           "Ollama Web Search",
+			RequiresAPIKey: true,
+			Description:    "Ollama Cloud web search (requires Ollama API key)",
+			DocsURL:        "https://docs.ollama.com/capabilities/web-search",
+		},
+		{
+			ID:             "baidu",
+			Name:           "Baidu",
+			RequiresAPIKey: true,
+			Description:    "Baidu AI Search (requires API key from Baidu Cloud)",
+			DocsURL:        "https://cloud.baidu.com/doc/AppBuilder/s/qlvEcai0p",
 		},
 	}
 }

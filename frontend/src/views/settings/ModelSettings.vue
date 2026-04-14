@@ -3,37 +3,71 @@
     <div class="section-header">
       <h2>{{ $t('modelSettings.title') }}</h2>
       <p class="section-description">{{ $t('modelSettings.description') }}</p>
-      
-      <!-- 内置模型说明 -->
-      <div class="builtin-models-info">
-        <div class="info-box">
-          <div class="info-header">
-            <t-icon name="info-circle" class="info-icon" />
-            <span class="info-title">{{ $t('modelSettings.builtinModels.title') }}</span>
-          </div>
-          <div class="info-content">
-            <p>{{ $t('modelSettings.builtinModels.description') }}</p>
-            <p class="doc-link">
-              <t-icon name="link" class="link-icon" />
-              <a href="https://github.com/Tencent/WeKnora/blob/main/docs/BUILTIN_MODELS.md" target="_blank" rel="noopener noreferrer">
-                {{ $t('modelSettings.builtinModels.viewGuide') }}
-              </a>
-            </p>
-          </div>
+
+      <div class="builtin-models-hint" role="note">
+        <p class="builtin-hint-label">{{ $t('modelSettings.builtinModels.title') }}</p>
+        <p class="builtin-hint-text">{{ $t('modelSettings.builtinModels.description') }}</p>
+        <a
+          class="builtin-hint-link"
+          href="https://github.com/Tencent/WeKnora/blob/main/docs/BUILTIN_MODELS.md"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          {{ $t('modelSettings.builtinModels.viewGuide') }}
+        </a>
+      </div>
+    </div>
+
+    <!-- WeKnoraCloud 厂商配置 -->
+    <div class="weknoracloud-config-section" style="margin-bottom: 24px;">
+      <div class="category-header" style="margin-bottom: 12px;">
+        <h3 style="margin: 0; font-size: 16px; font-weight: 600;">WeKnoraCloud 厂商配置</h3>
+      </div>
+      <!-- 凭证失效警告 -->
+      <div v-if="weKnoraCloudNeedsReinit" style="margin-bottom: 12px; background: #fff7ed; border: 1px solid #fed7aa; border-left: 3px solid #f97316; border-radius: 6px; padding: 12px 16px; display: flex; align-items: flex-start; gap: 10px;">
+        <t-icon name="error-circle" style="font-size: 16px; color: #f97316; flex-shrink: 0; margin-top: 1px;" />
+        <div style="font-size: 13px; color: #9a3412; line-height: 1.5;">
+          <strong>WeKnoraCloud 凭证已失效</strong><br />
+          {{ weKnoraCloudReinitReason || '服务重启后加密密钥已变更，已保存的凭证无法解密。' }}
         </div>
+      </div>
+      <div class="weknoracloud-config-card" style="background: var(--td-bg-color-container); border: 1px solid var(--td-component-stroke); border-radius: 8px; padding: 20px;">
+        <div style="display: flex; align-items: flex-end; gap: 16px; flex-wrap: wrap;">
+          <t-form-item label="APPID" style="margin-bottom: 0;">
+            <t-input v-model="weKnoraCloudForm.appId" placeholder="请输入 APPID" style="width: 240px;" />
+          </t-form-item>
+          <t-form-item label="APPSECRET" style="margin-bottom: 0;">
+            <t-input
+              v-model="weKnoraCloudForm.appSecret"
+              type="password"
+              placeholder="请输入 APPSECRET"
+              style="width: 240px;"
+            />
+          </t-form-item>
+          <t-button
+            theme="primary"
+            :loading="weKnoraCloudLoading"
+            @click="handleWeKnoraCloudInit"
+          >
+            保存并初始化
+          </t-button>
+        </div>
+        <p style="color: var(--td-text-color-secondary); font-size: 12px; margin-top: 12px; margin-bottom: 0;">
+          提交后将自动创建或更新三个模型（Chat / Embedding / Rerank）并设为各类型默认
+        </p>
       </div>
     </div>
 
     <!-- 对话模型 -->
-    <div class="model-category-section" data-model-type="chat">
-      <div class="category-header">
-        <div class="header-info">
+    <div class="settings-group model-type-group" data-model-type="chat">
+      <div class="section-subheader">
+        <div class="subheader-text">
           <h3>{{ $t('modelSettings.chat.title') }}</h3>
-          <p>{{ $t('modelSettings.chat.desc') }}</p>
+          <p class="section-desc">{{ $t('modelSettings.chat.desc') }}</p>
         </div>
-        <t-button size="small" theme="primary" @click="openAddDialog('chat')" class="add-model-btn">
+        <t-button theme="primary" size="small" @click="openAddDialog('chat')">
           <template #icon>
-            <t-icon name="add" class="add-icon" />
+            <add-icon />
           </template>
           {{ $t('modelSettings.actions.addModel') }}
         </t-button>
@@ -65,24 +99,27 @@
           </div>
         </div>
       </div>
-      <div v-else class="empty-state">
-        <p class="empty-text">{{ $t('modelSettings.chat.empty') }}</p>
-        <t-button theme="default" variant="outline" size="small" @click="openAddDialog('chat')">
+      <div v-else class="empty-models">
+        <p>{{ $t('modelSettings.chat.empty') }}</p>
+        <t-button theme="primary" size="small" @click="openAddDialog('chat')">
+          <template #icon>
+            <add-icon />
+          </template>
           {{ $t('modelSettings.actions.addModel') }}
         </t-button>
       </div>
     </div>
 
     <!-- Embedding 模型 -->
-    <div class="model-category-section" data-model-type="embedding">
-      <div class="category-header">
-        <div class="header-info">
+    <div class="settings-group model-type-group" data-model-type="embedding">
+      <div class="section-subheader">
+        <div class="subheader-text">
           <h3>{{ $t('modelSettings.embedding.title') }}</h3>
-          <p>{{ $t('modelSettings.embedding.desc') }}</p>
+          <p class="section-desc">{{ $t('modelSettings.embedding.desc') }}</p>
         </div>
-        <t-button size="small" theme="primary" @click="openAddDialog('embedding')" class="add-model-btn">
+        <t-button theme="primary" size="small" @click="openAddDialog('embedding')">
           <template #icon>
-            <t-icon name="add" class="add-icon" />
+            <add-icon />
           </template>
           {{ $t('modelSettings.actions.addModel') }}
         </t-button>
@@ -115,24 +152,27 @@
           </div>
         </div>
       </div>
-      <div v-else class="empty-state">
-        <p class="empty-text">{{ $t('modelSettings.embedding.empty') }}</p>
-        <t-button theme="default" variant="outline" size="small" @click="openAddDialog('embedding')">
+      <div v-else class="empty-models">
+        <p>{{ $t('modelSettings.embedding.empty') }}</p>
+        <t-button theme="primary" size="small" @click="openAddDialog('embedding')">
+          <template #icon>
+            <add-icon />
+          </template>
           {{ $t('modelSettings.actions.addModel') }}
         </t-button>
       </div>
     </div>
 
     <!-- ReRank 模型 -->
-    <div class="model-category-section" data-model-type="rerank">
-      <div class="category-header">
-        <div class="header-info">
+    <div class="settings-group model-type-group" data-model-type="rerank">
+      <div class="section-subheader">
+        <div class="subheader-text">
           <h3>{{ $t('modelSettings.rerank.title') }}</h3>
-          <p>{{ $t('modelSettings.rerank.desc') }}</p>
+          <p class="section-desc">{{ $t('modelSettings.rerank.desc') }}</p>
         </div>
-        <t-button size="small" theme="primary" @click="openAddDialog('rerank')" class="add-model-btn">
+        <t-button theme="primary" size="small" @click="openAddDialog('rerank')">
           <template #icon>
-            <t-icon name="add" class="add-icon" />
+            <add-icon />
           </template>
           {{ $t('modelSettings.actions.addModel') }}
         </t-button>
@@ -164,24 +204,27 @@
           </div>
         </div>
       </div>
-      <div v-else class="empty-state">
-        <p class="empty-text">{{ $t('modelSettings.rerank.empty') }}</p>
-        <t-button theme="default" variant="outline" size="small" @click="openAddDialog('rerank')">
+      <div v-else class="empty-models">
+        <p>{{ $t('modelSettings.rerank.empty') }}</p>
+        <t-button theme="primary" size="small" @click="openAddDialog('rerank')">
+          <template #icon>
+            <add-icon />
+          </template>
           {{ $t('modelSettings.actions.addModel') }}
         </t-button>
       </div>
     </div>
 
     <!-- VLLM 视觉模型 -->
-    <div class="model-category-section" data-model-type="vllm">
-      <div class="category-header">
-        <div class="header-info">
+    <div class="settings-group model-type-group" data-model-type="vllm">
+      <div class="section-subheader">
+        <div class="subheader-text">
           <h3>{{ $t('modelSettings.vllm.title') }}</h3>
-          <p>{{ $t('modelSettings.vllm.desc') }}</p>
+          <p class="section-desc">{{ $t('modelSettings.vllm.desc') }}</p>
         </div>
-        <t-button size="small" theme="primary" @click="openAddDialog('vllm')" class="add-model-btn">
+        <t-button theme="primary" size="small" @click="openAddDialog('vllm')">
           <template #icon>
-            <t-icon name="add" class="add-icon" />
+            <add-icon />
           </template>
           {{ $t('modelSettings.actions.addModel') }}
         </t-button>
@@ -213,24 +256,27 @@
           </div>
         </div>
       </div>
-      <div v-else class="empty-state">
-        <p class="empty-text">{{ $t('modelSettings.vllm.empty') }}</p>
-        <t-button theme="default" variant="outline" size="small" @click="openAddDialog('vllm')">
+      <div v-else class="empty-models">
+        <p>{{ $t('modelSettings.vllm.empty') }}</p>
+        <t-button theme="primary" size="small" @click="openAddDialog('vllm')">
+          <template #icon>
+            <add-icon />
+          </template>
           {{ $t('modelSettings.actions.addModel') }}
         </t-button>
       </div>
     </div>
 
     <!-- STT 语音模型 -->
-    <div class="model-category-section" data-model-type="asr">
-      <div class="category-header">
-        <div class="header-info">
+    <div class="settings-group model-type-group" data-model-type="asr">
+      <div class="section-subheader">
+        <div class="subheader-text">
           <h3>{{ $t('modelSettings.asr.title') }}</h3>
-          <p>{{ $t('modelSettings.asr.desc') }}</p>
+          <p class="section-desc">{{ $t('modelSettings.asr.desc') }}</p>
         </div>
-        <t-button size="small" theme="primary" @click="openAddDialog('asr')" class="add-model-btn">
+        <t-button theme="primary" size="small" @click="openAddDialog('asr')">
           <template #icon>
-            <t-icon name="add" class="add-icon" />
+            <add-icon />
           </template>
           {{ $t('modelSettings.actions.addModel') }}
         </t-button>
@@ -261,9 +307,12 @@
           </div>
         </div>
       </div>
-      <div v-else class="empty-state">
-        <p class="empty-text">{{ $t('modelSettings.asr.empty') }}</p>
-        <t-button theme="default" variant="outline" size="small" @click="openAddDialog('asr')">
+      <div v-else class="empty-models">
+        <p>{{ $t('modelSettings.asr.empty') }}</p>
+        <t-button theme="primary" size="small" @click="openAddDialog('asr')">
+          <template #icon>
+            <add-icon />
+          </template>
           {{ $t('modelSettings.actions.addModel') }}
         </t-button>
       </div>
@@ -283,9 +332,10 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { MessagePlugin } from 'tdesign-vue-next'
+import { AddIcon } from 'tdesign-icons-vue-next'
 import { useI18n } from 'vue-i18n'
 import ModelEditorDialog from '@/components/ModelEditorDialog.vue'
-import { listModels, createModel, updateModel as updateModelAPI, deleteModel as deleteModelAPI, type ModelConfig } from '@/api/model'
+import { listModels, createModel, updateModel as updateModelAPI, deleteModel as deleteModelAPI, initializeWeKnoraCloud, getWeKnoraCloudStatus, type ModelConfig } from '@/api/model'
 
 const { t } = useI18n()
 
@@ -293,6 +343,38 @@ const showDialog = ref(false)
 const currentModelType = ref<'chat' | 'embedding' | 'rerank' | 'vllm' | 'asr'>('chat')
 const editingModel = ref<any>(null)
 const loading = ref(true)
+
+// WeKnoraCloud 配置
+const weKnoraCloudForm = ref({ appId: '', appSecret: '' })
+const weKnoraCloudLoading = ref(false)
+const weKnoraCloudNeedsReinit = ref(false)
+const weKnoraCloudReinitReason = ref('')
+
+const handleWeKnoraCloudInit = async () => {
+  if (!weKnoraCloudForm.value.appId || !weKnoraCloudForm.value.appSecret) {
+    MessagePlugin.warning('请填写 APPID 和 APPSECRET')
+    return
+  }
+  weKnoraCloudLoading.value = true
+  try {
+    const result = await initializeWeKnoraCloud({
+      app_id: weKnoraCloudForm.value.appId,
+      app_secret: weKnoraCloudForm.value.appSecret,
+    })
+    const updatedCount = result.models.filter((m: any) => m.action === 'updated').length
+    const createdCount = result.models.filter((m: any) => m.action === 'created').length
+    MessagePlugin.success(`初始化成功：新建 ${createdCount} 个，更新 ${updatedCount} 个模型`)
+    weKnoraCloudForm.value.appId = ''
+    weKnoraCloudForm.value.appSecret = ''
+    weKnoraCloudNeedsReinit.value = false
+    weKnoraCloudReinitReason.value = ''
+    await loadModels()
+  } catch (err: any) {
+    MessagePlugin.error(err?.message || 'WeKnoraCloud 初始化失败')
+  } finally {
+    weKnoraCloudLoading.value = false
+  }
+}
 
 // 模型列表数据
 const allModels = ref<ModelConfig[]>([])
@@ -351,6 +433,10 @@ const loadModels = async () => {
     // 直接获取所有模型，不分类型
     const models = await listModels()
     allModels.value = models
+    // 检查 WeKnoraCloud 凭证状态
+    const status = await getWeKnoraCloudStatus()
+    weKnoraCloudNeedsReinit.value = status.needs_reinit
+    weKnoraCloudReinitReason.value = status.reason || ''
   } catch (error: any) {
     console.error('加载模型列表失败:', error)
     MessagePlugin.error(error.message)
@@ -553,63 +639,90 @@ onMounted(() => {
   .section-description {
     font-size: 14px;
     color: var(--td-text-color-secondary);
-    margin: 0 0 20px 0;
+    margin: 0 0 16px 0;
     line-height: 1.5;
   }
 }
 
-.model-category-section {
+.builtin-models-hint {
+  margin-top: 4px;
+  padding: 10px 12px;
+  background: var(--td-bg-color-secondarycontainer);
+  border: 1px solid var(--td-component-stroke);
+  border-radius: 6px;
+}
+
+.builtin-hint-label {
+  margin: 0 0 4px 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--td-text-color-placeholder);
+  letter-spacing: 0.02em;
+}
+
+.builtin-hint-text {
+  margin: 0 0 6px 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--td-text-color-secondary);
+}
+
+.builtin-hint-link {
+  font-size: 13px;
+  color: var(--td-text-color-secondary);
+  text-decoration: none;
+
+  &:hover {
+    color: var(--td-brand-color);
+    text-decoration: underline;
+  }
+}
+
+.settings-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.model-type-group {
   margin-bottom: 32px;
   padding-bottom: 32px;
   border-bottom: 1px solid var(--td-component-stroke);
 
-  &:last-child {
+  &:last-of-type {
     margin-bottom: 0;
     padding-bottom: 0;
     border-bottom: none;
   }
 }
 
-.category-header {
+.section-subheader {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
+  gap: 16px;
   margin-bottom: 16px;
 
-  .header-info {
+  .subheader-text {
     flex: 1;
-
-    h3 {
-      font-size: 15px;
-      font-weight: 500;
-      color: var(--td-text-color-primary);
-      margin: 0 0 4px 0;
-    }
-
-    p {
-      font-size: 13px;
-      color: var(--td-text-color-secondary);
-      margin: 0;
-      line-height: 1.5;
-    }
+    min-width: 0;
   }
-}
 
-// 添加模型按钮样式优化
-:deep(.add-model-btn) {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-weight: 500;
-  height: 32px;
-  padding: 0 16px;
-  font-size: 14px;
-  flex-shrink: 0;
+  h3 {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--td-text-color-primary);
+    margin: 0 0 4px 0;
+  }
 
-  .add-icon {
-    font-size: 14px;
-    width: 14px;
-    height: 14px;
+  .section-desc {
+    font-size: 13px;
+    color: var(--td-text-color-secondary);
+    margin: 0;
+    line-height: 1.5;
+  }
+
+  :deep(.t-button) {
+    flex-shrink: 0;
   }
 }
 
@@ -623,29 +736,24 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 16px;
+  padding: 14px 16px;
   border: 1px solid var(--td-component-stroke);
-  border-radius: 6px;
-  background: var(--td-bg-color-secondarycontainer);
-  transition: all 0.15s ease;
+  border-radius: 8px;
+  background: var(--td-bg-color-container);
+  transition: border-color 0.2s ease, background-color 0.2s ease;
   position: relative;
   overflow: visible;
 
   &:hover {
     border-color: var(--td-brand-color);
-    background: var(--td-bg-color-container);
-    box-shadow: 0 1px 4px rgba(7, 192, 95, 0.08);
   }
 
-  // 内置模型样式
   &.builtin-model {
     background: var(--td-bg-color-secondarycontainer);
-    border-color: var(--td-component-border);
+    border-color: var(--td-component-stroke);
 
     &:hover {
-      border-color: var(--td-component-stroke);
-      background: var(--td-bg-color-secondarycontainer);
-      box-shadow: none;
+      border-color: var(--td-brand-color-light);
     }
 
     .model-info {
@@ -655,7 +763,7 @@ onMounted(() => {
 
       .model-meta {
         .source-tag {
-          background: var(--td-bg-color-secondarycontainer);
+          background: var(--td-bg-color-container);
           color: var(--td-text-color-placeholder);
         }
       }
@@ -708,8 +816,6 @@ onMounted(() => {
   align-items: center;
   gap: 4px;
   flex-shrink: 0;
-  opacity: 0;
-  transition: opacity 0.15s ease;
   position: relative;
   z-index: 1001;
 
@@ -724,125 +830,20 @@ onMounted(() => {
   }
 }
 
-.model-card:hover .model-actions {
-  opacity: 1;
-}
-
-.empty-state {
-  padding: 48px 0;
+.empty-models {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding: 32px;
   text-align: center;
+  color: var(--td-text-color-placeholder);
+  border: 1px dashed var(--td-component-stroke);
+  border-radius: 8px;
+  font-size: 14px;
 
-  .empty-text {
-    font-size: 13px;
-    color: var(--td-text-color-placeholder);
-    margin: 0 0 16px 0;
-  }
-}
-
-.builtin-models-info {
-  margin-top: 16px;
-
-  .info-box {
-    background: var(--td-success-color-light);
-    border: 1px solid var(--td-success-color-focus);
-    border-left: 3px solid var(--td-brand-color);
-    border-radius: 6px;
-    padding: 16px;
-  }
-
-  .info-header {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-bottom: 8px;
-
-    .info-icon {
-      font-size: 16px;
-      color: var(--td-brand-color);
-      flex-shrink: 0;
-    }
-
-    .info-title {
-      font-size: 14px;
-      font-weight: 500;
-      color: var(--td-brand-color-active);
-    }
-  }
-
-  .info-content {
-    font-size: 13px;
-    line-height: 1.6;
-    color: var(--td-success-color);
-
-    p {
-      margin: 0 0 6px 0;
-
-      &:last-child {
-        margin-bottom: 0;
-      }
-
-      &.doc-link {
-        margin-top: 10px;
-        display: flex;
-        align-items: center;
-        gap: 6px;
-
-        .link-icon {
-          font-size: 13px;
-          color: var(--td-brand-color);
-          flex-shrink: 0;
-        }
-
-        a {
-          color: var(--td-brand-color);
-          text-decoration: none;
-          font-weight: 500;
-          transition: color 0.15s;
-
-          &:hover {
-            color: var(--td-brand-color-active);
-            text-decoration: underline;
-          }
-        }
-      }
-    }
-  }
-}
-
-// TDesign 组件样式覆盖
-:deep(.t-button) {
-  &.add-model-btn {
-    border-radius: 6px;
-    font-weight: 500;
-    transition: all 0.15s ease;
-
-    &:hover {
-      background: var(--td-brand-color);
-      border-color: var(--td-brand-color);
-    }
-
-    &:active {
-      background: var(--td-brand-color-active);
-      border-color: var(--td-brand-color-active);
-    }
-  }
-
-  &.t-size-s {
-    height: 32px;
-    padding: 0 12px;
-    font-size: 13px;
-    border-radius: 6px;
-
-    &.t-button--variant-outline {
-      color: var(--td-text-color-secondary);
-      border-color: var(--td-component-stroke);
-
-      &:hover {
-        color: var(--td-brand-color);
-        border-color: var(--td-brand-color);
-        background: rgba(7, 192, 95, 0.04);
-      }
-    }
+  p {
+    margin: 0;
   }
 }
 
