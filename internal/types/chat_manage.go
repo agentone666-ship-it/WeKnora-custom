@@ -1,5 +1,7 @@
 package types
 
+import "maps"
+
 // PipelineRequest holds immutable configuration set once at the request entry point.
 type PipelineRequest struct {
 	SessionID    string `json:"session_id"`
@@ -158,6 +160,16 @@ func (c *ChatManage) Clone() *ChatManage {
 		}
 	}
 
+	// Deep copy Entity using in search entity plugin
+	entity := make([]string, len(c.Entity))
+	copy(entity, c.Entity)
+
+	entityKBIDs := make([]string, len(c.EntityKBIDs))
+	copy(entityKBIDs, c.EntityKBIDs)
+
+	entityKnowledge := make(map[string]string)
+	maps.Copy(entityKnowledge, c.EntityKnowledge)
+
 	return &ChatManage{
 		PipelineRequest: PipelineRequest{
 			Query:                    c.Query,
@@ -206,6 +218,9 @@ func (c *ChatManage) Clone() *ChatManage {
 			QuotedContext:        c.QuotedContext,
 			SystemPromptOverride: c.SystemPromptOverride,
 			RenderedContexts:     c.RenderedContexts,
+			Entity:               entity,
+			EntityKBIDs:          entityKBIDs,
+			EntityKnowledge:      entityKnowledge,
 		},
 	}
 }
