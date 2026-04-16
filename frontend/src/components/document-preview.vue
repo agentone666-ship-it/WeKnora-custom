@@ -6,6 +6,7 @@ import { MessagePlugin } from 'tdesign-vue-next';
 import hljs from 'highlight.js';
 import 'highlight.js/styles/github.css';
 import { useI18n } from 'vue-i18n';
+import { sanitizeHTML, safeMarkdownToHTML } from '@/utils/security';
 
 
 const VueOfficePptx = defineAsyncComponent(() => import('@vue-office/pptx'));
@@ -174,7 +175,7 @@ async function renderExcel(blob: Blob, fileType?: string) {
     html += sheetHtml;
     html += `</div>`;
   });
-  excelHtml.value = html;
+  excelHtml.value = sanitizeHTML(html);
 }
 
 async function renderText(blob: Blob, fileType: string) {
@@ -223,7 +224,9 @@ async function renderMarkdown(blob: Blob) {
     return `<pre><code class="hljs">${highlighted}</code></pre>`;
   };
   marked.use({ renderer });
-  markdownHtml.value = marked.parse(text);
+  const safeText = safeMarkdownToHTML(text);
+  const rawHtml = marked.parse(safeText);
+  markdownHtml.value = sanitizeHTML(rawHtml);
 }
 
 function onImageLoad(e: Event) {

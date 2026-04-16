@@ -189,10 +189,6 @@ const renderToken = (token) => {
     }
 };
 
-const myMarkdown = (res) => {
-    return marked.parse(res, { renderer })
-}
-
 // 获取实际内容
 const getActualContent = () => {
     return (props.content || props.session?.content || '').trim();
