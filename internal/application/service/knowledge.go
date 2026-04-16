@@ -1500,6 +1500,7 @@ type ProcessChunksOptions struct {
 	// When set, the chunks passed to processChunks are child chunks, and each
 	// child's ParentIndex references an entry in this slice.
 	ParentChunks []types.ParsedParentChunk
+	Metadata     map[string]string
 }
 
 // buildSplitterConfig creates a SplitterConfig with fallbacks from a KnowledgeBase.
@@ -1875,17 +1876,6 @@ func (s *knowledgeService) processChunks(ctx context.Context,
 	}
 	logger.GetLogger(ctx).Infof("processChunks batch index successfully, with %d index", len(indexInfoList))
 
-	logger.Infof(ctx, "processChunks create relationship rag task")
-	if kb.ExtractConfig != nil && kb.ExtractConfig.Enabled {
-		for _, chunk := range textChunks {
-			err := NewChunkExtractTask(ctx, s.task, chunk.TenantID, chunk.ID, kb.SummaryModelID)
-			if err != nil {
-				logger.GetLogger(ctx).WithField("error", err).Errorf("processChunks create chunk extract task failed")
-				span.RecordError(err)
-			}
-		}
-	}
-
 	// Final check before marking as completed - if deleted during processing, don't update status
 	if s.isKnowledgeDeleting(ctx, knowledge.TenantID, knowledge.ID) {
 		logger.Infof(ctx, "Knowledge was deleted during processing, skipping completion update: %s", knowledge.ID)
@@ -1900,19 +1890,15 @@ func (s *knowledgeService) processChunks(ctx context.Context,
 		return
 	}
 
-	// Skip summary/question generation for image-type and video-type knowledge — the text chunk
-	// is just a markdown reference (or placeholder), so LLM summary would be useless.
-	// For images, the multimodal task provides a caption/summary as the description instead.
+	// Check if this document has extracted images that will be processed asynchronously
 	isImage := IsImageType(knowledge.FileType)
 	isVideo := IsVideoType(knowledge.FileType)
 	pendingMultimodal := isImage && options.EnableMultimodel && len(options.StoredImages) > 0
+	pendingPDFMultimodal := !isImage && !isVideo && options.EnableMultimodel && len(options.StoredImages) > 0
 
-	// For image files with pending multimodal processing, keep "processing" status
-	// so the frontend waits until the description is ready before showing "completed".
-	if pendingMultimodal {
+	// For image files or documents with pending multimodal processing, keep "processing" status
+	if pendingMultimodal || pendingPDFMultimodal {
 		knowledge.ParseStatus = types.ParseStatusProcessing
-	} else {
-		knowledge.ParseStatus = types.ParseStatusCompleted
 	}
 	knowledge.EnableStatus = "enabled"
 	knowledge.StorageSize = totalStorageSize
@@ -1920,37 +1906,32 @@ func (s *knowledgeService) processChunks(ctx context.Context,
 	knowledge.ProcessedAt = &now
 	knowledge.UpdatedAt = now
 
-	// Set summary status based on whether summary generation will be triggered
-	if len(textChunks) > 0 && !isImage && !isVideo {
-		knowledge.SummaryStatus = types.SummaryStatusPending
-	} else {
-		knowledge.SummaryStatus = types.SummaryStatusNone
-	}
-
 	if err := s.repo.UpdateKnowledge(ctx, knowledge); err != nil {
 		logger.GetLogger(ctx).WithField("error", err).Errorf("processChunks update knowledge failed")
 	}
 
-	// Enqueue question generation task if enabled (async, non-blocking)
-	if options.EnableQuestionGeneration && len(textChunks) > 0 && !isImage && !isVideo {
-		questionCount := options.QuestionCount
-		if questionCount <= 0 {
-			questionCount = 3
-		}
-		if questionCount > 10 {
-			questionCount = 10
-		}
-		s.enqueueQuestionGenerationTask(ctx, knowledge.KnowledgeBaseID, knowledge.ID, questionCount)
-	}
-
-	// Enqueue summary generation task (async, non-blocking)
-	if len(textChunks) > 0 && !isImage && !isVideo {
-		s.enqueueSummaryGenerationTask(ctx, knowledge.KnowledgeBaseID, knowledge.ID)
-	}
-
 	// Enqueue multimodal tasks for images (async, non-blocking)
 	if options.EnableMultimodel && len(options.StoredImages) > 0 {
-		s.enqueueImageMultimodalTasks(ctx, knowledge, kb, options.StoredImages, chunks)
+		s.enqueueImageMultimodalTasks(ctx, knowledge, kb, options.StoredImages, chunks, options.Metadata)
+	} else {
+		// If there are no multimodal tasks, enqueue the post process task immediately
+		lang, _ := types.LanguageFromContext(ctx)
+		payloadBytes, err := json.Marshal(types.KnowledgePostProcessPayload{
+			TenantID:        knowledge.TenantID,
+			KnowledgeID:     knowledge.ID,
+			KnowledgeBaseID: knowledge.KnowledgeBaseID,
+			Language:        lang,
+		})
+		if err == nil {
+			task := asynq.NewTask(types.TypeKnowledgePostProcess, payloadBytes, asynq.Queue("default"), asynq.MaxRetry(3))
+			if _, err := s.task.Enqueue(task); err != nil {
+				logger.Errorf(ctx, "Failed to enqueue knowledge post process task: %v", err)
+			} else {
+				logger.Infof(ctx, "Enqueued knowledge post process task for %s", knowledge.ID)
+			}
+		} else {
+			logger.Errorf(ctx, "Failed to marshal knowledge post process payload: %v", err)
+		}
 	}
 
 	// Update tenant's storage usage
@@ -7952,6 +7933,10 @@ func (s *knowledgeService) ProcessDocument(ctx context.Context, t *asynq.Task) e
 		StoredImages:             storedImages,
 	}
 
+	if convertResult != nil {
+		processOpts.Metadata = convertResult.Metadata
+	}
+
 	if kb.ChunkingConfig.EnableParentChild {
 		parentCfg, childCfg := buildParentChildConfigs(kb.ChunkingConfig, chunkCfg)
 		pcResult := chunker.SplitTextParentChild(convertResult.MarkdownContent, parentCfg, childCfg)
@@ -8132,9 +8117,17 @@ func (s *knowledgeService) enqueueImageMultimodalTasks(
 	kb *types.KnowledgeBase,
 	images []docparser.StoredImage,
 	chunks []types.ParsedChunk,
+	metadata map[string]string,
 ) {
 	if s.task == nil || len(images) == 0 {
 		return
+	}
+
+	redisKey := fmt.Sprintf("multimodal:pending:%s", knowledge.ID)
+	if s.redisClient != nil {
+		if err := s.redisClient.Set(ctx, redisKey, len(images), 24*time.Hour).Err(); err != nil {
+			logger.Warnf(ctx, "Failed to set multimodal pending count for %s: %v", knowledge.ID, err)
+		}
 	}
 
 	for _, img := range images {
@@ -8161,6 +8154,7 @@ func (s *knowledgeService) enqueueImageMultimodalTasks(
 			EnableOCR:       true,
 			EnableCaption:   true,
 			Language:        lang,
+			ImageSourceType: metadata["image_source_type"],
 		}
 
 		payloadBytes, err := json.Marshal(payload)

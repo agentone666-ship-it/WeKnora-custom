@@ -23,6 +23,7 @@ type AsynqTaskParams struct {
 	ChunkExtractor       interfaces.TaskHandler `name:"chunkExtractor"`
 	DataTableSummary     interfaces.TaskHandler `name:"dataTableSummary"`
 	ImageMultimodal      interfaces.TaskHandler `name:"imageMultimodal"`
+	KnowledgePostProcess interfaces.TaskHandler `name:"knowledgePostProcess"`
 }
 
 func getAsynqRedisClientOpt() *asynq.RedisClientOpt {
@@ -108,6 +109,9 @@ func RunAsynqServer(params AsynqTaskParams) *asynq.ServeMux {
 
 	// Register image multimodal handler
 	mux.HandleFunc(types.TypeImageMultimodal, params.ImageMultimodal.Handle)
+
+	// Register knowledge post process handler
+	mux.HandleFunc(types.TypeKnowledgePostProcess, params.KnowledgePostProcess.Handle)
 
 	// Register data source sync handler
 	mux.HandleFunc(types.TypeDataSourceSync, params.DataSourceService.ProcessSync)

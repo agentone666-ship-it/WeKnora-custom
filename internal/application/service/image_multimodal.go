@@ -19,16 +19,33 @@ import (
 	secutils "github.com/Tencent/WeKnora/internal/utils"
 	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
+	"github.com/redis/go-redis/v9"
 )
 
 const (
-	vlmOCRPrompt = "Extract all body text content from this document image and output in pure Markdown format. Requirements:\n" +
-		"1. Ignore headers and footers\n" +
-		"2. Use Markdown table syntax for tables\n" +
-		"3. Use LaTeX format for formulas (wrapped with $ or $$)\n" +
-		"4. Organize content in the original reading order\n" +
-		"5. Only output extracted text content, do not add any HTML tags\n" +
-		"If there is no recognizable text content in the image, reply: No text content."
+	vlmOCRPrompt = "<system_prompt>\n" +
+		"You are an OCR assistant. Your task is to extract all body text content from this document image and output in pure Markdown format.\n" +
+		"</system_prompt>\n\n" +
+		"<instructions>\n" +
+		"1. Ignore headers and footers.\n" +
+		"2. Use Markdown table syntax for tables.\n" +
+		"3. Use LaTeX format for formulas (wrapped with $ or $$).\n" +
+		"4. Organize content in the original reading order.\n" +
+		"5. Output ONLY the extracted text content. Do NOT include any HTML tags, reasoning, or unrelated comments.\n" +
+		"6. If there is absolutely no recognizable text content in the image, reply ONLY with: No text content.\n" +
+		"</instructions>"
+	vlmOCRScannedPDFPrompt = "<system_prompt>\n" +
+		"You are an OCR and document layout extraction assistant. The input image is a page from a scanned PDF document.\n" +
+		"Your task is to carefully extract all text and layout structure from the image, and output the result in pure Markdown format.\n" +
+		"</system_prompt>\n\n" +
+		"<instructions>\n" +
+		"1. Ignore headers, footers, and page numbers.\n" +
+		"2. Preserve the original document's paragraph and hierarchical structure as much as possible.\n" +
+		"3. If there are tables, use Markdown table syntax to represent them.\n" +
+		"4. If there are mathematical formulas, use LaTeX format wrapped in $ or $$.\n" +
+		"5. Output ONLY the extracted text content. Do NOT include any HTML tags, reasoning, or unrelated comments.\n" +
+		"6. If there is absolutely no recognizable text content in the image, reply ONLY with: No text content.\n" +
+		"</instructions>"
 	vlmCaptionPrompt = "Provide a brief and concise description of the main content of the image in Chinese"
 )
 
@@ -44,6 +61,7 @@ type ImageMultimodalService struct {
 	retrieveEngine interfaces.RetrieveEngineRegistry
 	ollamaService  *ollama.OllamaService
 	taskEnqueuer   interfaces.TaskEnqueuer
+	redisClient    *redis.Client
 }
 
 func NewImageMultimodalService(
@@ -55,6 +73,7 @@ func NewImageMultimodalService(
 	retrieveEngine interfaces.RetrieveEngineRegistry,
 	ollamaService *ollama.OllamaService,
 	taskEnqueuer interfaces.TaskEnqueuer,
+	redisClient *redis.Client,
 ) interfaces.TaskHandler {
 	return &ImageMultimodalService{
 		chunkService:   chunkService,
@@ -65,6 +84,7 @@ func NewImageMultimodalService(
 		retrieveEngine: retrieveEngine,
 		ollamaService:  ollamaService,
 		taskEnqueuer:   taskEnqueuer,
+		redisClient:    redisClient,
 	}
 }
 
@@ -133,7 +153,13 @@ func (s *ImageMultimodalService) Handle(ctx context.Context, task *asynq.Task) e
 	}
 
 	if payload.EnableOCR {
-		ocrText, ocrErr := vlmModel.Predict(ctx, [][]byte{imgBytes}, vlmOCRPrompt)
+		prompt := vlmOCRPrompt
+		if payload.ImageSourceType == "scanned_pdf" {
+			prompt = vlmOCRScannedPDFPrompt
+			logger.Infof(ctx, "[ImageMultimodal] Using scanned PDF prompt for OCR: %s", payload.ImageURL)
+		}
+		
+		ocrText, ocrErr := vlmModel.Predict(ctx, [][]byte{imgBytes}, prompt)
 		if ocrErr != nil {
 			logger.Warnf(ctx, "[ImageMultimodal] OCR failed for %s: %v", payload.ImageURL, ocrErr)
 		} else {
@@ -196,6 +222,7 @@ func (s *ImageMultimodalService) Handle(ctx context.Context, task *asynq.Task) e
 	if len(newChunks) == 0 {
 		// Even if OCR/caption both failed, mark knowledge as completed
 		s.finalizeImageKnowledge(ctx, payload, "")
+		s.checkAndFinalizeAllImages(ctx, payload)
 		return nil
 	}
 
@@ -222,7 +249,9 @@ func (s *ImageMultimodalService) Handle(ctx context.Context, task *asynq.Task) e
 	// During initial processChunks, question generation is skipped for image-type
 	// knowledge because the text chunk is just a markdown reference. Now that we
 	// have real textual content (caption/OCR), we can generate questions.
-	s.enqueueQuestionGenerationIfEnabled(ctx, payload)
+	// Note: for documents with multiple images (e.g. PDFs), we also wait until
+	// all images are processed before triggering summary/question generation.
+	s.checkAndFinalizeAllImages(ctx, payload)
 
 	return nil
 }
@@ -412,52 +441,55 @@ func (s *ImageMultimodalService) resolveFileServiceForPayload(ctx context.Contex
 	return fileSvc
 }
 
-// enqueueQuestionGenerationIfEnabled checks if the knowledge base has question
-// generation enabled and, if so, enqueues a task for the image knowledge.
-func (s *ImageMultimodalService) enqueueQuestionGenerationIfEnabled(ctx context.Context, payload types.ImageMultimodalPayload) {
+// downloadImageFromURL downloads image bytes from an HTTP(S) URL.
+func downloadImageFromURL(imageURL string) ([]byte, error) {
+	return secutils.DownloadBytes(imageURL)
+}
+
+func (s *ImageMultimodalService) checkAndFinalizeAllImages(ctx context.Context, payload types.ImageMultimodalPayload) {
+	if s.redisClient == nil {
+		s.enqueueKnowledgePostProcessTask(ctx, payload)
+		return
+	}
+
+	redisKey := fmt.Sprintf("multimodal:pending:%s", payload.KnowledgeID)
+	
+	pendingCount, err := s.redisClient.Decr(ctx, redisKey).Result()
+	if err != nil && err != redis.Nil {
+		logger.Warnf(ctx, "[ImageMultimodal] Failed to decrement pending count for %s: %v", payload.KnowledgeID, err)
+		return
+	}
+
+	if pendingCount <= 0 {
+		logger.Infof(ctx, "[ImageMultimodal] All images processed for knowledge %s. Finalizing...", payload.KnowledgeID)
+		s.redisClient.Del(ctx, redisKey)
+
+		// Enqueue the post process task to handle all downstream tasks (summary, question generation, etc)
+		s.enqueueKnowledgePostProcessTask(ctx, payload)
+	}
+}
+
+func (s *ImageMultimodalService) enqueueKnowledgePostProcessTask(ctx context.Context, payload types.ImageMultimodalPayload) {
 	if s.taskEnqueuer == nil {
 		return
 	}
-
-	kb, err := s.kbService.GetKnowledgeBaseByIDOnly(ctx, payload.KnowledgeBaseID)
-	if err != nil || kb == nil {
-		return
-	}
-	if kb.QuestionGenerationConfig == nil || !kb.QuestionGenerationConfig.Enabled {
-		return
-	}
-
-	questionCount := kb.QuestionGenerationConfig.QuestionCount
-	if questionCount <= 0 {
-		questionCount = 3
-	}
-	if questionCount > 10 {
-		questionCount = 10
-	}
-
-	taskPayload := types.QuestionGenerationPayload{
+	
+	taskPayload := types.KnowledgePostProcessPayload{
 		TenantID:        payload.TenantID,
-		KnowledgeBaseID: payload.KnowledgeBaseID,
 		KnowledgeID:     payload.KnowledgeID,
-		QuestionCount:   questionCount,
+		KnowledgeBaseID: payload.KnowledgeBaseID,
 		Language:        payload.Language,
 	}
 	payloadBytes, err := json.Marshal(taskPayload)
 	if err != nil {
-		logger.Warnf(ctx, "[ImageMultimodal] Failed to marshal question generation payload: %v", err)
+		logger.Warnf(ctx, "[ImageMultimodal] Failed to marshal post process payload: %v", err)
 		return
 	}
 
-	task := asynq.NewTask(types.TypeQuestionGeneration, payloadBytes, asynq.Queue("low"), asynq.MaxRetry(3))
+	task := asynq.NewTask(types.TypeKnowledgePostProcess, payloadBytes, asynq.Queue("default"), asynq.MaxRetry(3))
 	if _, err := s.taskEnqueuer.Enqueue(task); err != nil {
-		logger.Warnf(ctx, "[ImageMultimodal] Failed to enqueue question generation for %s: %v", payload.KnowledgeID, err)
+		logger.Warnf(ctx, "[ImageMultimodal] Failed to enqueue post process task for %s: %v", payload.KnowledgeID, err)
 	} else {
-		logger.Infof(ctx, "[ImageMultimodal] Enqueued question generation task for image knowledge %s (count=%d)",
-			payload.KnowledgeID, questionCount)
+		logger.Infof(ctx, "[ImageMultimodal] Enqueued post process task for %s", payload.KnowledgeID)
 	}
-}
-
-// downloadImageFromURL downloads image bytes from an HTTP(S) URL.
-func downloadImageFromURL(imageURL string) ([]byte, error) {
-	return secutils.DownloadBytes(imageURL)
 }
