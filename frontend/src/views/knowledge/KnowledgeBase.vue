@@ -166,7 +166,7 @@ const onVisibleChange = (visible: boolean) => {
   }
 };
 let isCardDetails = ref(false);
-let timeout: ReturnType<typeof setInterval> | null = null;
+let timeout: ReturnType<typeof setTimeout> | null = null;
 let delDialog = ref(false)
 let rebuildDialog = ref(false)
 let rebuildKnowledgeItem = ref<KnowledgeCard>({ id: '', parse_status: '' })
@@ -715,6 +715,10 @@ onUnmounted(() => {
   window.removeEventListener('knowledgeFileUploaded', handleFileUploaded as EventListener);
   window.removeEventListener('openURLImportDialog', handleOpenURLImportDialog as EventListener);
   stopMovePoll();
+  if (timeout !== null) {
+    clearTimeout(timeout);
+    timeout = null;
+  }
 });
 watch(() => cardList.value, (newValue) => {
   if (isFAQ.value) return;
@@ -734,7 +738,7 @@ watch(() => cardList.value, (newValue) => {
     return isParsing || isSummaryPending;
   })
   if (timeout !== null) {
-    clearInterval(timeout);
+    clearTimeout(timeout);
     timeout = null;
   }
   if (analyzeList.length) {
@@ -761,25 +765,59 @@ type KnowledgeCard = {
   tag_id?: string;
 };
 const updateStatus = (analyzeList: KnowledgeCard[]) => {
+  if (timeout !== null) {
+    clearTimeout(timeout);
+    timeout = null;
+  }
+  if (!analyzeList.length) return;
+
   let query = ``;
   for (let i = 0; i < analyzeList.length; i++) {
     query += `ids=${analyzeList[i].id}&`;
   }
-  timeout = setInterval(() => {
+  timeout = setTimeout(() => {
     batchQueryKnowledge(query).then((result: any) => {
+      let hasChanges = false;
       if (result.success && result.data) {
         (result.data as KnowledgeCard[]).forEach((item: KnowledgeCard) => {
           const index = cardList.value.findIndex(card => card.id == item.id);
           if (index == -1) return;
           
-          // Always update the card data
-          cardList.value[index].parse_status = item.parse_status;
-          cardList.value[index].summary_status = item.summary_status;
-          cardList.value[index].description = item.description;
+          if (cardList.value[index].parse_status !== item.parse_status ||
+              cardList.value[index].summary_status !== item.summary_status ||
+              cardList.value[index].description !== item.description) {
+            
+            // Always update the card data
+            cardList.value[index].parse_status = item.parse_status;
+            cardList.value[index].summary_status = item.summary_status;
+            cardList.value[index].description = item.description;
+            hasChanges = true;
+          }
         });
+      }
+      // If there are no changes, the watch won't trigger, so we must manually poll again
+      // Even if there are changes, we can manually poll again just to be safe.
+      // The watch will clear this timeout if it triggers.
+      const stillPending = cardList.value.filter(item => {
+        const isParsing = item.parse_status == 'pending' || item.parse_status == 'processing';
+        const isSummaryPending = item.parse_status == 'completed' && 
+          (item.summary_status == 'pending' || item.summary_status == 'processing');
+        return isParsing || isSummaryPending;
+      });
+      if (stillPending.length > 0) {
+        updateStatus(stillPending);
       }
     }).catch((_err) => {
       // 错误处理
+      const stillPending = cardList.value.filter(item => {
+        const isParsing = item.parse_status == 'pending' || item.parse_status == 'processing';
+        const isSummaryPending = item.parse_status == 'completed' && 
+          (item.summary_status == 'pending' || item.summary_status == 'processing');
+        return isParsing || isSummaryPending;
+      });
+      if (stillPending.length > 0) {
+        updateStatus(stillPending);
+      }
     });
   }, 1500);
 };

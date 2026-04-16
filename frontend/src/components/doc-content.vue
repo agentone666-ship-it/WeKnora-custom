@@ -8,7 +8,7 @@ import mermaid from "mermaid";
 import { onMounted, ref, nextTick, onUnmounted, watch, computed } from "vue";
 import { downKnowledgeDetails, deleteGeneratedQuestion, getChunkByIdOnly, previewKnowledgeFile } from "@/api/knowledge-base/index";
 import { MessagePlugin, DialogPlugin } from "tdesign-vue-next";
-import { sanitizeHTML, safeMarkdownToHTML, createSafeImage, isValidImageURL, hydrateProtectedFileImages } from '@/utils/security';
+import { sanitizeHTML, safeMarkdownToHTML, createSafeImage, isValidImageURL, hydrateProtectedFileImages, isValidURL } from '@/utils/security';
 import { openMermaidFullscreen } from '@/utils/mermaidViewer';
 import { useI18n } from 'vue-i18n';
 import DocumentPreview from '@/components/document-preview.vue';
@@ -778,7 +778,7 @@ const handleDetailsScroll = () => {
       <div v-else-if="details.type === 'url'" class="url_box">
         <span class="label">{{ $t('knowledgeBase.urlSource') }}</span>
         <div class="url_link_box">
-          <a :href="details.source" target="_blank" class="url_link">
+          <a :href="isValidURL(details.source) ? details.source : 'javascript:void(0)'" :target="isValidURL(details.source) ? '_blank' : undefined" class="url_link">
             <t-icon name="link" size="14px" />
             <span class="url_text">{{ details.source }}</span>
             <t-icon name="jump" size="14px" class="jump-icon" />
