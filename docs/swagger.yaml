@@ -1,6 +1,6 @@
 basePath: /api/v1
 definitions:
-  github_com_Tencent_WeKnora_internal_datasource.ConnectorMetadata:
+  datasource.ConnectorMetadata:
     properties:
       auth_type:
         description: '"oauth2", "api_key", "token", etc.'
@@ -22,15 +22,15 @@ definitions:
       type:
         type: string
     type: object
-  github_com_Tencent_WeKnora_internal_errors.AppError:
+  errors.AppError:
     properties:
       code:
-        $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.ErrorCode'
+        $ref: '#/definitions/errors.ErrorCode'
       details: {}
       message:
         type: string
     type: object
-  github_com_Tencent_WeKnora_internal_errors.ErrorCode:
+  errors.ErrorCode:
     enum:
     - 1000
     - 1001
@@ -74,7 +74,554 @@ definitions:
     - ErrAgentMissingAllowedTools
     - ErrAgentInvalidMaxIterations
     - ErrAgentInvalidTemperature
-  github_com_Tencent_WeKnora_internal_types.AgentConfig:
+  github_com_Tencent_WeKnora_internal_errors.AppError:
+    properties:
+      code:
+        $ref: '#/definitions/errors.ErrorCode'
+      details: {}
+      message:
+        type: string
+    type: object
+  gorm.DeletedAt:
+    properties:
+      time:
+        type: string
+      valid:
+        description: Valid is true if Time is not NULL
+        type: boolean
+    type: object
+  handler.CopyKnowledgeBaseRequest:
+    properties:
+      source_id:
+        type: string
+      target_id:
+        type: string
+      task_id:
+        type: string
+    required:
+    - source_id
+    type: object
+  handler.CreateAgentRequest:
+    properties:
+      avatar:
+        type: string
+      config:
+        $ref: '#/definitions/types.CustomAgentConfig'
+      description:
+        type: string
+      name:
+        type: string
+    required:
+    - name
+    type: object
+  handler.CreateModelRequest:
+    properties:
+      description:
+        type: string
+      name:
+        type: string
+      parameters:
+        $ref: '#/definitions/types.ModelParameters'
+      source:
+        $ref: '#/definitions/types.ModelSource'
+      type:
+        $ref: '#/definitions/types.ModelType'
+    required:
+    - name
+    - parameters
+    - source
+    - type
+    type: object
+  handler.CreateStoreRequest:
+    properties:
+      connection_config:
+        $ref: '#/definitions/types.ConnectionConfig'
+      engine_type:
+        $ref: '#/definitions/types.RetrieverEngineType'
+      index_config:
+        $ref: '#/definitions/types.IndexConfig'
+      name:
+        type: string
+    required:
+    - connection_config
+    - engine_type
+    - name
+    type: object
+  handler.DeleteTagRequest:
+    properties:
+      exclude_ids:
+        description: Chunk seq_ids to exclude from deletion
+        items:
+          type: integer
+        type: array
+    type: object
+  handler.EvaluationRequest:
+    properties:
+      chat_id:
+        description: ID of chat model to use
+        type: string
+      dataset_id:
+        description: ID of dataset to evaluate
+        type: string
+      knowledge_base_id:
+        description: ID of knowledge base to use
+        type: string
+      rerank_id:
+        description: ID of rerank model to use
+        type: string
+    type: object
+  handler.FabriTextRequest:
+    properties:
+      model_id:
+        type: string
+      tags:
+        items:
+          type: string
+        type: array
+    required:
+    - model_id
+    type: object
+  handler.GetStorageEngineStatusResponse:
+    properties:
+      engines:
+        items:
+          $ref: '#/definitions/handler.StorageEngineStatusItem'
+        type: array
+      minio_env_available:
+        type: boolean
+    type: object
+  handler.GetSystemInfoResponse:
+    properties:
+      build_time:
+        type: string
+      commit_id:
+        type: string
+      db_version:
+        type: string
+      edition:
+        type: string
+      go_version:
+        type: string
+      graph_database_engine:
+        type: string
+      keyword_index_engine:
+        type: string
+      minio_enabled:
+        type: boolean
+      vector_store_engine:
+        type: string
+      version:
+        type: string
+    type: object
+  handler.KBModelConfigRequest:
+    properties:
+      asr_config:
+        $ref: '#/definitions/types.ASRConfig'
+      documentSplitting:
+        description: 文档分块配置
+        properties:
+          childChunkSize:
+            type: integer
+          chunkOverlap:
+            type: integer
+          chunkSize:
+            type: integer
+          enableParentChild:
+            type: boolean
+          parentChunkSize:
+            type: integer
+          parserEngineRules:
+            items:
+              $ref: '#/definitions/types.ParserEngineRule'
+            type: array
+          separators:
+            items:
+              type: string
+            type: array
+        type: object
+      embeddingModelId:
+        type: string
+      llmModelId:
+        type: string
+      multimodal:
+        description: 多模态配置（仅模型相关；存储引擎在 storageProvider 中配置）
+        properties:
+          enabled:
+            type: boolean
+        type: object
+      nodeExtract:
+        description: 知识图谱配置
+        properties:
+          enabled:
+            type: boolean
+          nodes:
+            items:
+              $ref: '#/definitions/types.GraphNode'
+            type: array
+          relations:
+            items:
+              $ref: '#/definitions/types.GraphRelation'
+            type: array
+          tags:
+            items:
+              type: string
+            type: array
+          text:
+            type: string
+        type: object
+      questionGeneration:
+        description: 问题生成配置
+        properties:
+          enabled:
+            type: boolean
+          questionCount:
+            type: integer
+        type: object
+      storageProvider:
+        description: 存储引擎选择（"local" | "minio" | "cos"），影响文档上传与文档内图片存储，参数从全局设置读取
+        type: string
+      vlm_config:
+        $ref: '#/definitions/types.VLMConfig'
+    required:
+    - embeddingModelId
+    - llmModelId
+    type: object
+  handler.RemoteModelCheckRequest:
+    properties:
+      apiKey:
+        type: string
+      baseUrl:
+        type: string
+      modelName:
+        type: string
+      provider:
+        type: string
+    required:
+    - baseUrl
+    - modelName
+    type: object
+  handler.SearchMessagesRequest:
+    properties:
+      limit:
+        description: 'Maximum number of results to return (default: 20)'
+        type: integer
+      mode:
+        description: 'Search mode: "keyword", "vector", "hybrid" (default: "hybrid")'
+        type: string
+      query:
+        description: Query text for search
+        type: string
+      session_ids:
+        description: Filter by specific session IDs (optional)
+        items:
+          type: string
+        type: array
+    required:
+    - query
+    type: object
+  handler.StorageCheckRequest:
+    properties:
+      cos:
+        $ref: '#/definitions/types.COSEngineConfig'
+      minio:
+        $ref: '#/definitions/types.MinIOEngineConfig'
+      oss:
+        $ref: '#/definitions/types.OSSEngineConfig'
+      provider:
+        description: '"minio", "cos", "tos", "s3", "oss"'
+        type: string
+      s3:
+        $ref: '#/definitions/types.S3EngineConfig'
+      tos:
+        $ref: '#/definitions/types.TOSEngineConfig'
+    type: object
+  handler.StorageCheckResponse:
+    properties:
+      bucket_created:
+        type: boolean
+      message:
+        type: string
+      ok:
+        type: boolean
+    type: object
+  handler.StorageEngineStatusItem:
+    properties:
+      available:
+        description: whether the engine can be used
+        type: boolean
+      description:
+        description: short description for UI
+        type: string
+      name:
+        description: '"local", "minio", "cos", "tos"'
+        type: string
+    type: object
+  handler.TestStoreRequest:
+    properties:
+      connection_config:
+        $ref: '#/definitions/types.ConnectionConfig'
+      engine_type:
+        $ref: '#/definitions/types.RetrieverEngineType'
+    required:
+    - connection_config
+    - engine_type
+    type: object
+  handler.TextRelationExtractionRequest:
+    properties:
+      model_id:
+        type: string
+      tags:
+        items:
+          type: string
+        type: array
+      text:
+        type: string
+    required:
+    - model_id
+    - tags
+    - text
+    type: object
+  handler.UpdateAgentRequest:
+    properties:
+      avatar:
+        type: string
+      config:
+        $ref: '#/definitions/types.CustomAgentConfig'
+      description:
+        type: string
+      name:
+        type: string
+    type: object
+  handler.UpdateChunkRequest:
+    properties:
+      chunk_index:
+        type: integer
+      content:
+        type: string
+      embedding:
+        items:
+          type: number
+        type: array
+      end_at:
+        type: integer
+      image_info:
+        type: string
+      is_enabled:
+        type: boolean
+      start_at:
+        type: integer
+    type: object
+  handler.UpdateKnowledgeBaseRequest:
+    properties:
+      config:
+        $ref: '#/definitions/types.KnowledgeBaseConfig'
+      description:
+        type: string
+      name:
+        type: string
+    required:
+    - name
+    type: object
+  handler.UpdateModelRequest:
+    properties:
+      description:
+        type: string
+      name:
+        type: string
+      parameters:
+        $ref: '#/definitions/types.ModelParameters'
+      source:
+        $ref: '#/definitions/types.ModelSource'
+      type:
+        $ref: '#/definitions/types.ModelType'
+    type: object
+  handler.UpdateStoreRequest:
+    properties:
+      name:
+        type: string
+    required:
+    - name
+    type: object
+  handler.addSimilarQuestionsRequest:
+    properties:
+      similar_questions:
+        items:
+          type: string
+        minItems: 1
+        type: array
+    required:
+    - similar_questions
+    type: object
+  handler.updateLastFAQImportResultDisplayStatusRequest:
+    properties:
+      display_status:
+        enum:
+        - open
+        - close
+        type: string
+    required:
+    - display_status
+    type: object
+  handler_session.AttachmentUpload:
+    properties:
+      data:
+        description: Base64-encoded file content
+        type: string
+      file_name:
+        description: Original filename
+        type: string
+      file_size:
+        description: File size in bytes
+        type: integer
+    type: object
+  handler_session.CreateKnowledgeQARequest:
+    properties:
+      agent_enabled:
+        description: Whether agent mode is enabled for this request
+        type: boolean
+      agent_id:
+        description: Selected custom agent ID (backend resolves shared agent and its
+          tenant from share relation)
+        type: string
+      attachment_uploads:
+        description: Attached files (documents, audio, etc.)
+        items:
+          $ref: '#/definitions/handler_session.AttachmentUpload'
+        type: array
+      channel:
+        description: 'Source channel: "web", "api", "im", etc.'
+        type: string
+      disable_title:
+        description: Whether to disable auto title generation
+        type: boolean
+      enable_memory:
+        description: Whether memory feature is enabled for this request
+        type: boolean
+      images:
+        description: Attached images for multimodal chat
+        items:
+          $ref: '#/definitions/handler_session.ImageAttachment'
+        type: array
+      knowledge_base_ids:
+        description: Selected knowledge base ID for this request
+        items:
+          type: string
+        type: array
+      knowledge_ids:
+        description: Selected knowledge ID for this request
+        items:
+          type: string
+        type: array
+      mentioned_items:
+        description: '@mentioned knowledge bases and files'
+        items:
+          $ref: '#/definitions/handler_session.MentionedItemRequest'
+        type: array
+      query:
+        description: Query text for knowledge base search
+        type: string
+      summary_model_id:
+        description: Optional summary model ID for this request (overrides session
+          default)
+        type: string
+      web_search_enabled:
+        description: Whether web search is enabled for this request
+        type: boolean
+    required:
+    - query
+    type: object
+  handler_session.CreateSessionRequest:
+    properties:
+      description:
+        description: Description for the session (optional)
+        type: string
+      title:
+        description: Title for the session (optional)
+        type: string
+    type: object
+  handler_session.GenerateTitleRequest:
+    properties:
+      messages:
+        description: Messages to use as context for title generation
+        items:
+          $ref: '#/definitions/types.Message'
+        type: array
+    required:
+    - messages
+    type: object
+  handler_session.ImageAttachment:
+    properties:
+      caption:
+        description: VLM analysis result (context-aware, single call)
+        type: string
+      data:
+        description: base64 data URI from frontend (data:image/png;base64,...)
+        type: string
+      url:
+        description: serving URL after saving to storage
+        type: string
+    type: object
+  handler_session.MentionedItemRequest:
+    properties:
+      id:
+        type: string
+      kb_type:
+        description: '"document" or "faq" (only for kb type)'
+        type: string
+      name:
+        type: string
+      type:
+        description: '"kb" for knowledge base, "file" for file'
+        type: string
+    type: object
+  handler_session.SearchKnowledgeRequest:
+    properties:
+      knowledge_base_id:
+        description: Single knowledge base ID (for backward compatibility)
+        type: string
+      knowledge_base_ids:
+        description: IDs of knowledge bases to search (multi-KB support)
+        items:
+          type: string
+        type: array
+      knowledge_ids:
+        description: IDs of specific knowledge (files) to search
+        items:
+          type: string
+        type: array
+      query:
+        description: Query text to search for
+        type: string
+    required:
+    - query
+    type: object
+  handler_session.StopSessionRequest:
+    properties:
+      message_id:
+        type: string
+    required:
+    - message_id
+    type: object
+  handler_session.batchDeleteRequest:
+    properties:
+      delete_all:
+        type: boolean
+      ids:
+        items:
+          type: string
+        type: array
+    type: object
+  types.ASRConfig:
+    properties:
+      enabled:
+        type: boolean
+      language:
+        description: 'optional: language hint for transcription'
+        type: string
+      model_id:
+        type: string
+    type: object
+  types.AgentConfig:
     properties:
       allowed_skills:
         description: Skill names whitelist (empty = allow all)
@@ -172,8 +719,11 @@ definitions:
       web_search_max_results:
         description: 'Maximum number of web search results (default: 5)'
         type: integer
+      web_search_provider_id:
+        description: WebSearchProviderEntity ID (resolved from agent config)
+        type: string
     type: object
-  github_com_Tencent_WeKnora_internal_types.AgentStep:
+  types.AgentStep:
     properties:
       iteration:
         description: Iteration number (0-indexed)
@@ -187,10 +737,10 @@ definitions:
       tool_calls:
         description: Tools called in this step (Act phase)
         items:
-          $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.ToolCall'
+          $ref: '#/definitions/types.ToolCall'
         type: array
     type: object
-  github_com_Tencent_WeKnora_internal_types.AnswerStrategy:
+  types.AnswerStrategy:
     enum:
     - all
     - random
@@ -198,7 +748,7 @@ definitions:
     x-enum-varnames:
     - AnswerStrategyAll
     - AnswerStrategyRandom
-  github_com_Tencent_WeKnora_internal_types.COSEngineConfig:
+  types.COSEngineConfig:
     properties:
       app_id:
         type: string
@@ -213,7 +763,7 @@ definitions:
       secret_key:
         type: string
     type: object
-  github_com_Tencent_WeKnora_internal_types.ChatHistoryConfig:
+  types.ChatHistoryConfig:
     properties:
       embedding_model_id:
         description: |-
@@ -229,7 +779,7 @@ definitions:
           This is set internally when the feature is first enabled; users should not set this directly.
         type: string
     type: object
-  github_com_Tencent_WeKnora_internal_types.ChunkingConfig:
+  types.ChunkingConfig:
     properties:
       child_chunk_size:
         description: |-
@@ -262,7 +812,7 @@ definitions:
           ParserEngineRules configures which parser engine to use for each file type.
           When empty, the builtin engine is used for all types.
         items:
-          $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.ParserEngineRule'
+          $ref: '#/definitions/types.ParserEngineRule'
         type: array
       separators:
         description: Separators
@@ -270,7 +820,41 @@ definitions:
           type: string
         type: array
     type: object
-  github_com_Tencent_WeKnora_internal_types.ContextCompressionStrategy:
+  types.ConnectionConfig:
+    properties:
+      addr:
+        description: Common
+        type: string
+      api_key:
+        description: AES-GCM encrypted
+        type: string
+      grpc_address:
+        description: Weaviate
+        type: string
+      host:
+        description: Qdrant
+        type: string
+      password:
+        description: AES-GCM encrypted
+        type: string
+      port:
+        type: integer
+      scheme:
+        type: string
+      use_default_connection:
+        description: Postgres
+        type: boolean
+      use_tls:
+        type: boolean
+      username:
+        type: string
+      version:
+        description: |-
+          Version is the detected server version (e.g., "7.10.1", "16.2", "1.12.6").
+          Auto-populated by TestConnection on successful connectivity check.
+        type: string
+    type: object
+  types.ContextCompressionStrategy:
     enum:
     - sliding_window
     - smart
@@ -278,11 +862,11 @@ definitions:
     x-enum-varnames:
     - ContextCompressionSlidingWindow
     - ContextCompressionSmart
-  github_com_Tencent_WeKnora_internal_types.ContextConfig:
+  types.ContextConfig:
     properties:
       compression_strategy:
         allOf:
-        - $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.ContextCompressionStrategy'
+        - $ref: '#/definitions/types.ContextCompressionStrategy'
         description: 'Compression strategy: "sliding_window" or "smart"'
       max_tokens:
         description: Maximum tokens allowed in LLM context
@@ -296,7 +880,7 @@ definitions:
         description: 'Summarize threshold: number of messages before summarization'
         type: integer
     type: object
-  github_com_Tencent_WeKnora_internal_types.ConversationConfig:
+  types.ConversationConfig:
     properties:
       context_template:
         description: ContextTemplate is the prompt template for summarizing retrieval
@@ -346,7 +930,7 @@ definitions:
       vector_threshold:
         type: number
     type: object
-  github_com_Tencent_WeKnora_internal_types.CreateOrganizationRequest:
+  types.CreateOrganizationRequest:
     properties:
       avatar:
         description: optional avatar URL
@@ -368,7 +952,12 @@ definitions:
     required:
     - name
     type: object
-  github_com_Tencent_WeKnora_internal_types.CustomAgentConfig:
+  types.CredentialsConfig:
+    properties:
+      weknoracloud:
+        $ref: '#/definitions/types.WeKnoraCloudCredentials'
+    type: object
+  types.CustomAgentConfig:
     properties:
       agent_mode:
         description: |-
@@ -380,6 +969,13 @@ definitions:
         items:
           type: string
         type: array
+      asr_model_id:
+        description: ASR model ID for audio transcription (optional)
+        type: string
+      audio_upload_enabled:
+        description: 'Whether audio upload (ASR transcription) is enabled for this
+          agent (default: false)'
+        type: boolean
       context_template:
         description: Context template for normal mode (how to format retrieved chunks)
         type: string
@@ -429,7 +1025,7 @@ definitions:
         type: integer
       image_storage_provider:
         description: |-
-          Storage provider for image uploads: "local", "minio", "cos", "tos", "s3", "oss"
+          Storage provider for image uploads: "local", "minio", "cos", "tos"
           Empty means use the global/tenant default provider.
         type: string
       image_upload_enabled:
@@ -451,6 +1047,9 @@ definitions:
         items:
           type: string
         type: array
+      llm_call_timeout:
+        description: Timeout for a single LLM call in seconds (0 = use global default)
+        type: integer
       max_completion_tokens:
         description: Maximum completion tokens (only for normal mode)
         type: integer
@@ -549,6 +1148,13 @@ definitions:
         description: VLM model ID for image analysis (optional, falls back to tenant-level
           VLM)
         type: string
+      web_fetch_enabled:
+        description: Whether to auto-fetch full page content for reranked web search
+          results
+        type: boolean
+      web_fetch_top_n:
+        description: 'Max number of pages to fetch after rerank (default: 3)'
+        type: integer
       web_search_enabled:
         description: |-
           ===== Web Search Settings =====
@@ -557,8 +1163,13 @@ definitions:
       web_search_max_results:
         description: Maximum web search results
         type: integer
+      web_search_provider_id:
+        description: |-
+          WebSearchProviderID references a specific WebSearchProviderEntity.
+          If empty, the tenant's default provider (is_default=true) is used.
+        type: string
     type: object
-  github_com_Tencent_WeKnora_internal_types.DataSource:
+  types.DataSource:
     properties:
       config:
         description: |-
@@ -601,7 +1212,7 @@ definitions:
         type: array
       latest_sync_log:
         allOf:
-        - $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.SyncLog'
+        - $ref: '#/definitions/types.SyncLog'
         description: Latest sync log (not stored in DB, populated on query)
       name:
         description: User-friendly name
@@ -635,24 +1246,24 @@ definitions:
         description: Last update timestamp
         type: string
     type: object
-  github_com_Tencent_WeKnora_internal_types.EmbeddingParameters:
+  types.EmbeddingParameters:
     properties:
       dimension:
         type: integer
       truncate_prompt_tokens:
         type: integer
     type: object
-  github_com_Tencent_WeKnora_internal_types.ExtractConfig:
+  types.ExtractConfig:
     properties:
       enabled:
         type: boolean
       nodes:
         items:
-          $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.GraphNode'
+          $ref: '#/definitions/types.GraphNode'
         type: array
       relations:
         items:
-          $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.GraphRelation'
+          $ref: '#/definitions/types.GraphRelation'
         type: array
       tags:
         items:
@@ -661,14 +1272,14 @@ definitions:
       text:
         type: string
     type: object
-  github_com_Tencent_WeKnora_internal_types.FAQBatchUpsertPayload:
+  types.FAQBatchUpsertPayload:
     properties:
       dry_run:
         description: 仅验证，不实际导入
         type: boolean
       entries:
         items:
-          $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.FAQEntryPayload'
+          $ref: '#/definitions/types.FAQEntryPayload'
         type: array
       knowledge_id:
         type: string
@@ -683,23 +1294,23 @@ definitions:
     required:
     - entries
     type: object
-  github_com_Tencent_WeKnora_internal_types.FAQConfig:
+  types.FAQConfig:
     properties:
       index_mode:
-        $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.FAQIndexMode'
+        $ref: '#/definitions/types.FAQIndexMode'
       question_index_mode:
-        $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.FAQQuestionIndexMode'
+        $ref: '#/definitions/types.FAQQuestionIndexMode'
     type: object
-  github_com_Tencent_WeKnora_internal_types.FAQEntryFieldsBatchUpdate:
+  types.FAQEntryFieldsBatchUpdate:
     properties:
       by_id:
         additionalProperties:
-          $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.FAQEntryFieldsUpdate'
+          $ref: '#/definitions/types.FAQEntryFieldsUpdate'
         description: ByID 按条目ID更新，key为条目ID (seq_id)
         type: object
       by_tag:
         additionalProperties:
-          $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.FAQEntryFieldsUpdate'
+          $ref: '#/definitions/types.FAQEntryFieldsUpdate'
         description: ByTag 按Tag批量更新，key为TagID (seq_id)
         type: object
       exclude_ids:
@@ -708,7 +1319,7 @@ definitions:
           type: integer
         type: array
     type: object
-  github_com_Tencent_WeKnora_internal_types.FAQEntryFieldsUpdate:
+  types.FAQEntryFieldsUpdate:
     properties:
       is_enabled:
         type: boolean
@@ -717,10 +1328,10 @@ definitions:
       tag_id:
         type: integer
     type: object
-  github_com_Tencent_WeKnora_internal_types.FAQEntryPayload:
+  types.FAQEntryPayload:
     properties:
       answer_strategy:
-        $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.AnswerStrategy'
+        $ref: '#/definitions/types.AnswerStrategy'
       answers:
         items:
           type: string
@@ -749,7 +1360,7 @@ definitions:
     required:
     - standard_question
     type: object
-  github_com_Tencent_WeKnora_internal_types.FAQIndexMode:
+  types.FAQIndexMode:
     enum:
     - question_only
     - question_answer
@@ -757,7 +1368,7 @@ definitions:
     x-enum-varnames:
     - FAQIndexModeQuestionOnly
     - FAQIndexModeQuestionAnswer
-  github_com_Tencent_WeKnora_internal_types.FAQQuestionIndexMode:
+  types.FAQQuestionIndexMode:
     enum:
     - combined
     - separate
@@ -765,7 +1376,7 @@ definitions:
     x-enum-varnames:
     - FAQQuestionIndexModeCombined
     - FAQQuestionIndexModeSeparate
-  github_com_Tencent_WeKnora_internal_types.FAQSearchRequest:
+  types.FAQSearchRequest:
     properties:
       first_priority_tag_ids:
         description: 第一优先级标签ID列表，限定命中范围，优先级最高
@@ -789,7 +1400,7 @@ definitions:
     required:
     - query_text
     type: object
-  github_com_Tencent_WeKnora_internal_types.GraphNode:
+  types.GraphNode:
     properties:
       attributes:
         items:
@@ -802,7 +1413,7 @@ definitions:
       name:
         type: string
     type: object
-  github_com_Tencent_WeKnora_internal_types.GraphRelation:
+  types.GraphRelation:
     properties:
       node1:
         type: string
@@ -811,17 +1422,35 @@ definitions:
       type:
         type: string
     type: object
-  github_com_Tencent_WeKnora_internal_types.ImageProcessingConfig:
+  types.ImageProcessingConfig:
     properties:
       model_id:
         description: Model ID
         type: string
     type: object
-  github_com_Tencent_WeKnora_internal_types.InviteMemberRequest:
+  types.IndexConfig:
+    properties:
+      collection_name:
+        description: Milvus
+        type: string
+      collection_prefix:
+        description: Qdrant
+        type: string
+      index_name:
+        description: ES, OpenSearch
+        type: string
+      number_of_replicas:
+        description: ES, OpenSearch
+        type: integer
+      number_of_shards:
+        description: ES, OpenSearch
+        type: integer
+    type: object
+  types.InviteMemberRequest:
     properties:
       role:
         allOf:
-        - $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.OrgMemberRole'
+        - $ref: '#/definitions/types.OrgMemberRole'
         description: 'Role to assign: admin/editor/viewer'
       user_id:
         description: User ID to invite
@@ -830,7 +1459,7 @@ definitions:
     - role
     - user_id
     type: object
-  github_com_Tencent_WeKnora_internal_types.JoinByOrganizationIDRequest:
+  types.JoinByOrganizationIDRequest:
     properties:
       message:
         description: Optional message for join request
@@ -840,12 +1469,12 @@ definitions:
         type: string
       role:
         allOf:
-        - $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.OrgMemberRole'
+        - $ref: '#/definitions/types.OrgMemberRole'
         description: 'Optional: requested role (admin/editor/viewer); default viewer'
     required:
     - organization_id
     type: object
-  github_com_Tencent_WeKnora_internal_types.JoinOrganizationRequest:
+  types.JoinOrganizationRequest:
     properties:
       invite_code:
         maxLength: 32
@@ -854,7 +1483,7 @@ definitions:
     required:
     - invite_code
     type: object
-  github_com_Tencent_WeKnora_internal_types.Knowledge:
+  types.Knowledge:
     properties:
       channel:
         description: Channel indicates through which channel the knowledge was ingested
@@ -945,14 +1574,18 @@ definitions:
         description: Last updated time of the knowledge
         type: string
     type: object
-  github_com_Tencent_WeKnora_internal_types.KnowledgeBase:
+  types.KnowledgeBase:
     properties:
+      asr_config:
+        allOf:
+        - $ref: '#/definitions/types.ASRConfig'
+        description: ASR config (Automatic Speech Recognition)
       chunk_count:
         description: Chunk count (not stored in database, calculated on query)
         type: integer
       chunking_config:
         allOf:
-        - $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.ChunkingConfig'
+        - $ref: '#/definitions/types.ChunkingConfig'
         description: Chunking configuration
       created_at:
         description: Creation time of the knowledge base
@@ -969,11 +1602,11 @@ definitions:
         type: string
       extract_config:
         allOf:
-        - $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.ExtractConfig'
+        - $ref: '#/definitions/types.ExtractConfig'
         description: Extract config
       faq_config:
         allOf:
-        - $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.FAQConfig'
+        - $ref: '#/definitions/types.FAQConfig'
         description: FAQConfig stores FAQ specific configuration such as indexing
           strategy
       id:
@@ -981,7 +1614,7 @@ definitions:
         type: string
       image_processing_config:
         allOf:
-        - $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.ImageProcessingConfig'
+        - $ref: '#/definitions/types.ImageProcessingConfig'
         description: Image processing configuration
       is_pinned:
         description: Whether this knowledge base is pinned to the top of the list
@@ -1009,7 +1642,7 @@ definitions:
         type: integer
       question_generation_config:
         allOf:
-        - $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.QuestionGenerationConfig'
+        - $ref: '#/definitions/types.QuestionGenerationConfig'
         description: QuestionGenerationConfig stores question generation configuration
           for document knowledge bases
       share_count:
@@ -1018,12 +1651,12 @@ definitions:
         type: integer
       storage_config:
         allOf:
-        - $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.StorageConfig'
+        - $ref: '#/definitions/types.StorageConfig'
         description: 'Deprecated: legacy COS config column. Kept for backward compatibility
           with old data.'
       storage_provider_config:
         allOf:
-        - $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.StorageProviderConfig'
+        - $ref: '#/definitions/types.StorageProviderConfig'
         description: 'Storage provider config (new): only stores provider selection;
           credentials from tenant StorageEngineConfig'
       summary_model_id:
@@ -1040,25 +1673,25 @@ definitions:
         type: string
       vlm_config:
         allOf:
-        - $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.VLMConfig'
+        - $ref: '#/definitions/types.VLMConfig'
         description: VLM config
     type: object
-  github_com_Tencent_WeKnora_internal_types.KnowledgeBaseConfig:
+  types.KnowledgeBaseConfig:
     properties:
       chunking_config:
         allOf:
-        - $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.ChunkingConfig'
+        - $ref: '#/definitions/types.ChunkingConfig'
         description: Chunking configuration
       faq_config:
         allOf:
-        - $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.FAQConfig'
+        - $ref: '#/definitions/types.FAQConfig'
         description: FAQ configuration (only for FAQ type knowledge bases)
       image_processing_config:
         allOf:
-        - $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.ImageProcessingConfig'
+        - $ref: '#/definitions/types.ImageProcessingConfig'
         description: Image processing configuration
     type: object
-  github_com_Tencent_WeKnora_internal_types.KnowledgeBaseShareResponse:
+  types.KnowledgeBaseShareResponse:
     properties:
       chunk_count:
         type: integer
@@ -1096,43 +1729,43 @@ definitions:
       source_tenant_id:
         type: integer
     type: object
-  github_com_Tencent_WeKnora_internal_types.ListMembersResponse:
+  types.ListMembersResponse:
     properties:
       members:
         items:
-          $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.OrganizationMemberResponse'
+          $ref: '#/definitions/types.OrganizationMemberResponse'
         type: array
       total:
         type: integer
     type: object
-  github_com_Tencent_WeKnora_internal_types.ListOrganizationsResponse:
+  types.ListOrganizationsResponse:
     properties:
       organizations:
         items:
-          $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.OrganizationResponse'
+          $ref: '#/definitions/types.OrganizationResponse'
         type: array
       resource_counts:
         allOf:
-        - $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.ResourceCountsByOrgResponse'
+        - $ref: '#/definitions/types.ResourceCountsByOrgResponse'
         description: 各空间内知识库/智能体数量，供列表侧栏展示
       total:
         type: integer
     type: object
-  github_com_Tencent_WeKnora_internal_types.ListSharesResponse:
+  types.ListSharesResponse:
     properties:
       shares:
         items:
-          $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.KnowledgeBaseShareResponse'
+          $ref: '#/definitions/types.KnowledgeBaseShareResponse'
         type: array
       total:
         type: integer
     type: object
-  github_com_Tencent_WeKnora_internal_types.LocalEngineConfig:
+  types.LocalEngineConfig:
     properties:
       path_prefix:
         type: string
     type: object
-  github_com_Tencent_WeKnora_internal_types.LoginRequest:
+  types.LoginRequest:
     properties:
       email:
         type: string
@@ -1143,7 +1776,7 @@ definitions:
     - email
     - password
     type: object
-  github_com_Tencent_WeKnora_internal_types.LoginResponse:
+  types.LoginResponse:
     properties:
       message:
         type: string
@@ -1152,13 +1785,13 @@ definitions:
       success:
         type: boolean
       tenant:
-        $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.Tenant'
+        $ref: '#/definitions/types.Tenant'
       token:
         type: string
       user:
-        $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.User'
+        $ref: '#/definitions/types.User'
     type: object
-  github_com_Tencent_WeKnora_internal_types.MCPAdvancedConfig:
+  types.MCPAdvancedConfig:
     properties:
       retry_count:
         description: 'Number of retries, default: 3'
@@ -1170,7 +1803,7 @@ definitions:
         description: 'Timeout in seconds, default: 30'
         type: integer
     type: object
-  github_com_Tencent_WeKnora_internal_types.MCPAuthConfig:
+  types.MCPAuthConfig:
     properties:
       api_key:
         type: string
@@ -1181,20 +1814,20 @@ definitions:
       token:
         type: string
     type: object
-  github_com_Tencent_WeKnora_internal_types.MCPEnvVars:
+  types.MCPEnvVars:
     additionalProperties:
       type: string
     type: object
-  github_com_Tencent_WeKnora_internal_types.MCPHeaders:
+  types.MCPHeaders:
     additionalProperties:
       type: string
     type: object
-  github_com_Tencent_WeKnora_internal_types.MCPService:
+  types.MCPService:
     properties:
       advanced_config:
-        $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.MCPAdvancedConfig'
+        $ref: '#/definitions/types.MCPAdvancedConfig'
       auth_config:
-        $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.MCPAuthConfig'
+        $ref: '#/definitions/types.MCPAuthConfig'
       created_at:
         type: string
       deleted_at:
@@ -1205,10 +1838,10 @@ definitions:
         type: boolean
       env_vars:
         allOf:
-        - $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.MCPEnvVars'
+        - $ref: '#/definitions/types.MCPEnvVars'
         description: Environment variables for stdio
       headers:
-        $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.MCPHeaders'
+        $ref: '#/definitions/types.MCPHeaders'
       id:
         type: string
       is_builtin:
@@ -1218,19 +1851,19 @@ definitions:
         type: string
       stdio_config:
         allOf:
-        - $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.MCPStdioConfig'
+        - $ref: '#/definitions/types.MCPStdioConfig'
         description: Required for stdio transport
       tenant_id:
         type: integer
       transport_type:
-        $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.MCPTransportType'
+        $ref: '#/definitions/types.MCPTransportType'
       updated_at:
         type: string
       url:
         description: 'Optional: required for SSE/HTTP Streamable'
         type: string
     type: object
-  github_com_Tencent_WeKnora_internal_types.MCPStdioConfig:
+  types.MCPStdioConfig:
     properties:
       args:
         description: Command arguments array
@@ -1241,7 +1874,7 @@ definitions:
         description: 'Command: "uvx" or "npx"'
         type: string
     type: object
-  github_com_Tencent_WeKnora_internal_types.MCPTransportType:
+  types.MCPTransportType:
     enum:
     - sse
     - http-streamable
@@ -1259,7 +1892,7 @@ definitions:
     - MCPTransportSSE
     - MCPTransportHTTPStreamable
     - MCPTransportStdio
-  github_com_Tencent_WeKnora_internal_types.ManualKnowledgePayload:
+  types.ManualKnowledgePayload:
     properties:
       channel:
         type: string
@@ -1272,7 +1905,7 @@ definitions:
       title:
         type: string
     type: object
-  github_com_Tencent_WeKnora_internal_types.MatchType:
+  types.MatchType:
     enum:
     - 0
     - 1
@@ -1313,7 +1946,7 @@ definitions:
     - MatchTypeWebSearch
     - MatchTypeDirectLoad
     - MatchTypeDataAnalysis
-  github_com_Tencent_WeKnora_internal_types.MentionedItem:
+  types.MentionedItem:
     properties:
       id:
         type: string
@@ -1326,7 +1959,7 @@ definitions:
         description: '"kb" for knowledge base, "file" for file'
         type: string
     type: object
-  github_com_Tencent_WeKnora_internal_types.Message:
+  types.Message:
     properties:
       agent_duration_ms:
         description: Agent total execution duration in milliseconds (from query start
@@ -1338,7 +1971,12 @@ definitions:
           This contains the detailed reasoning process and tool calls made by the agent
           Stored for user history display, but NOT included in LLM context to avoid redundancy
         items:
-          $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.AgentStep'
+          $ref: '#/definitions/types.AgentStep'
+        type: array
+      attachments:
+        description: Attached files (documents, audio, etc., for user messages)
+        items:
+          $ref: '#/definitions/types.MessageAttachment'
         type: array
       channel:
         description: Channel indicates the source channel of this message (e.g., "web",
@@ -1360,7 +1998,7 @@ definitions:
       images:
         description: Attached images with OCR/Caption text (for user messages)
         items:
-          $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.MessageImage'
+          $ref: '#/definitions/types.MessageImage'
         type: array
       is_completed:
         description: Whether message generation is complete
@@ -1377,14 +2015,14 @@ definitions:
       knowledge_references:
         description: References to knowledge chunks used in the response
         items:
-          $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.SearchResult'
+          $ref: '#/definitions/types.SearchResult'
         type: array
       mentioned_items:
         description: |-
           Mentioned knowledge bases and files (for user messages)
           Stores the @mentioned items when user sends a message
         items:
-          $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.MentionedItem'
+          $ref: '#/definitions/types.MentionedItem'
         type: array
       request_id:
         description: Request identifier for tracking API requests
@@ -1399,14 +2037,38 @@ definitions:
         description: Last update timestamp
         type: string
     type: object
-  github_com_Tencent_WeKnora_internal_types.MessageImage:
+  types.MessageAttachment:
+    properties:
+      content:
+        description: Extracted text content (for small text files)
+        type: string
+      file_name:
+        description: Original filename
+        type: string
+      file_size:
+        description: File size in bytes
+        type: integer
+      file_type:
+        description: File extension (e.g., ".pdf", ".docx")
+        type: string
+      is_truncated:
+        description: Whether content was truncated
+        type: boolean
+      line_count:
+        description: Total line count (for text files)
+        type: integer
+      url:
+        description: Storage URL (provider://path)
+        type: string
+    type: object
+  types.MessageImage:
     properties:
       caption:
         type: string
       url:
         type: string
     type: object
-  github_com_Tencent_WeKnora_internal_types.MinIOEngineConfig:
+  types.MinIOEngineConfig:
     properties:
       access_key_id:
         type: string
@@ -1424,14 +2086,20 @@ definitions:
       use_ssl:
         type: boolean
     type: object
-  github_com_Tencent_WeKnora_internal_types.ModelParameters:
+  types.ModelParameters:
     properties:
       api_key:
+        type: string
+      app_id:
+        description: WeKnoraCloud 厂商专用凭证
+        type: string
+      app_secret:
+        description: AES-256 加密存储，实际承载上游 API Key
         type: string
       base_url:
         type: string
       embedding_parameters:
-        $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.EmbeddingParameters'
+        $ref: '#/definitions/types.EmbeddingParameters'
       extra_config:
         additionalProperties:
           type: string
@@ -1449,7 +2117,7 @@ definitions:
         description: Whether the model accepts image/multimodal input
         type: boolean
     type: object
-  github_com_Tencent_WeKnora_internal_types.ModelSource:
+  types.ModelSource:
     enum:
     - local
     - remote
@@ -1467,9 +2135,11 @@ definitions:
     - openrouter
     - nvidia
     - novita
+    - azure_openai
     type: string
     x-enum-comments:
       ModelSourceAliyun: Aliyun DashScope model
+      ModelSourceAzureOpenAI: Azure OpenAI model
       ModelSourceDeepseek: Deepseek model
       ModelSourceGemini: Gemini model
       ModelSourceHunyuan: Hunyuan model
@@ -1502,6 +2172,7 @@ definitions:
     - OpenRouter model
     - NVIDIA model
     - Novita AI model
+    - Azure OpenAI model
     x-enum-varnames:
     - ModelSourceLocal
     - ModelSourceRemote
@@ -1519,14 +2190,17 @@ definitions:
     - ModelSourceOpenRouter
     - ModelSourceNvidia
     - ModelSourceNovita
-  github_com_Tencent_WeKnora_internal_types.ModelType:
+    - ModelSourceAzureOpenAI
+  types.ModelType:
     enum:
     - Embedding
     - Rerank
     - KnowledgeQA
     - VLLM
+    - ASR
     type: string
     x-enum-comments:
+      ModelTypeASR: ASR (Automatic Speech Recognition) model
       ModelTypeEmbedding: Embedding model
       ModelTypeKnowledgeQA: KnowledgeQA model
       ModelTypeRerank: Rerank model
@@ -1536,12 +2210,14 @@ definitions:
     - Rerank model
     - KnowledgeQA model
     - VLLM model
+    - ASR (Automatic Speech Recognition) model
     x-enum-varnames:
     - ModelTypeEmbedding
     - ModelTypeRerank
     - ModelTypeKnowledgeQA
     - ModelTypeVLLM
-  github_com_Tencent_WeKnora_internal_types.OIDCAuthURLResponse:
+    - ModelTypeASR
+  types.OIDCAuthURLResponse:
     properties:
       authorization_url:
         type: string
@@ -1552,7 +2228,7 @@ definitions:
       success:
         type: boolean
     type: object
-  github_com_Tencent_WeKnora_internal_types.OIDCConfigResponse:
+  types.OIDCConfigResponse:
     properties:
       enabled:
         type: boolean
@@ -1561,7 +2237,28 @@ definitions:
       success:
         type: boolean
     type: object
-  github_com_Tencent_WeKnora_internal_types.OrgMemberRole:
+  types.OSSEngineConfig:
+    properties:
+      access_key:
+        type: string
+      bucket_name:
+        type: string
+      endpoint:
+        type: string
+      path_prefix:
+        type: string
+      region:
+        type: string
+      secret_key:
+        type: string
+      temp_bucket_name:
+        type: string
+      temp_region:
+        type: string
+      use_temp_bucket:
+        type: boolean
+    type: object
+  types.OrgMemberRole:
     enum:
     - admin
     - editor
@@ -1571,7 +2268,7 @@ definitions:
     - OrgRoleAdmin
     - OrgRoleEditor
     - OrgRoleViewer
-  github_com_Tencent_WeKnora_internal_types.OrganizationMemberResponse:
+  types.OrganizationMemberResponse:
     properties:
       avatar:
         type: string
@@ -1590,7 +2287,7 @@ definitions:
       username:
         type: string
     type: object
-  github_com_Tencent_WeKnora_internal_types.OrganizationResponse:
+  types.OrganizationResponse:
     properties:
       agent_share_count:
         description: 共享到该组织的智能体数量
@@ -1638,11 +2335,8 @@ definitions:
       updated_at:
         type: string
     type: object
-  github_com_Tencent_WeKnora_internal_types.ParserEngineConfig:
+  types.ParserEngineConfig:
     properties:
-      docreader_addr:
-        description: 文档解析服务地址
-        type: string
       mineru_api_key:
         description: MinerU 云 API Key
         type: string
@@ -1672,7 +2366,7 @@ definitions:
         description: MinerU 自建解析参数
         type: string
     type: object
-  github_com_Tencent_WeKnora_internal_types.ParserEngineRule:
+  types.ParserEngineRule:
     properties:
       engine:
         type: string
@@ -1681,7 +2375,7 @@ definitions:
           type: string
         type: array
     type: object
-  github_com_Tencent_WeKnora_internal_types.QuestionGenerationConfig:
+  types.QuestionGenerationConfig:
     properties:
       enabled:
         type: boolean
@@ -1690,7 +2384,7 @@ definitions:
           10)'
         type: integer
     type: object
-  github_com_Tencent_WeKnora_internal_types.RegisterRequest:
+  types.RegisterRequest:
     properties:
       email:
         type: string
@@ -1706,18 +2400,18 @@ definitions:
     - password
     - username
     type: object
-  github_com_Tencent_WeKnora_internal_types.RegisterResponse:
+  types.RegisterResponse:
     properties:
       message:
         type: string
       success:
         type: boolean
       tenant:
-        $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.Tenant'
+        $ref: '#/definitions/types.Tenant'
       user:
-        $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.User'
+        $ref: '#/definitions/types.User'
     type: object
-  github_com_Tencent_WeKnora_internal_types.RequestRoleUpgradeRequest:
+  types.RequestRoleUpgradeRequest:
     properties:
       message:
         description: Optional message explaining the reason
@@ -1725,12 +2419,12 @@ definitions:
         type: string
       requested_role:
         allOf:
-        - $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.OrgMemberRole'
+        - $ref: '#/definitions/types.OrgMemberRole'
         description: The role user wants to upgrade to
     required:
     - requested_role
     type: object
-  github_com_Tencent_WeKnora_internal_types.Resource:
+  types.Resource:
     properties:
       description:
         description: Optional description
@@ -1738,6 +2432,9 @@ definitions:
       external_id:
         description: Unique identifier in the external system
         type: string
+      has_children:
+        description: Whether this resource has children that can be expanded
+        type: boolean
       metadata:
         additionalProperties: true
         description: Additional metadata
@@ -1758,7 +2455,7 @@ definitions:
         description: URL to access in external system
         type: string
     type: object
-  github_com_Tencent_WeKnora_internal_types.ResourceCountsByOrgResponse:
+  types.ResourceCountsByOrgResponse:
     properties:
       agents:
         properties:
@@ -1775,7 +2472,7 @@ definitions:
             type: object
         type: object
     type: object
-  github_com_Tencent_WeKnora_internal_types.RetrievalConfig:
+  types.RetrievalConfig:
     properties:
       embedding_top_k:
         description: 'EmbeddingTopK is the maximum number of chunks returned by vector
@@ -1802,18 +2499,18 @@ definitions:
           default: 0.15)'
         type: number
     type: object
-  github_com_Tencent_WeKnora_internal_types.RetrieverEngineParams:
+  types.RetrieverEngineParams:
     properties:
       retriever_engine_type:
         allOf:
-        - $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.RetrieverEngineType'
+        - $ref: '#/definitions/types.RetrieverEngineType'
         description: Retriever engine type
       retriever_type:
         allOf:
-        - $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.RetrieverType'
+        - $ref: '#/definitions/types.RetrieverType'
         description: Retriever type
     type: object
-  github_com_Tencent_WeKnora_internal_types.RetrieverEngineType:
+  types.RetrieverEngineType:
     enum:
     - postgres
     - elasticsearch
@@ -1833,14 +2530,14 @@ definitions:
     - MilvusRetrieverEngineType
     - WeaviateRetrieverEngineType
     - SQLiteRetrieverEngineType
-  github_com_Tencent_WeKnora_internal_types.RetrieverEngines:
+  types.RetrieverEngines:
     properties:
       engines:
         items:
-          $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.RetrieverEngineParams'
+          $ref: '#/definitions/types.RetrieverEngineParams'
         type: array
     type: object
-  github_com_Tencent_WeKnora_internal_types.RetrieverType:
+  types.RetrieverType:
     enum:
     - keywords
     - vector
@@ -1858,7 +2555,7 @@ definitions:
     - KeywordsRetrieverType
     - VectorRetrieverType
     - WebSearchRetrieverType
-  github_com_Tencent_WeKnora_internal_types.ReviewJoinRequestRequest:
+  types.ReviewJoinRequestRequest:
     properties:
       approved:
         type: boolean
@@ -1867,11 +2564,11 @@ definitions:
         type: string
       role:
         allOf:
-        - $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.OrgMemberRole'
+        - $ref: '#/definitions/types.OrgMemberRole'
         description: 'Optional: role to assign when approving; overrides applicant''s
           requested role'
     type: object
-  github_com_Tencent_WeKnora_internal_types.S3EngineConfig:
+  types.S3EngineConfig:
     properties:
       access_key:
         type: string
@@ -1886,7 +2583,7 @@ definitions:
       secret_key:
         type: string
     type: object
-  github_com_Tencent_WeKnora_internal_types.SearchParams:
+  types.SearchParams:
     properties:
       disable_keywords_match:
         type: boolean
@@ -1930,7 +2627,7 @@ definitions:
       vector_threshold:
         type: number
     type: object
-  github_com_Tencent_WeKnora_internal_types.SearchResult:
+  types.SearchResult:
     properties:
       chunk_index:
         description: Chunk index
@@ -1984,7 +2681,7 @@ definitions:
         type: string
       match_type:
         allOf:
-        - $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.MatchType'
+        - $ref: '#/definitions/types.MatchType'
         description: Match type
       matched_content:
         description: |-
@@ -2014,7 +2711,7 @@ definitions:
           type: string
         type: array
     type: object
-  github_com_Tencent_WeKnora_internal_types.Session:
+  types.Session:
     properties:
       created_at:
         type: string
@@ -2035,17 +2732,17 @@ definitions:
       updated_at:
         type: string
     type: object
-  github_com_Tencent_WeKnora_internal_types.ShareKnowledgeBaseRequest:
+  types.ShareKnowledgeBaseRequest:
     properties:
       organization_id:
         type: string
       permission:
-        $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.OrgMemberRole'
+        $ref: '#/definitions/types.OrgMemberRole'
     required:
     - organization_id
     - permission
     type: object
-  github_com_Tencent_WeKnora_internal_types.StorageConfig:
+  types.StorageConfig:
     properties:
       app_id:
         type: string
@@ -2062,31 +2759,31 @@ definitions:
       secret_key:
         type: string
     type: object
-  github_com_Tencent_WeKnora_internal_types.StorageEngineConfig:
+  types.StorageEngineConfig:
     properties:
       cos:
-        $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.COSEngineConfig'
+        $ref: '#/definitions/types.COSEngineConfig'
       default_provider:
         description: '"local", "minio", "cos", "tos", "s3", "oss"'
         type: string
       local:
-        $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.LocalEngineConfig'
+        $ref: '#/definitions/types.LocalEngineConfig'
       minio:
-        $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.MinIOEngineConfig'
+        $ref: '#/definitions/types.MinIOEngineConfig'
       oss:
-        $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.OSSEngineConfig'
+        $ref: '#/definitions/types.OSSEngineConfig'
       s3:
-        $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.S3EngineConfig'
+        $ref: '#/definitions/types.S3EngineConfig'
       tos:
-        $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.TOSEngineConfig'
+        $ref: '#/definitions/types.TOSEngineConfig'
     type: object
-  github_com_Tencent_WeKnora_internal_types.StorageProviderConfig:
+  types.StorageProviderConfig:
     properties:
       provider:
         description: '"local", "minio", "cos", "tos", "s3", "oss"'
         type: string
     type: object
-  github_com_Tencent_WeKnora_internal_types.SubmitJoinRequestRequest:
+  types.SubmitJoinRequestRequest:
     properties:
       invite_code:
         maxLength: 32
@@ -2097,13 +2794,13 @@ definitions:
         type: string
       role:
         allOf:
-        - $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.OrgMemberRole'
+        - $ref: '#/definitions/types.OrgMemberRole'
         description: 'Optional: role the applicant requests (admin/editor/viewer);
           default viewer'
     required:
     - invite_code
     type: object
-  github_com_Tencent_WeKnora_internal_types.SyncLog:
+  types.SyncLog:
     properties:
       created_at:
         description: Creation timestamp (usually same as StartedAt)
@@ -2156,7 +2853,7 @@ definitions:
         description: Last update timestamp
         type: string
     type: object
-  github_com_Tencent_WeKnora_internal_types.TOSEngineConfig:
+  types.TOSEngineConfig:
     properties:
       access_key:
         type: string
@@ -2171,32 +2868,11 @@ definitions:
       secret_key:
         type: string
     type: object
-  github_com_Tencent_WeKnora_internal_types.OSSEngineConfig:
-    properties:
-      access_key:
-        type: string
-      bucket_name:
-        type: string
-      endpoint:
-        type: string
-      path_prefix:
-        type: string
-      region:
-        type: string
-      secret_key:
-        type: string
-      temp_bucket_name:
-        type: string
-      temp_region:
-        type: string
-      use_temp_bucket:
-        type: boolean
-    type: object
-  github_com_Tencent_WeKnora_internal_types.Tenant:
+  types.Tenant:
     properties:
       agent_config:
         allOf:
-        - $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.AgentConfig'
+        - $ref: '#/definitions/types.AgentConfig'
         description: |-
           Deprecated: AgentConfig is deprecated, use CustomAgent (builtin-smart-reasoning) config instead.
           This field is kept for backward compatibility and will be removed in future versions.
@@ -2208,23 +2884,28 @@ definitions:
         type: string
       chat_history_config:
         allOf:
-        - $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.ChatHistoryConfig'
+        - $ref: '#/definitions/types.ChatHistoryConfig'
         description: 'Chat history config: knowledge base configuration for indexing
           and searching chat messages via vector search'
       context_config:
         allOf:
-        - $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.ContextConfig'
+        - $ref: '#/definitions/types.ContextConfig'
         description: Global Context configuration for this tenant (default for all
           sessions)
       conversation_config:
         allOf:
-        - $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.ConversationConfig'
+        - $ref: '#/definitions/types.ConversationConfig'
         description: |-
           Deprecated: ConversationConfig is deprecated, use CustomAgent (builtin-quick-answer) config instead.
           This field is kept for backward compatibility and will be removed in future versions.
       created_at:
         description: Creation time
         type: string
+      credentials:
+        allOf:
+        - $ref: '#/definitions/types.CredentialsConfig'
+        description: 'Credentials config: third-party provider credentials (e.g. WeKnoraCloud
+          AppID/AppSecret)'
       deleted_at:
         allOf:
         - $ref: '#/definitions/gorm.DeletedAt'
@@ -2240,24 +2921,24 @@ definitions:
         type: string
       parser_engine_config:
         allOf:
-        - $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.ParserEngineConfig'
+        - $ref: '#/definitions/types.ParserEngineConfig'
         description: Parser engine config overrides (MinerU endpoint, API key, etc.).
           Used when parsing documents; overrides env.
       retrieval_config:
         allOf:
-        - $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.RetrievalConfig'
+        - $ref: '#/definitions/types.RetrievalConfig'
         description: 'Retrieval config: global search/retrieval parameters shared
           by knowledge search and message search'
       retriever_engines:
         allOf:
-        - $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.RetrieverEngines'
+        - $ref: '#/definitions/types.RetrieverEngines'
         description: Retriever engines
       status:
         description: Status
         type: string
       storage_engine_config:
         allOf:
-        - $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.StorageEngineConfig'
+        - $ref: '#/definitions/types.StorageEngineConfig'
         description: 'Storage engine config: parameters for Local, MinIO, COS. Used
           for document/file storage and docreader.'
       storage_quota:
@@ -2272,10 +2953,10 @@ definitions:
         type: string
       web_search_config:
         allOf:
-        - $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.WebSearchConfig'
+        - $ref: '#/definitions/types.WebSearchConfig'
         description: Global WebSearch configuration for this tenant
     type: object
-  github_com_Tencent_WeKnora_internal_types.ToolCall:
+  types.ToolCall:
     properties:
       args:
         additionalProperties: true
@@ -2295,10 +2976,10 @@ definitions:
         type: string
       result:
         allOf:
-        - $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.ToolResult'
+        - $ref: '#/definitions/types.ToolResult'
         description: Execution result (contains Output)
     type: object
-  github_com_Tencent_WeKnora_internal_types.ToolResult:
+  types.ToolResult:
     properties:
       data:
         additionalProperties: true
@@ -2319,14 +3000,14 @@ definitions:
         description: Whether the tool executed successfully
         type: boolean
     type: object
-  github_com_Tencent_WeKnora_internal_types.UpdateMemberRoleRequest:
+  types.UpdateMemberRoleRequest:
     properties:
       role:
-        $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.OrgMemberRole'
+        $ref: '#/definitions/types.OrgMemberRole'
     required:
     - role
     type: object
-  github_com_Tencent_WeKnora_internal_types.UpdateOrganizationRequest:
+  types.UpdateOrganizationRequest:
     properties:
       avatar:
         description: optional avatar URL
@@ -2351,14 +3032,14 @@ definitions:
         description: open for search so others can discover and join
         type: boolean
     type: object
-  github_com_Tencent_WeKnora_internal_types.UpdateSharePermissionRequest:
+  types.UpdateSharePermissionRequest:
     properties:
       permission:
-        $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.OrgMemberRole'
+        $ref: '#/definitions/types.OrgMemberRole'
     required:
     - permission
     type: object
-  github_com_Tencent_WeKnora_internal_types.User:
+  types.User:
     properties:
       avatar:
         description: Avatar URL of the user
@@ -2384,7 +3065,7 @@ definitions:
         type: boolean
       tenant:
         allOf:
-        - $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.Tenant'
+        - $ref: '#/definitions/types.Tenant'
         description: Association relationship, not stored in the database
       tenant_id:
         description: Tenant ID that the user belongs to
@@ -2396,7 +3077,7 @@ definitions:
         description: Username of the user
         type: string
     type: object
-  github_com_Tencent_WeKnora_internal_types.VLMConfig:
+  types.VLMConfig:
     properties:
       api_key:
         description: API Key
@@ -2417,10 +3098,17 @@ definitions:
           Model Name
         type: string
     type: object
-  github_com_Tencent_WeKnora_internal_types.WebSearchConfig:
+  types.WeKnoraCloudCredentials:
+    properties:
+      app_id:
+        type: string
+      app_secret:
+        type: string
+    type: object
+  types.WebSearchConfig:
     properties:
       api_key:
-        description: API密钥（如果需要）
+        description: 'Deprecated: Use WebSearchProviderEntity.Parameters.APIKey instead.'
         type: string
       blacklist:
         description: 黑名单规则列表
@@ -2446,504 +3134,11 @@ definitions:
         description: 最大搜索结果数
         type: integer
       provider:
-        description: 搜索引擎提供商ID
+        description: 'Deprecated: Use WebSearchProviderEntity.Parameters.APIKey instead.'
         type: string
       rerank_model_id:
         description: 重排模型ID（用于RAG压缩）
         type: string
-    type: object
-  gorm.DeletedAt:
-    properties:
-      time:
-        type: string
-      valid:
-        description: Valid is true if Time is not NULL
-        type: boolean
-    type: object
-  internal_handler.CopyKnowledgeBaseRequest:
-    properties:
-      source_id:
-        type: string
-      target_id:
-        type: string
-      task_id:
-        type: string
-    required:
-    - source_id
-    type: object
-  internal_handler.CreateAgentRequest:
-    properties:
-      avatar:
-        type: string
-      config:
-        $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.CustomAgentConfig'
-      description:
-        type: string
-      name:
-        type: string
-    required:
-    - name
-    type: object
-  internal_handler.CreateModelRequest:
-    properties:
-      description:
-        type: string
-      name:
-        type: string
-      parameters:
-        $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.ModelParameters'
-      source:
-        $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.ModelSource'
-      type:
-        $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.ModelType'
-    required:
-    - name
-    - parameters
-    - source
-    - type
-    type: object
-  internal_handler.DeleteTagRequest:
-    properties:
-      exclude_ids:
-        description: Chunk seq_ids to exclude from deletion
-        items:
-          type: integer
-        type: array
-    type: object
-  internal_handler.EvaluationRequest:
-    properties:
-      chat_id:
-        description: ID of chat model to use
-        type: string
-      dataset_id:
-        description: ID of dataset to evaluate
-        type: string
-      knowledge_base_id:
-        description: ID of knowledge base to use
-        type: string
-      rerank_id:
-        description: ID of rerank model to use
-        type: string
-    type: object
-  internal_handler.FabriTextRequest:
-    properties:
-      model_id:
-        type: string
-      tags:
-        items:
-          type: string
-        type: array
-    required:
-    - model_id
-    type: object
-  internal_handler.GetStorageEngineStatusResponse:
-    properties:
-      engines:
-        items:
-          $ref: '#/definitions/internal_handler.StorageEngineStatusItem'
-        type: array
-      minio_env_available:
-        type: boolean
-    type: object
-  internal_handler.GetSystemInfoResponse:
-    properties:
-      build_time:
-        type: string
-      commit_id:
-        type: string
-      db_version:
-        type: string
-      edition:
-        type: string
-      go_version:
-        type: string
-      graph_database_engine:
-        type: string
-      keyword_index_engine:
-        type: string
-      minio_enabled:
-        type: boolean
-      vector_store_engine:
-        type: string
-      version:
-        type: string
-    type: object
-  internal_handler.KBModelConfigRequest:
-    properties:
-      documentSplitting:
-        description: 文档分块配置
-        properties:
-          childChunkSize:
-            type: integer
-          chunkOverlap:
-            type: integer
-          chunkSize:
-            type: integer
-          enableParentChild:
-            type: boolean
-          parentChunkSize:
-            type: integer
-          parserEngineRules:
-            items:
-              $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.ParserEngineRule'
-            type: array
-          separators:
-            items:
-              type: string
-            type: array
-        type: object
-      embeddingModelId:
-        type: string
-      llmModelId:
-        type: string
-      multimodal:
-        description: 多模态配置（仅模型相关；存储引擎在 storageProvider 中配置）
-        properties:
-          enabled:
-            type: boolean
-        type: object
-      nodeExtract:
-        description: 知识图谱配置
-        properties:
-          enabled:
-            type: boolean
-          nodes:
-            items:
-              $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.GraphNode'
-            type: array
-          relations:
-            items:
-              $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.GraphRelation'
-            type: array
-          tags:
-            items:
-              type: string
-            type: array
-          text:
-            type: string
-        type: object
-      questionGeneration:
-        description: 问题生成配置
-        properties:
-          enabled:
-            type: boolean
-          questionCount:
-            type: integer
-        type: object
-      storageProvider:
-        description: 存储引擎选择（"local" | "minio" | "cos"），影响文档上传与文档内图片存储，参数从全局设置读取
-        type: string
-      vlm_config:
-        $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.VLMConfig'
-    required:
-    - embeddingModelId
-    - llmModelId
-    type: object
-  internal_handler.ListMinioBucketsResponse:
-    properties:
-      buckets:
-        items:
-          $ref: '#/definitions/internal_handler.MinioBucketInfo'
-        type: array
-    type: object
-  internal_handler.MinioBucketInfo:
-    properties:
-      created_at:
-        type: string
-      name:
-        type: string
-      policy:
-        description: '"public", "private", "custom"'
-        type: string
-    type: object
-  internal_handler.RemoteModelCheckRequest:
-    properties:
-      apiKey:
-        type: string
-      baseUrl:
-        type: string
-      modelName:
-        type: string
-    required:
-    - baseUrl
-    - modelName
-    type: object
-  internal_handler.SearchMessagesRequest:
-    properties:
-      limit:
-        description: 'Maximum number of results to return (default: 20)'
-        type: integer
-      mode:
-        description: 'Search mode: "keyword", "vector", "hybrid" (default: "hybrid")'
-        type: string
-      query:
-        description: Query text for search
-        type: string
-      session_ids:
-        description: Filter by specific session IDs (optional)
-        items:
-          type: string
-        type: array
-    required:
-    - query
-    type: object
-  internal_handler.StorageCheckRequest:
-    properties:
-      cos:
-        $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.COSEngineConfig'
-      minio:
-        $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.MinIOEngineConfig'
-      provider:
-        description: '"minio", "cos", "tos", "s3", or "oss"'
-        type: string
-      oss:
-        $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.OSSEngineConfig'
-      s3:
-        $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.S3EngineConfig'
-      tos:
-        $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.TOSEngineConfig'
-    type: object
-  internal_handler.StorageCheckResponse:
-    properties:
-      bucket_created:
-        type: boolean
-      message:
-        type: string
-      ok:
-        type: boolean
-    type: object
-  internal_handler.StorageEngineStatusItem:
-    properties:
-      available:
-        description: whether the engine can be used
-        type: boolean
-      description:
-        description: short description for UI
-        type: string
-      name:
-        description: '"local", "minio", "cos", "tos", "s3", "oss"'
-        type: string
-    type: object
-  internal_handler.TextRelationExtractionRequest:
-    properties:
-      model_id:
-        type: string
-      tags:
-        items:
-          type: string
-        type: array
-      text:
-        type: string
-    required:
-    - model_id
-    - tags
-    - text
-    type: object
-  internal_handler.UpdateAgentRequest:
-    properties:
-      avatar:
-        type: string
-      config:
-        $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.CustomAgentConfig'
-      description:
-        type: string
-      name:
-        type: string
-    type: object
-  internal_handler.UpdateChunkRequest:
-    properties:
-      chunk_index:
-        type: integer
-      content:
-        type: string
-      embedding:
-        items:
-          type: number
-        type: array
-      end_at:
-        type: integer
-      image_info:
-        type: string
-      is_enabled:
-        type: boolean
-      start_at:
-        type: integer
-    type: object
-  internal_handler.UpdateKnowledgeBaseRequest:
-    properties:
-      config:
-        $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.KnowledgeBaseConfig'
-      description:
-        type: string
-      name:
-        type: string
-    required:
-    - name
-    type: object
-  internal_handler.UpdateModelRequest:
-    properties:
-      description:
-        type: string
-      name:
-        type: string
-      parameters:
-        $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.ModelParameters'
-      source:
-        $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.ModelSource'
-      type:
-        $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.ModelType'
-    type: object
-  internal_handler.addSimilarQuestionsRequest:
-    properties:
-      similar_questions:
-        items:
-          type: string
-        minItems: 1
-        type: array
-    required:
-    - similar_questions
-    type: object
-  internal_handler.updateLastFAQImportResultDisplayStatusRequest:
-    properties:
-      display_status:
-        enum:
-        - open
-        - close
-        type: string
-    required:
-    - display_status
-    type: object
-  internal_handler_session.CreateKnowledgeQARequest:
-    properties:
-      agent_enabled:
-        description: Whether agent mode is enabled for this request
-        type: boolean
-      agent_id:
-        description: Selected custom agent ID (backend resolves shared agent and its
-          tenant from share relation)
-        type: string
-      channel:
-        description: 'Source channel: "web", "api", "im", etc.'
-        type: string
-      disable_title:
-        description: Whether to disable auto title generation
-        type: boolean
-      enable_memory:
-        description: Whether memory feature is enabled for this request
-        type: boolean
-      images:
-        description: Attached images for multimodal chat
-        items:
-          $ref: '#/definitions/internal_handler_session.ImageAttachment'
-        type: array
-      knowledge_base_ids:
-        description: Selected knowledge base ID for this request
-        items:
-          type: string
-        type: array
-      knowledge_ids:
-        description: Selected knowledge ID for this request
-        items:
-          type: string
-        type: array
-      mentioned_items:
-        description: '@mentioned knowledge bases and files'
-        items:
-          $ref: '#/definitions/internal_handler_session.MentionedItemRequest'
-        type: array
-      query:
-        description: Query text for knowledge base search
-        type: string
-      summary_model_id:
-        description: Optional summary model ID for this request (overrides session
-          default)
-        type: string
-      web_search_enabled:
-        description: Whether web search is enabled for this request
-        type: boolean
-    required:
-    - query
-    type: object
-  internal_handler_session.CreateSessionRequest:
-    properties:
-      description:
-        description: Description for the session (optional)
-        type: string
-      title:
-        description: Title for the session (optional)
-        type: string
-    type: object
-  internal_handler_session.GenerateTitleRequest:
-    properties:
-      messages:
-        description: Messages to use as context for title generation
-        items:
-          $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.Message'
-        type: array
-    required:
-    - messages
-    type: object
-  internal_handler_session.ImageAttachment:
-    properties:
-      caption:
-        description: VLM analysis result (context-aware, single call)
-        type: string
-      data:
-        description: base64 data URI from frontend (data:image/png;base64,...)
-        type: string
-      url:
-        description: serving URL after saving to storage
-        type: string
-    type: object
-  internal_handler_session.MentionedItemRequest:
-    properties:
-      id:
-        type: string
-      kb_type:
-        description: '"document" or "faq" (only for kb type)'
-        type: string
-      name:
-        type: string
-      type:
-        description: '"kb" for knowledge base, "file" for file'
-        type: string
-    type: object
-  internal_handler_session.SearchKnowledgeRequest:
-    properties:
-      knowledge_base_id:
-        description: Single knowledge base ID (for backward compatibility)
-        type: string
-      knowledge_base_ids:
-        description: IDs of knowledge bases to search (multi-KB support)
-        items:
-          type: string
-        type: array
-      knowledge_ids:
-        description: IDs of specific knowledge (files) to search
-        items:
-          type: string
-        type: array
-      query:
-        description: Query text to search for
-        type: string
-    required:
-    - query
-    type: object
-  internal_handler_session.StopSessionRequest:
-    properties:
-      message_id:
-        type: string
-    required:
-    - message_id
-    type: object
-  internal_handler_session.batchDeleteRequest:
-    properties:
-      delete_all:
-        type: boolean
-      ids:
-        items:
-          type: string
-        type: array
     type: object
 info:
   contact:
@@ -2970,7 +3165,7 @@ paths:
         "500":
           description: 服务器错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -2987,7 +3182,7 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/internal_handler.CreateAgentRequest'
+          $ref: '#/definitions/handler.CreateAgentRequest'
       produces:
       - application/json
       responses:
@@ -2999,7 +3194,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -3028,15 +3223,15 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
         "403":
           description: 无法删除内置智能体
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
         "404":
           description: 智能体不存在
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -3064,11 +3259,11 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
         "404":
           description: 智能体不存在
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -3090,7 +3285,7 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/internal_handler.UpdateAgentRequest'
+          $ref: '#/definitions/handler.UpdateAgentRequest'
       produces:
       - application/json
       responses:
@@ -3102,11 +3297,11 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
         "403":
           description: 无法修改内置智能体
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -3135,11 +3330,11 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
         "404":
           description: 智能体不存在
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -3180,11 +3375,11 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
         "404":
           description: 智能体不存在
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -3226,7 +3421,7 @@ paths:
           description: OK
           schema:
             items:
-              $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.DataSource'
+              $ref: '#/definitions/types.DataSource'
             type: array
         "400":
           description: Bad Request
@@ -3247,14 +3442,14 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.DataSource'
+          $ref: '#/definitions/types.DataSource'
       produces:
       - application/json
       responses:
         "201":
           description: Created
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.DataSource'
+            $ref: '#/definitions/types.DataSource'
         "400":
           description: Bad Request
           schema:
@@ -3299,7 +3494,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.DataSource'
+            $ref: '#/definitions/types.DataSource'
         "404":
           description: Not Found
           schema:
@@ -3324,14 +3519,14 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.DataSource'
+          $ref: '#/definitions/types.DataSource'
       produces:
       - application/json
       responses:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.DataSource'
+            $ref: '#/definitions/types.DataSource'
         "400":
           description: Bad Request
           schema:
@@ -3365,7 +3560,7 @@ paths:
           description: OK
           schema:
             items:
-              $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.SyncLog'
+              $ref: '#/definitions/types.SyncLog'
             type: array
         "400":
           description: Bad Request
@@ -3417,7 +3612,7 @@ paths:
           description: OK
           schema:
             items:
-              $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.Resource'
+              $ref: '#/definitions/types.Resource'
             type: array
         "400":
           description: Bad Request
@@ -3466,7 +3661,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.SyncLog'
+            $ref: '#/definitions/types.SyncLog'
         "400":
           description: Bad Request
           schema:
@@ -3516,7 +3711,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.SyncLog'
+            $ref: '#/definitions/types.SyncLog'
         "404":
           description: Not Found
           schema:
@@ -3536,7 +3731,7 @@ paths:
           description: OK
           schema:
             items:
-              $ref: '#/definitions/github_com_Tencent_WeKnora_internal_datasource.ConnectorMetadata'
+              $ref: '#/definitions/datasource.ConnectorMetadata'
             type: array
       summary: Get available connectors
       tags:
@@ -3571,6 +3766,25 @@ paths:
       summary: Test connection with raw credentials (no persistence)
       tags:
       - DataSource
+  /auth/auto-setup:
+    post:
+      consumes:
+      - application/json
+      description: Lite 版专用：首次启动时自动创建默认用户和租户并返回令牌，后续启动直接签发令牌，免除手动注册/登录流程
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/types.LoginResponse'
+        "403":
+          description: 非 Lite 版本
+          schema:
+            $ref: '#/definitions/errors.AppError'
+      summary: 自动初始化（Lite 桌面版）
+      tags:
+      - 认证
   /auth/change-password:
     post:
       consumes:
@@ -3599,7 +3813,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       summary: 修改密码
@@ -3616,18 +3830,18 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.LoginRequest'
+          $ref: '#/definitions/types.LoginRequest'
       produces:
       - application/json
       responses:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.LoginResponse'
+            $ref: '#/definitions/types.LoginResponse'
         "401":
           description: 认证失败
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       summary: 用户登录
       tags:
       - 认证
@@ -3647,7 +3861,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       summary: 用户登出
@@ -3669,7 +3883,7 @@ paths:
         "401":
           description: 未授权
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       summary: 获取当前用户信息
@@ -3712,7 +3926,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.OIDCConfigResponse'
+            $ref: '#/definitions/types.OIDCConfigResponse'
       summary: 获取OIDC登录配置
       tags:
       - 认证
@@ -3733,15 +3947,15 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.OIDCAuthURLResponse'
+            $ref: '#/definitions/types.OIDCAuthURLResponse'
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
         "403":
           description: OIDC未启用
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       summary: 获取OIDC授权地址
       tags:
       - 认证
@@ -3771,7 +3985,7 @@ paths:
         "401":
           description: 令牌无效
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       summary: 刷新令牌
       tags:
       - 认证
@@ -3786,22 +4000,22 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.RegisterRequest'
+          $ref: '#/definitions/types.RegisterRequest'
       produces:
       - application/json
       responses:
         "201":
           description: Created
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.RegisterResponse'
+            $ref: '#/definitions/types.RegisterResponse'
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
         "403":
           description: 注册功能已禁用
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       summary: 用户注册
       tags:
       - 认证
@@ -3821,7 +4035,7 @@ paths:
         "401":
           description: 令牌无效
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       summary: 验证令牌
@@ -3849,7 +4063,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -3887,7 +4101,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -3921,11 +4135,11 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
         "404":
           description: 分块不存在
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -3952,7 +4166,7 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/internal_handler.UpdateChunkRequest'
+          $ref: '#/definitions/handler.UpdateChunkRequest'
       produces:
       - application/json
       responses:
@@ -3964,11 +4178,11 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
         "404":
           description: 分块不存在
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -3997,11 +4211,11 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
         "404":
           description: 分块不存在
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -4039,11 +4253,11 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
         "404":
           description: 分块不存在
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -4072,7 +4286,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -4089,7 +4303,7 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/internal_handler.EvaluationRequest'
+          $ref: '#/definitions/handler.EvaluationRequest'
       produces:
       - application/json
       responses:
@@ -4101,7 +4315,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -4130,7 +4344,7 @@ paths:
         "404":
           description: 任务不存在
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -4148,7 +4362,7 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/internal_handler.TextRelationExtractionRequest'
+          $ref: '#/definitions/handler.TextRelationExtractionRequest'
       produces:
       - application/json
       responses:
@@ -4160,7 +4374,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -4194,7 +4408,7 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/internal_handler.FabriTextRequest'
+          $ref: '#/definitions/handler.FabriTextRequest'
       produces:
       - application/json
       responses:
@@ -4206,7 +4420,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -4241,7 +4455,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -4270,7 +4484,7 @@ paths:
         "404":
           description: 知识库不存在
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -4292,7 +4506,7 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/internal_handler.KBModelConfigRequest'
+          $ref: '#/definitions/handler.KBModelConfigRequest'
       produces:
       - application/json
       responses:
@@ -4304,15 +4518,45 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
         "404":
           description: 知识库不存在
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
       summary: 更新知识库配置
+      tags:
+      - 初始化
+  /initialization/models/asr/check:
+    post:
+      consumes:
+      - application/json
+      description: 检查ASR（语音识别）模型连接是否正常，通过发送一段静默音频测试 /v1/audio/transcriptions 端点
+      parameters:
+      - description: ASR检查请求
+        in: body
+        name: request
+        required: true
+        schema:
+          type: object
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: 检查结果
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: 请求参数错误
+          schema:
+            $ref: '#/definitions/errors.AppError'
+      security:
+      - Bearer: []
+      - ApiKeyAuth: []
+      summary: 检查ASR模型
       tags:
       - 初始化
   /initialization/models/embedding/test:
@@ -4338,7 +4582,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -4356,7 +4600,7 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/internal_handler.RemoteModelCheckRequest'
+          $ref: '#/definitions/handler.RemoteModelCheckRequest'
       produces:
       - application/json
       responses:
@@ -4368,7 +4612,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -4398,7 +4642,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -4450,7 +4694,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -4479,7 +4723,7 @@ paths:
         "404":
           description: 任务不存在
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -4521,7 +4765,7 @@ paths:
         "500":
           description: 服务器错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -4556,7 +4800,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -4589,7 +4833,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -4633,7 +4877,7 @@ paths:
         "500":
           description: 服务器错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -4650,7 +4894,7 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.KnowledgeBase'
+          $ref: '#/definitions/types.KnowledgeBase'
       produces:
       - application/json
       responses:
@@ -4662,7 +4906,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -4691,7 +4935,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -4723,11 +4967,11 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
         "404":
           description: 知识库不存在
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -4749,7 +4993,7 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/internal_handler.UpdateKnowledgeBaseRequest'
+          $ref: '#/definitions/handler.UpdateKnowledgeBaseRequest'
       produces:
       - application/json
       responses:
@@ -4761,7 +5005,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -4801,7 +5045,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -4854,7 +5098,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -4879,7 +5123,7 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.FAQBatchUpsertPayload'
+          $ref: '#/definitions/types.FAQBatchUpsertPayload'
       produces:
       - application/json
       responses:
@@ -4891,7 +5135,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -4925,11 +5169,11 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
         "404":
           description: 条目不存在
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -4956,7 +5200,7 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.FAQEntryPayload'
+          $ref: '#/definitions/types.FAQEntryPayload'
       produces:
       - application/json
       responses:
@@ -4968,7 +5212,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -4996,7 +5240,7 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/internal_handler.addSimilarQuestionsRequest'
+          $ref: '#/definitions/handler.addSimilarQuestionsRequest'
       produces:
       - application/json
       responses:
@@ -5008,11 +5252,11 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
         "404":
           description: 条目不存在
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -5040,7 +5284,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -5063,7 +5307,7 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.FAQEntryFieldsBatchUpdate'
+          $ref: '#/definitions/types.FAQEntryFieldsBatchUpdate'
       produces:
       - application/json
       responses:
@@ -5075,7 +5319,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -5110,7 +5354,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -5133,7 +5377,7 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.FAQEntryPayload'
+          $ref: '#/definitions/types.FAQEntryPayload'
       produces:
       - application/json
       responses:
@@ -5145,7 +5389,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -5168,7 +5412,7 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/internal_handler.updateLastFAQImportResultDisplayStatusRequest'
+          $ref: '#/definitions/handler.updateLastFAQImportResultDisplayStatusRequest'
       produces:
       - application/json
       responses:
@@ -5180,11 +5424,11 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
         "404":
           description: 知识库不存在或无导入记录
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -5207,7 +5451,7 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.FAQSearchRequest'
+          $ref: '#/definitions/types.FAQSearchRequest'
       produces:
       - application/json
       responses:
@@ -5219,7 +5463,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -5242,7 +5486,7 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.SearchParams'
+          $ref: '#/definitions/types.SearchParams'
       produces:
       - application/json
       responses:
@@ -5254,7 +5498,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -5283,11 +5527,11 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
         "403":
           description: 权限不足
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -5335,7 +5579,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -5381,7 +5625,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
         "409":
           description: 文件重复
           schema:
@@ -5409,7 +5653,7 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.ManualKnowledgePayload'
+          $ref: '#/definitions/types.ManualKnowledgePayload'
       produces:
       - application/json
       responses:
@@ -5421,7 +5665,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -5469,7 +5713,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
         "409":
           description: URL重复
           schema:
@@ -5503,7 +5747,7 @@ paths:
         "404":
           description: 知识库不存在
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -5525,7 +5769,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.ListSharesResponse'
+            $ref: '#/definitions/types.ListSharesResponse'
       security:
       - Bearer: []
       summary: 获取知识库的共享列表
@@ -5546,7 +5790,7 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.ShareKnowledgeBaseRequest'
+          $ref: '#/definitions/types.ShareKnowledgeBaseRequest'
       produces:
       - application/json
       responses:
@@ -5613,7 +5857,7 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.UpdateSharePermissionRequest'
+          $ref: '#/definitions/types.UpdateSharePermissionRequest'
       produces:
       - application/json
       responses:
@@ -5665,7 +5909,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -5706,7 +5950,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -5741,7 +5985,7 @@ paths:
         in: body
         name: body
         schema:
-          $ref: '#/definitions/internal_handler.DeleteTagRequest'
+          $ref: '#/definitions/handler.DeleteTagRequest'
       produces:
       - application/json
       responses:
@@ -5753,7 +5997,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -5792,7 +6036,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -5810,7 +6054,7 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/internal_handler.CopyKnowledgeBaseRequest'
+          $ref: '#/definitions/handler.CopyKnowledgeBaseRequest'
       produces:
       - application/json
       responses:
@@ -5822,7 +6066,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -5851,7 +6095,7 @@ paths:
         "404":
           description: 任务不存在
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -5880,7 +6124,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -5908,11 +6152,11 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
         "404":
           description: 知识不存在
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -5934,7 +6178,7 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.Knowledge'
+          $ref: '#/definitions/types.Knowledge'
       produces:
       - application/json
       responses:
@@ -5946,7 +6190,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -5974,7 +6218,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -6005,7 +6249,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -6034,11 +6278,11 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
         "403":
           description: 权限不足
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -6078,7 +6322,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -6121,7 +6365,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -6144,7 +6388,7 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.ManualKnowledgePayload'
+          $ref: '#/definitions/types.ManualKnowledgePayload'
       produces:
       - application/json
       responses:
@@ -6156,7 +6400,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -6201,7 +6445,7 @@ paths:
         "400":
           description: Invalid request
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -6231,7 +6475,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -6254,7 +6498,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -6271,7 +6515,7 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.MCPService'
+          $ref: '#/definitions/types.MCPService'
       produces:
       - application/json
       responses:
@@ -6283,7 +6527,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -6312,7 +6556,7 @@ paths:
         "500":
           description: 服务器错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -6340,7 +6584,7 @@ paths:
         "404":
           description: 服务不存在
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -6374,7 +6618,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -6403,7 +6647,7 @@ paths:
         "500":
           description: 服务器错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -6432,7 +6676,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -6461,7 +6705,7 @@ paths:
         "500":
           description: 服务器错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -6495,7 +6739,7 @@ paths:
         "500":
           description: 服务器错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -6533,7 +6777,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -6570,7 +6814,7 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/internal_handler.SearchMessagesRequest'
+          $ref: '#/definitions/handler.SearchMessagesRequest'
       produces:
       - application/json
       responses:
@@ -6582,7 +6826,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -6605,7 +6849,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -6622,7 +6866,7 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/internal_handler.CreateModelRequest'
+          $ref: '#/definitions/handler.CreateModelRequest'
       produces:
       - application/json
       responses:
@@ -6634,7 +6878,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -6663,7 +6907,7 @@ paths:
         "404":
           description: 模型不存在
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -6691,7 +6935,7 @@ paths:
         "404":
           description: 模型不存在
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -6713,7 +6957,7 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/internal_handler.UpdateModelRequest'
+          $ref: '#/definitions/handler.UpdateModelRequest'
       produces:
       - application/json
       responses:
@@ -6725,7 +6969,7 @@ paths:
         "404":
           description: 模型不存在
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -6765,7 +7009,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.ListOrganizationsResponse'
+            $ref: '#/definitions/types.ListOrganizationsResponse'
       security:
       - Bearer: []
       summary: 获取我的组织列表
@@ -6781,7 +7025,7 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.CreateOrganizationRequest'
+          $ref: '#/definitions/types.CreateOrganizationRequest'
       produces:
       - application/json
       responses:
@@ -6863,7 +7107,7 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.UpdateOrganizationRequest'
+          $ref: '#/definitions/types.UpdateOrganizationRequest'
       produces:
       - application/json
       responses:
@@ -6897,7 +7141,7 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.InviteMemberRequest'
+          $ref: '#/definitions/types.InviteMemberRequest'
       produces:
       - application/json
       responses:
@@ -6992,7 +7236,7 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.ReviewJoinRequestRequest'
+          $ref: '#/definitions/types.ReviewJoinRequestRequest'
       produces:
       - application/json
       responses:
@@ -7049,7 +7293,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.ListMembersResponse'
+            $ref: '#/definitions/types.ListMembersResponse'
       security:
       - Bearer: []
       summary: 获取组织成员列表
@@ -7104,7 +7348,7 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.UpdateMemberRoleRequest'
+          $ref: '#/definitions/types.UpdateMemberRoleRequest'
       produces:
       - application/json
       responses:
@@ -7138,7 +7382,7 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.RequestRoleUpgradeRequest'
+          $ref: '#/definitions/types.RequestRoleUpgradeRequest'
       produces:
       - application/json
       responses:
@@ -7251,7 +7495,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.ListSharesResponse'
+            $ref: '#/definitions/types.ListSharesResponse'
       security:
       - Bearer: []
       summary: 获取组织的共享知识库列表
@@ -7268,7 +7512,7 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.JoinOrganizationRequest'
+          $ref: '#/definitions/types.JoinOrganizationRequest'
       produces:
       - application/json
       responses:
@@ -7297,7 +7541,7 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.JoinByOrganizationIDRequest'
+          $ref: '#/definitions/types.JoinByOrganizationIDRequest'
       produces:
       - application/json
       responses:
@@ -7326,7 +7570,7 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.SubmitJoinRequestRequest'
+          $ref: '#/definitions/types.SubmitJoinRequestRequest'
       produces:
       - application/json
       responses:
@@ -7421,7 +7665,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -7438,7 +7682,7 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/internal_handler_session.CreateSessionRequest'
+          $ref: '#/definitions/handler_session.CreateSessionRequest'
       produces:
       - application/json
       responses:
@@ -7450,7 +7694,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -7479,7 +7723,7 @@ paths:
         "404":
           description: 会话不存在
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -7507,7 +7751,7 @@ paths:
         "404":
           description: 会话不存在
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -7529,7 +7773,7 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.Session'
+          $ref: '#/definitions/types.Session'
       produces:
       - application/json
       responses:
@@ -7541,7 +7785,7 @@ paths:
         "404":
           description: 会话不存在
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -7570,11 +7814,11 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
         "404":
           description: 会话不存在
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -7597,7 +7841,7 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/internal_handler_session.CreateKnowledgeQARequest'
+          $ref: '#/definitions/handler_session.CreateKnowledgeQARequest'
       produces:
       - text/event-stream
       responses:
@@ -7609,7 +7853,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -7643,7 +7887,7 @@ paths:
         "404":
           description: 会话或消息不存在
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -7666,7 +7910,7 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/internal_handler_session.CreateKnowledgeQARequest'
+          $ref: '#/definitions/handler_session.CreateKnowledgeQARequest'
       produces:
       - text/event-stream
       responses:
@@ -7678,7 +7922,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -7701,7 +7945,7 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/internal_handler_session.StopSessionRequest'
+          $ref: '#/definitions/handler_session.StopSessionRequest'
       produces:
       - application/json
       responses:
@@ -7713,7 +7957,7 @@ paths:
         "404":
           description: 会话或消息不存在
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -7736,7 +7980,7 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/internal_handler_session.GenerateTitleRequest'
+          $ref: '#/definitions/handler_session.GenerateTitleRequest'
       produces:
       - application/json
       responses:
@@ -7748,7 +7992,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -7766,7 +8010,7 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/internal_handler_session.batchDeleteRequest'
+          $ref: '#/definitions/handler_session.batchDeleteRequest'
       produces:
       - application/json
       responses:
@@ -7778,7 +8022,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -7796,7 +8040,7 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/internal_handler_session.SearchKnowledgeRequest'
+          $ref: '#/definitions/handler_session.SearchKnowledgeRequest'
       produces:
       - application/json
       responses:
@@ -7808,7 +8052,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -7847,7 +8091,7 @@ paths:
         "500":
           description: 服务器错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -7884,33 +8128,8 @@ paths:
         "200":
           description: 系统信息
           schema:
-            $ref: '#/definitions/internal_handler.GetSystemInfoResponse'
+            $ref: '#/definitions/handler.GetSystemInfoResponse'
       summary: 获取系统信息
-      tags:
-      - 系统
-  /system/minio/buckets:
-    get:
-      consumes:
-      - application/json
-      description: 获取所有 MinIO 存储桶及其访问权限
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: 存储桶列表
-          schema:
-            $ref: '#/definitions/internal_handler.ListMinioBucketsResponse'
-        "400":
-          description: MinIO 未启用
-          schema:
-            additionalProperties: true
-            type: object
-        "500":
-          description: 服务器错误
-          schema:
-            additionalProperties: true
-            type: object
-      summary: 列出 MinIO 存储桶
       tags:
       - 系统
   /system/parser-engines:
@@ -7956,14 +8175,14 @@ paths:
         name: body
         required: true
         schema:
-          $ref: '#/definitions/internal_handler.StorageCheckRequest'
+          $ref: '#/definitions/handler.StorageCheckRequest'
       produces:
       - application/json
       responses:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/internal_handler.StorageCheckResponse'
+            $ref: '#/definitions/handler.StorageCheckResponse'
       summary: 测试存储引擎连通性
       tags:
       - 系统
@@ -7976,7 +8195,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/internal_handler.GetStorageEngineStatusResponse'
+            $ref: '#/definitions/handler.GetStorageEngineStatusResponse'
       summary: 获取存储引擎状态
       tags:
       - 系统
@@ -7996,7 +8215,7 @@ paths:
         "500":
           description: 服务器错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       summary: 获取租户列表
@@ -8012,7 +8231,7 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.Tenant'
+          $ref: '#/definitions/types.Tenant'
       produces:
       - application/json
       responses:
@@ -8024,7 +8243,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       summary: 创建租户
@@ -8052,7 +8271,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       summary: 删除租户
@@ -8079,11 +8298,11 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
         "404":
           description: 租户不存在
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -8105,7 +8324,7 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/github_com_Tencent_WeKnora_internal_types.Tenant'
+          $ref: '#/definitions/types.Tenant'
       produces:
       - application/json
       responses:
@@ -8117,7 +8336,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       summary: 更新租户
@@ -8139,7 +8358,7 @@ paths:
         "403":
           description: 权限不足
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       summary: 获取所有租户列表
@@ -8167,7 +8386,7 @@ paths:
         "400":
           description: 不支持的键
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -8201,7 +8420,7 @@ paths:
         "400":
           description: 不支持的键
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -8224,7 +8443,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -8247,7 +8466,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -8270,7 +8489,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -8293,7 +8512,7 @@ paths:
         "400":
           description: 请求参数错误
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
@@ -8335,32 +8554,276 @@ paths:
         "403":
           description: 权限不足
           schema:
-            $ref: '#/definitions/github_com_Tencent_WeKnora_internal_errors.AppError'
+            $ref: '#/definitions/errors.AppError'
       security:
       - Bearer: []
       - ApiKeyAuth: []
       summary: 搜索租户
       tags:
       - 租户管理
-  /web-search/providers:
+  /vector-stores:
     get:
-      consumes:
-      - application/json
-      description: Returns the list of available web search providers from configuration
+      description: List all vector stores for the current tenant, including environment-configured
+        and user-created stores
       produces:
       - application/json
       responses:
         "200":
-          description: List of providers
+          description: List of vector stores (env + DB)
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: Unauthorized
           schema:
             additionalProperties: true
             type: object
       security:
       - Bearer: []
       - ApiKeyAuth: []
-      summary: Get available web search providers
+      summary: List vector stores
       tags:
-      - web-search
+      - VectorStore
+    post:
+      consumes:
+      - application/json
+      description: Create a new vector store configuration for the current tenant
+      parameters:
+      - description: Vector store configuration
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/handler.CreateStoreRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created vector store
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Invalid request or validation error
+          schema:
+            $ref: '#/definitions/errors.AppError'
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties: true
+            type: object
+        "409":
+          description: Duplicate endpoint and index
+          schema:
+            $ref: '#/definitions/errors.AppError'
+      security:
+      - Bearer: []
+      - ApiKeyAuth: []
+      summary: Create vector store
+      tags:
+      - VectorStore
+  /vector-stores/{id}:
+    delete:
+      description: Soft-delete a vector store. Env stores cannot be deleted.
+      parameters:
+      - description: Vector store ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Deletion success
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Env store cannot be deleted
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: Vector store not found
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - Bearer: []
+      - ApiKeyAuth: []
+      summary: Delete vector store
+      tags:
+      - VectorStore
+    get:
+      description: Retrieve a single vector store by ID. Supports both DB stores and
+        env stores (__env_* IDs)
+      parameters:
+      - description: Vector store ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Vector store details
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: Vector store not found
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - Bearer: []
+      - ApiKeyAuth: []
+      summary: Get vector store
+      tags:
+      - VectorStore
+    put:
+      consumes:
+      - application/json
+      description: Update a vector store (name only). Engine type, connection config,
+        and index config are immutable. Env stores cannot be modified.
+      parameters:
+      - description: Vector store ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Updated fields
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/handler.UpdateStoreRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Updated vector store
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Env store or validation error
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: Vector store not found
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - Bearer: []
+      - ApiKeyAuth: []
+      summary: Update vector store
+      tags:
+      - VectorStore
+  /vector-stores/{id}/test:
+    post:
+      description: Test connectivity of an existing saved or env store. Returns detected
+        server version. For DB stores, the version is automatically saved to connection_config.
+      parameters:
+      - description: Vector store ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Connection test result (success, version)
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: Vector store not found
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - Bearer: []
+      - ApiKeyAuth: []
+      summary: Test vector store connection by ID
+      tags:
+      - VectorStore
+  /vector-stores/test:
+    post:
+      consumes:
+      - application/json
+      description: Test connectivity using provided credentials without persisting.
+        Returns detected server version.
+      parameters:
+      - description: Engine type and connection config
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/handler.TestStoreRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Connection test result (success, version)
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Invalid request
+          schema:
+            $ref: '#/definitions/errors.AppError'
+        "401":
+          description: Unauthorized
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - Bearer: []
+      - ApiKeyAuth: []
+      summary: Test vector store connection with raw credentials
+      tags:
+      - VectorStore
+  /vector-stores/types:
+    get:
+      description: Return supported engine types with connection and index field schemas
+        for UI form generation
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: List of engine types with config schemas
+          schema:
+            additionalProperties: true
+            type: object
+      summary: List vector store types
+      tags:
+      - VectorStore
 securityDefinitions:
   ApiKeyAuth:
     description: 租户身份认证：输入 sk- 开头的 API Key

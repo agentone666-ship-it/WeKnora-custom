@@ -28,7 +28,12 @@
             <p class="desc">{{ $t('settings.storage.defaultEngineDesc') }}</p>
           </div>
           <div class="setting-control">
-            <t-select v-model="config.default_provider" style="width: 280px;" :placeholder="$t('settings.storage.defaultEngine')">
+            <t-select
+              v-model="config.default_provider"
+              style="width: 280px;"
+              :placeholder="$t('settings.storage.defaultEngine')"
+              @change="onSaveDefaultEngine"
+            >
               <t-option value="local" :label="$t('settings.storage.engineLocal')" />
               <t-option value="minio" label="MinIO" />
               <t-option value="cos" :label="$t('settings.storage.engineCos')" />
@@ -36,475 +41,472 @@
               <t-option value="s3" label="AWS S3" />
               <t-option value="oss" :label="$t('settings.storage.engineOss')" />
             </t-select>
+            <span v-if="saveMessage && !drawerVisible" :class="['save-msg', saveSuccess ? 'success' : 'error']" style="margin-left: 12px;">
+              {{ saveMessage }}
+            </span>
           </div>
         </div>
       </div>
 
-      <!-- Local -->
-      <div class="engine-section" data-model-type="local">
-        <div class="engine-header">
-          <div class="engine-header-info">
-            <div class="engine-title-row">
-              <h3>{{ $t('settings.storage.localTitle') }}</h3>
-              <t-tag theme="success" variant="light" size="small">{{ $t('settings.storage.available') }}</t-tag>
-            </div>
-            <p>{{ $t('settings.storage.localDesc') }}</p>
+      <div class="engine-cards">
+        <!-- Local -->
+        <div :class="['engine-card', { active: drawerVisible && currentEngine === 'local' }]" @click="openDrawer('local')">
+          <div class="engine-card-header">
+            <h3>{{ $t('settings.storage.localTitle') }}</h3>
+            <t-tag theme="success" variant="light" size="small">{{ $t('settings.storage.available') }}</t-tag>
           </div>
+          <p class="engine-card-desc">{{ $t('settings.storage.localDesc') }}</p>
         </div>
-        <div class="engine-form">
-          <div class="form-field">
-            <label>{{ $t('settings.storage.pathPrefix') }}</label>
-            <t-input
-              v-model="config.local.path_prefix"
-              :placeholder="$t('settings.storage.pathPrefixPlaceholder')"
-              clearable
-            />
+
+        <!-- MinIO -->
+        <div :class="['engine-card', { active: drawerVisible && currentEngine === 'minio' }]" @click="openDrawer('minio')">
+          <div class="engine-card-header">
+            <h3>MinIO</h3>
+            <t-tag v-if="minioAvailable" theme="success" variant="light" size="small">{{ $t('settings.storage.available') }}</t-tag>
+            <t-tag v-else theme="default" variant="light" size="small">{{ $t('settings.storage.needsConfig') }}</t-tag>
           </div>
+          <p class="engine-card-desc">{{ $t('settings.storage.minioDesc') }}</p>
+        </div>
+
+        <!-- COS -->
+        <div :class="['engine-card', { active: drawerVisible && currentEngine === 'cos' }]" @click="openDrawer('cos')">
+          <div class="engine-card-header">
+            <h3>{{ $t('settings.storage.cosTitle') }}</h3>
+            <t-tag theme="success" variant="light" size="small">{{ $t('settings.storage.configurable') }}</t-tag>
+          </div>
+          <p class="engine-card-desc">{{ $t('settings.storage.cosDesc') }}</p>
+        </div>
+
+        <!-- TOS -->
+        <div :class="['engine-card', { active: drawerVisible && currentEngine === 'tos' }]" @click="openDrawer('tos')">
+          <div class="engine-card-header">
+            <h3>{{ $t('settings.storage.tosTitle') }}</h3>
+            <t-tag theme="success" variant="light" size="small">{{ $t('settings.storage.configurable') }}</t-tag>
+          </div>
+          <p class="engine-card-desc">{{ $t('settings.storage.tosDesc') }}</p>
+        </div>
+
+        <!-- S3 -->
+        <div :class="['engine-card', { active: drawerVisible && currentEngine === 's3' }]" @click="openDrawer('s3')">
+          <div class="engine-card-header">
+            <h3>{{ $t('settings.storage.s3Title') }}</h3>
+            <t-tag theme="success" variant="light" size="small">{{ $t('settings.storage.configurable') }}</t-tag>
+          </div>
+          <p class="engine-card-desc">{{ $t('settings.storage.s3Desc') }}</p>
+        </div>
+
+        <!-- OSS -->
+        <div :class="['engine-card', { active: drawerVisible && currentEngine === 'oss' }]" @click="openDrawer('oss')">
+          <div class="engine-card-header">
+            <h3>{{ $t('settings.storage.ossTitle') }}</h3>
+            <t-tag theme="success" variant="light" size="small">{{ $t('settings.storage.configurable') }}</t-tag>
+          </div>
+          <p class="engine-card-desc">{{ $t('settings.storage.ossDesc') }}</p>
         </div>
       </div>
+    </template>
 
-      <!-- MinIO -->
-      <div class="engine-section" data-model-type="minio">
-        <div class="engine-header">
-          <div class="engine-header-info">
-            <div class="engine-title-row">
-              <h3>MinIO</h3>
-              <t-tag v-if="minioAvailable" theme="success" variant="light" size="small">{{ $t('settings.storage.available') }}</t-tag>
-              <t-tag v-else theme="default" variant="light" size="small">{{ $t('settings.storage.needsConfig') }}</t-tag>
-            </div>
-            <p>{{ $t('settings.storage.minioDesc') }}</p>
-          </div>
-        </div>
-
-        <div class="mode-selector">
-          <div
-            :class="['mode-option', { active: config.minio.mode !== 'remote' }]"
-            @click="config.minio.mode = 'docker'"
-          >
-            <span class="mode-label">{{ $t('settings.storage.minioDocker') }}</span>
-            <t-tag v-if="minioEnvAvailable" theme="success" variant="light" size="small">{{ $t('settings.storage.detected') }}</t-tag>
-            <t-tag v-else theme="default" variant="light" size="small">{{ $t('settings.storage.notDetected') }}</t-tag>
-          </div>
-          <div
-            :class="['mode-option', { active: config.minio.mode === 'remote' }]"
-            @click="config.minio.mode = 'remote'"
-          >
-            <span class="mode-label">{{ $t('settings.storage.minioRemote') }}</span>
-          </div>
-        </div>
-
-        <!-- Docker mode -->
-        <div v-if="config.minio.mode !== 'remote'">
-          <div v-if="minioEnvAvailable" class="engine-hint success">
-            {{ $t('settings.storage.minioDockerDetected') }}
-          </div>
-          <div v-else class="engine-hint warning">
-            {{ $t('settings.storage.minioDockerNotDetected') }}
+    <!-- 配置抽屉 -->
+    <t-drawer
+      v-model:visible="drawerVisible"
+      :header="drawerTitle"
+      size="500px"
+      :footer="true"
+      @confirm="onSave"
+    >
+      <div class="drawer-content">
+        <!-- Local -->
+        <template v-if="currentEngine === 'local'">
+          <div class="engine-info-block">
+            <p class="engine-desc">{{ $t('settings.storage.localDesc') }}</p>
           </div>
           <div class="engine-form">
-            <div class="form-field">
-              <label>{{ $t('settings.storage.bucketName') }}</label>
-              <t-select
-                v-model="config.minio.bucket_name"
-                filterable
-                creatable
-                :placeholder="$t('settings.storage.bucketSelectPlaceholder')"
-                :loading="loadingBuckets"
-                :disabled="!minioEnvAvailable"
-                @focus="loadMinioBuckets"
-              >
-                <t-option
-                  v-for="b in minioBuckets"
-                  :key="b.name"
-                  :value="b.name"
-                  :label="b.name"
+            <div class="form-item">
+              <label class="form-label">{{ $t('settings.storage.pathPrefix') }}</label>
+              <t-input
+                v-model="config.local.path_prefix"
+                :placeholder="$t('settings.storage.pathPrefixPlaceholder')"
+                clearable
+              />
+            </div>
+          </div>
+        </template>
+
+        <!-- MinIO -->
+        <template v-else-if="currentEngine === 'minio'">
+          <div class="engine-info-block">
+            <p class="engine-desc">{{ $t('settings.storage.minioDesc') }}</p>
+          </div>
+          <div class="mode-selector">
+            <div
+              :class="['mode-option', { active: config.minio.mode !== 'remote' }]"
+              @click="config.minio.mode = 'docker'"
+            >
+              <span class="mode-label">{{ $t('settings.storage.minioDocker') }}</span>
+              <t-tag v-if="minioEnvAvailable" theme="success" variant="light" size="small">{{ $t('settings.storage.detected') }}</t-tag>
+              <t-tag v-else theme="default" variant="light" size="small">{{ $t('settings.storage.notDetected') }}</t-tag>
+            </div>
+            <div
+              :class="['mode-option', { active: config.minio.mode === 'remote' }]"
+              @click="config.minio.mode = 'remote'"
+            >
+              <span class="mode-label">{{ $t('settings.storage.minioRemote') }}</span>
+            </div>
+          </div>
+
+          <!-- Docker mode -->
+          <div v-if="config.minio.mode !== 'remote'">
+            <div v-if="minioEnvAvailable" class="engine-hint success">
+              {{ $t('settings.storage.minioDockerDetected') }}
+            </div>
+            <div v-else class="engine-hint warning">
+              {{ $t('settings.storage.minioDockerNotDetected') }}
+            </div>
+            <div class="engine-form">
+              <div class="form-item">
+                <label class="form-label">{{ $t('settings.storage.bucketName') }}</label>
+                <t-input
+                  v-model="config.minio.bucket_name"
+                  :placeholder="$t('settings.storage.bucketPlaceholder')"
+                  :disabled="!minioEnvAvailable"
+                  clearable
                 />
-              </t-select>
-            </div>
-            <div class="form-field form-field--inline">
-              <label>Use SSL</label>
-              <t-switch v-model="config.minio.use_ssl" size="small" />
-            </div>
-            <div class="form-field">
-              <label>{{ $t('settings.storage.pathPrefix') }}</label>
-              <t-input
-                v-model="config.minio.path_prefix"
-                :placeholder="$t('settings.storage.prefixPlaceholder')"
-                clearable
-              />
+              </div>
+              <div class="form-item form-item--inline">
+                <label class="form-label">Use SSL</label>
+                <t-switch v-model="config.minio.use_ssl" size="small" />
+              </div>
+              <div class="form-item">
+                <label class="form-label">{{ $t('settings.storage.pathPrefix') }}</label>
+                <t-input
+                  v-model="config.minio.path_prefix"
+                  :placeholder="$t('settings.storage.prefixPlaceholder')"
+                  clearable
+                />
+              </div>
             </div>
           </div>
-          <div v-if="minioEnvAvailable" class="test-bar">
-            <t-button size="small" variant="outline" :loading="checkingMinio" @click="onCheckMinio">{{ $t('settings.storage.testConnection') }}</t-button>
-            <span v-if="minioCheckResult" :class="['test-msg', minioCheckResult.ok ? (minioCheckResult.bucket_created ? 'created' : 'success') : 'error']">
-              {{ minioCheckResult.message }}
-            </span>
-          </div>
-        </div>
 
-        <!-- Remote mode -->
-        <div v-else>
-          <div class="engine-hint">{{ $t('settings.storage.minioRemoteHint') }}</div>
-          <div class="engine-form">
-            <div class="form-field">
-              <label>Endpoint</label>
-              <t-input
-                v-model="config.minio.endpoint"
-                placeholder="e.g. minio.example.com:9000"
-                clearable
-              />
-            </div>
-            <div class="form-field">
-              <label>Access Key ID</label>
-              <t-input
-                v-model="config.minio.access_key_id"
-                placeholder="MinIO Access Key"
-                clearable
-              />
-            </div>
-            <div class="form-field">
-              <label>Secret Access Key</label>
-              <t-input
-                v-model="config.minio.secret_access_key"
-                type="password"
-                placeholder="MinIO Secret Key"
-                clearable
-              />
-            </div>
-            <div class="form-field">
-              <label>{{ $t('settings.storage.bucketName') }}</label>
-              <t-input
-                v-model="config.minio.bucket_name"
-                :placeholder="$t('settings.storage.bucketPlaceholder')"
-                clearable
-              />
-            </div>
-            <div class="form-field form-field--inline">
-              <label>Use SSL</label>
-              <t-switch v-model="config.minio.use_ssl" size="small" />
-            </div>
-            <div class="form-field">
-              <label>{{ $t('settings.storage.pathPrefix') }}</label>
-              <t-input
-                v-model="config.minio.path_prefix"
-                :placeholder="$t('settings.storage.prefixPlaceholder')"
-                clearable
-              />
+          <!-- Remote mode -->
+          <div v-else>
+            <div class="engine-hint">{{ $t('settings.storage.minioRemoteHint') }}</div>
+            <div class="engine-form">
+              <div class="form-item">
+                <label class="form-label">Endpoint</label>
+                <t-input
+                  v-model="config.minio.endpoint"
+                  placeholder="e.g. minio.example.com:9000"
+                  clearable
+                />
+              </div>
+              <div class="form-item">
+                <label class="form-label">Access Key ID</label>
+                <t-input
+                  v-model="config.minio.access_key_id"
+                  placeholder="MinIO Access Key"
+                  clearable
+                />
+              </div>
+              <div class="form-item">
+                <label class="form-label">Secret Access Key</label>
+                <t-input
+                  v-model="config.minio.secret_access_key"
+                  type="password"
+                  placeholder="MinIO Secret Key"
+                  clearable
+                />
+              </div>
+              <div class="form-item">
+                <label class="form-label">{{ $t('settings.storage.bucketName') }}</label>
+                <t-input
+                  v-model="config.minio.bucket_name"
+                  :placeholder="$t('settings.storage.bucketPlaceholder')"
+                  clearable
+                />
+              </div>
+              <div class="form-item form-item--inline">
+                <label class="form-label">Use SSL</label>
+                <t-switch v-model="config.minio.use_ssl" size="small" />
+              </div>
+              <div class="form-item">
+                <label class="form-label">{{ $t('settings.storage.pathPrefix') }}</label>
+                <t-input
+                  v-model="config.minio.path_prefix"
+                  :placeholder="$t('settings.storage.prefixPlaceholder')"
+                  clearable
+                />
+              </div>
             </div>
           </div>
-          <div class="test-bar">
-            <t-button size="small" variant="outline" :loading="checkingMinio" @click="onCheckMinio">{{ $t('settings.storage.testConnection') }}</t-button>
-            <span v-if="minioCheckResult" :class="['test-msg', minioCheckResult.ok ? (minioCheckResult.bucket_created ? 'created' : 'success') : 'error']">
-              {{ minioCheckResult.message }}
-            </span>
-          </div>
-        </div>
-      </div>
+        </template>
 
-      <!-- COS -->
-      <div class="engine-section" data-model-type="cos">
-        <div class="engine-header">
-          <div class="engine-header-info">
-            <div class="engine-title-row">
-              <h3>{{ $t('settings.storage.cosTitle') }}</h3>
-              <t-tag theme="success" variant="light" size="small">{{ $t('settings.storage.configurable') }}</t-tag>
-            </div>
-            <p>
+        <!-- COS -->
+        <template v-else-if="currentEngine === 'cos'">
+          <div class="engine-info-block">
+            <p class="engine-desc">
               {{ $t('settings.storage.cosDesc') }}
               <a class="engine-link" href="https://console.cloud.tencent.com/cos" target="_blank" rel="noopener">{{ $t('settings.storage.console') }} ↗</a>
               <a class="engine-link" href="https://cloud.tencent.com/document/product/436" target="_blank" rel="noopener">{{ $t('settings.storage.docs') }} ↗</a>
             </p>
           </div>
-        </div>
-        <div class="engine-form">
-          <div class="form-field">
-            <label>Secret ID</label>
-            <t-input
-              v-model="config.cos.secret_id"
-              :placeholder="$t('settings.storage.cosSecretIdPlaceholder')"
-              clearable
-            />
-          </div>
-          <div class="form-field">
-            <label>Secret Key</label>
-            <t-input
-              v-model="config.cos.secret_key"
-              type="password"
-              :placeholder="$t('settings.storage.cosSecretKeyPlaceholder')"
-              clearable
-            />
-          </div>
-          <div class="form-field">
-            <label>Region</label>
-            <t-input
-              v-model="config.cos.region"
-              placeholder="e.g. ap-guangzhou"
-              clearable
-            />
-          </div>
-          <div class="form-field">
-            <label>{{ $t('settings.storage.bucketName') }}</label>
-            <t-input
-              v-model="config.cos.bucket_name"
-              :placeholder="$t('settings.storage.bucketPlaceholder')"
-              clearable
-            />
-          </div>
-          <div class="form-field">
-            <label>App ID</label>
-            <t-input
-              v-model="config.cos.app_id"
-              :placeholder="$t('settings.storage.cosAppIdPlaceholder')"
-              clearable
-            />
-          </div>
-          <div class="form-field">
-            <label>{{ $t('settings.storage.pathPrefix') }}</label>
-            <t-input
-              v-model="config.cos.path_prefix"
-              :placeholder="$t('settings.storage.prefixPlaceholder')"
-              clearable
-            />
-          </div>
-        </div>
-        <div class="test-bar">
-          <t-button size="small" variant="outline" :loading="checkingCos" @click="onCheckCos">{{ $t('settings.storage.testConnection') }}</t-button>
-          <span v-if="cosCheckResult" :class="['test-msg', cosCheckResult.ok ? 'success' : 'error']">
-            {{ cosCheckResult.message }}
-          </span>
-        </div>
-      </div>
-
-      <!-- TOS -->
-      <div class="engine-section" data-model-type="tos">
-        <div class="engine-header">
-          <div class="engine-header-info">
-            <div class="engine-title-row">
-              <h3>{{ $t('settings.storage.tosTitle') }}</h3>
-              <t-tag theme="success" variant="light" size="small">{{ $t('settings.storage.configurable') }}</t-tag>
+          <div class="engine-form">
+            <div class="form-item">
+              <label class="form-label">Secret ID</label>
+              <t-input
+                v-model="config.cos.secret_id"
+                :placeholder="$t('settings.storage.cosSecretIdPlaceholder')"
+                clearable
+              />
             </div>
-            <p>
+            <div class="form-item">
+              <label class="form-label">Secret Key</label>
+              <t-input
+                v-model="config.cos.secret_key"
+                type="password"
+                :placeholder="$t('settings.storage.cosSecretKeyPlaceholder')"
+                clearable
+              />
+            </div>
+            <div class="form-item">
+              <label class="form-label">Region</label>
+              <t-input
+                v-model="config.cos.region"
+                placeholder="e.g. ap-guangzhou"
+                clearable
+              />
+            </div>
+            <div class="form-item">
+              <label class="form-label">{{ $t('settings.storage.bucketName') }}</label>
+              <t-input
+                v-model="config.cos.bucket_name"
+                :placeholder="$t('settings.storage.bucketPlaceholder')"
+                clearable
+              />
+            </div>
+            <div class="form-item">
+              <label class="form-label">App ID</label>
+              <t-input
+                v-model="config.cos.app_id"
+                :placeholder="$t('settings.storage.cosAppIdPlaceholder')"
+                clearable
+              />
+            </div>
+            <div class="form-item">
+              <label class="form-label">{{ $t('settings.storage.pathPrefix') }}</label>
+              <t-input
+                v-model="config.cos.path_prefix"
+                :placeholder="$t('settings.storage.prefixPlaceholder')"
+                clearable
+              />
+            </div>
+          </div>
+        </template>
+
+        <!-- TOS -->
+        <template v-else-if="currentEngine === 'tos'">
+          <div class="engine-info-block">
+            <p class="engine-desc">
               {{ $t('settings.storage.tosDesc') }}
               <a class="engine-link" href="https://console.volcengine.com/tos" target="_blank" rel="noopener">{{ $t('settings.storage.console') }} ↗</a>
               <a class="engine-link" href="https://www.volcengine.com/docs/6349" target="_blank" rel="noopener">{{ $t('settings.storage.docs') }} ↗</a>
             </p>
           </div>
-        </div>
-        <div class="engine-form">
-          <div class="form-field">
-            <label>Endpoint</label>
-            <t-input
-              v-model="config.tos.endpoint"
-              placeholder="e.g. https://tos-cn-beijing.volces.com"
-              clearable
-            />
-          </div>
-          <div class="form-field">
-            <label>Region</label>
-            <t-input
-              v-model="config.tos.region"
-              placeholder="e.g. cn-beijing"
-              clearable
-            />
-          </div>
-          <div class="form-field">
-            <label>Access Key</label>
-            <t-input
-              v-model="config.tos.access_key"
-              :placeholder="$t('settings.storage.tosAccessKeyPlaceholder')"
-              clearable
-            />
-          </div>
-          <div class="form-field">
-            <label>Secret Key</label>
-            <t-input
-              v-model="config.tos.secret_key"
-              type="password"
-              :placeholder="$t('settings.storage.tosSecretKeyPlaceholder')"
-              clearable
-            />
-          </div>
-          <div class="form-field">
-            <label>{{ $t('settings.storage.bucketName') }}</label>
-            <t-input
-              v-model="config.tos.bucket_name"
-              :placeholder="$t('settings.storage.bucketPlaceholder')"
-              clearable
-            />
-          </div>
-          <div class="form-field">
-            <label>{{ $t('settings.storage.pathPrefix') }}</label>
-            <t-input
-              v-model="config.tos.path_prefix"
-              :placeholder="$t('settings.storage.prefixPlaceholder')"
-              clearable
-            />
-          </div>
-        </div>
-        <div class="test-bar">
-          <t-button size="small" variant="outline" :loading="checkingTos" @click="onCheckTos">{{ $t('settings.storage.testConnection') }}</t-button>
-          <span v-if="tosCheckResult" :class="['test-msg', tosCheckResult.ok ? 'success' : 'error']">
-            {{ tosCheckResult.message }}
-          </span>
-        </div>
-      </div>
-
-      <!-- S3 -->
-      <div class="engine-section" data-model-type="s3">
-        <div class="engine-header">
-          <div class="engine-header-info">
-            <div class="engine-title-row">
-              <h3>{{ $t('settings.storage.s3Title') }}</h3>
-              <t-tag theme="success" variant="light" size="small">{{ $t('settings.storage.configurable') }}</t-tag>
+          <div class="engine-form">
+            <div class="form-item">
+              <label class="form-label">Endpoint</label>
+              <t-input
+                v-model="config.tos.endpoint"
+                placeholder="e.g. https://tos-cn-beijing.volces.com"
+                clearable
+              />
             </div>
-            <p>
+            <div class="form-item">
+              <label class="form-label">Region</label>
+              <t-input
+                v-model="config.tos.region"
+                placeholder="e.g. cn-beijing"
+                clearable
+              />
+            </div>
+            <div class="form-item">
+              <label class="form-label">Access Key</label>
+              <t-input
+                v-model="config.tos.access_key"
+                :placeholder="$t('settings.storage.tosAccessKeyPlaceholder')"
+                clearable
+              />
+            </div>
+            <div class="form-item">
+              <label class="form-label">Secret Key</label>
+              <t-input
+                v-model="config.tos.secret_key"
+                type="password"
+                :placeholder="$t('settings.storage.tosSecretKeyPlaceholder')"
+                clearable
+              />
+            </div>
+            <div class="form-item">
+              <label class="form-label">{{ $t('settings.storage.bucketName') }}</label>
+              <t-input
+                v-model="config.tos.bucket_name"
+                :placeholder="$t('settings.storage.bucketPlaceholder')"
+                clearable
+              />
+            </div>
+            <div class="form-item">
+              <label class="form-label">{{ $t('settings.storage.pathPrefix') }}</label>
+              <t-input
+                v-model="config.tos.path_prefix"
+                :placeholder="$t('settings.storage.prefixPlaceholder')"
+                clearable
+              />
+            </div>
+          </div>
+        </template>
+
+        <!-- S3 -->
+        <template v-else-if="currentEngine === 's3'">
+          <div class="engine-info-block">
+            <p class="engine-desc">
               {{ $t('settings.storage.s3Desc') }}
               <a class="engine-link" href="https://aws.amazon.com/s3/" target="_blank" rel="noopener">{{ $t('settings.storage.console') }} ↗</a>
               <a class="engine-link" href="https://docs.aws.amazon.com/s3/" target="_blank" rel="noopener">{{ $t('settings.storage.docs') }} ↗</a>
             </p>
           </div>
-        </div>
-        <div class="engine-form">
-          <div class="form-field">
-            <label>Endpoint</label>
-            <t-input
-              v-model="config.s3.endpoint"
-              placeholder="e.g. https://s3.amazonaws.com"
-              clearable
-            />
-          </div>
-          <div class="form-field">
-            <label>Region</label>
-            <t-input
-              v-model="config.s3.region"
-              placeholder="e.g. us-east-1"
-              clearable
-            />
-          </div>
-          <div class="form-field">
-            <label>Access Key</label>
-            <t-input
-              v-model="config.s3.access_key"
-              :placeholder="$t('settings.storage.s3AccessKeyPlaceholder')"
-              clearable
-            />
-          </div>
-          <div class="form-field">
-            <label>Secret Key</label>
-            <t-input
-              v-model="config.s3.secret_key"
-              type="password"
-              :placeholder="$t('settings.storage.s3SecretKeyPlaceholder')"
-              clearable
-            />
-          </div>
-          <div class="form-field">
-            <label>{{ $t('settings.storage.bucketName') }}</label>
-            <t-input
-              v-model="config.s3.bucket_name"
-              :placeholder="$t('settings.storage.bucketPlaceholder')"
-              clearable
-            />
-          </div>
-          <div class="form-field">
-            <label>{{ $t('settings.storage.pathPrefix') }}</label>
-            <t-input
-              v-model="config.s3.path_prefix"
-              :placeholder="$t('settings.storage.prefixPlaceholder')"
-              clearable
-            />
-          </div>
-        </div>
-        <div class="test-bar">
-          <t-button size="small" variant="outline" :loading="checkingS3" @click="onCheckS3">{{ $t('settings.storage.testConnection') }}</t-button>
-          <span v-if="s3CheckResult" :class="['test-msg', s3CheckResult.ok ? 'success' : 'error']">
-            {{ s3CheckResult.message }}
-          </span>
-        </div>
-      </div>
-
-      <!-- OSS -->
-      <div class="engine-section" data-model-type="oss">
-        <div class="engine-header">
-          <div class="engine-header-info">
-            <div class="engine-title-row">
-              <h3>{{ $t('settings.storage.ossTitle') }}</h3>
-              <t-tag theme="success" variant="light" size="small">{{ $t('settings.storage.configurable') }}</t-tag>
+          <div class="engine-form">
+            <div class="form-item">
+              <label class="form-label">Endpoint</label>
+              <t-input
+                v-model="config.s3.endpoint"
+                placeholder="e.g. https://s3.amazonaws.com"
+                clearable
+              />
             </div>
-            <p>
+            <div class="form-item">
+              <label class="form-label">Region</label>
+              <t-input
+                v-model="config.s3.region"
+                placeholder="e.g. us-east-1"
+                clearable
+              />
+            </div>
+            <div class="form-item">
+              <label class="form-label">Access Key</label>
+              <t-input
+                v-model="config.s3.access_key"
+                :placeholder="$t('settings.storage.s3AccessKeyPlaceholder')"
+                clearable
+              />
+            </div>
+            <div class="form-item">
+              <label class="form-label">Secret Key</label>
+              <t-input
+                v-model="config.s3.secret_key"
+                type="password"
+                :placeholder="$t('settings.storage.s3SecretKeyPlaceholder')"
+                clearable
+              />
+            </div>
+            <div class="form-item">
+              <label class="form-label">{{ $t('settings.storage.bucketName') }}</label>
+              <t-input
+                v-model="config.s3.bucket_name"
+                :placeholder="$t('settings.storage.bucketPlaceholder')"
+                clearable
+              />
+            </div>
+            <div class="form-item">
+              <label class="form-label">{{ $t('settings.storage.pathPrefix') }}</label>
+              <t-input
+                v-model="config.s3.path_prefix"
+                :placeholder="$t('settings.storage.prefixPlaceholder')"
+                clearable
+              />
+            </div>
+          </div>
+        </template>
+
+        <!-- OSS -->
+        <template v-else-if="currentEngine === 'oss'">
+          <div class="engine-info-block">
+            <p class="engine-desc">
               {{ $t('settings.storage.ossDesc') }}
               <a class="engine-link" href="https://oss.console.aliyun.com/" target="_blank" rel="noopener">{{ $t('settings.storage.console') }} ↗</a>
               <a class="engine-link" href="https://help.aliyun.com/zh/oss/" target="_blank" rel="noopener">{{ $t('settings.storage.docs') }} ↗</a>
             </p>
           </div>
-        </div>
-        <div class="engine-form">
-          <div class="form-field">
-            <label>Endpoint</label>
-            <t-input
-              v-model="config.oss.endpoint"
-              placeholder="e.g. https://oss-cn-hangzhou.aliyuncs.com"
-              clearable
-            />
+          <div class="engine-form">
+            <div class="form-item">
+              <label class="form-label">Endpoint</label>
+              <t-input
+                v-model="config.oss.endpoint"
+                placeholder="e.g. https://oss-cn-hangzhou.aliyuncs.com"
+                clearable
+              />
+            </div>
+            <div class="form-item">
+              <label class="form-label">Region</label>
+              <t-input
+                v-model="config.oss.region"
+                placeholder="e.g. cn-hangzhou"
+                clearable
+              />
+            </div>
+            <div class="form-item">
+              <label class="form-label">Access Key</label>
+              <t-input
+                v-model="config.oss.access_key"
+                :placeholder="$t('settings.storage.ossAccessKeyPlaceholder')"
+                clearable
+              />
+            </div>
+            <div class="form-item">
+              <label class="form-label">Secret Key</label>
+              <t-input
+                v-model="config.oss.secret_key"
+                type="password"
+                :placeholder="$t('settings.storage.ossSecretKeyPlaceholder')"
+                clearable
+              />
+            </div>
+            <div class="form-item">
+              <label class="form-label">{{ $t('settings.storage.bucketName') }}</label>
+              <t-input
+                v-model="config.oss.bucket_name"
+                :placeholder="$t('settings.storage.bucketPlaceholder')"
+                clearable
+              />
+            </div>
+            <div class="form-item">
+              <label class="form-label">{{ $t('settings.storage.pathPrefix') }}</label>
+              <t-input
+                v-model="config.oss.path_prefix"
+                :placeholder="$t('settings.storage.prefixPlaceholder')"
+                clearable
+              />
+            </div>
           </div>
-          <div class="form-field">
-            <label>Region</label>
-            <t-input
-              v-model="config.oss.region"
-              placeholder="e.g. cn-hangzhou"
-              clearable
-            />
+        </template>
+        <div class="form-item" v-if="currentEngine && currentEngine !== 'local'">
+          <label class="form-label">{{ $t('settings.storage.testConnection') }}</label>
+          <div class="api-test-section">
+            <t-button variant="outline" :loading="currentCheckState.loading" @click="currentCheckState.onCheck">
+              {{ $t('settings.storage.testConnection') }}
+            </t-button>
+            <span v-if="currentCheckState.result" :class="['test-message', currentCheckState.result.ok ? (currentCheckState.result.bucket_created ? 'created' : 'success') : 'error']">
+              {{ currentCheckState.result.message }}
+            </span>
           </div>
-          <div class="form-field">
-            <label>Access Key</label>
-            <t-input
-              v-model="config.oss.access_key"
-              :placeholder="$t('settings.storage.ossAccessKeyPlaceholder')"
-              clearable
-            />
-          </div>
-          <div class="form-field">
-            <label>Secret Key</label>
-            <t-input
-              v-model="config.oss.secret_key"
-              type="password"
-              :placeholder="$t('settings.storage.ossSecretKeyPlaceholder')"
-              clearable
-            />
-          </div>
-          <div class="form-field">
-            <label>{{ $t('settings.storage.bucketName') }}</label>
-            <t-input
-              v-model="config.oss.bucket_name"
-              :placeholder="$t('settings.storage.bucketPlaceholder')"
-              clearable
-            />
-          </div>
-          <div class="form-field">
-            <label>{{ $t('settings.storage.pathPrefix') }}</label>
-            <t-input
-              v-model="config.oss.path_prefix"
-              :placeholder="$t('settings.storage.prefixPlaceholder')"
-              clearable
-            />
-          </div>
-        </div>
-        <div class="test-bar">
-          <t-button size="small" variant="outline" :loading="checkingOss" @click="onCheckOss">{{ $t('settings.storage.testConnection') }}</t-button>
-          <span v-if="ossCheckResult" :class="['test-msg', ossCheckResult.ok ? 'success' : 'error']">
-            {{ ossCheckResult.message }}
-          </span>
         </div>
       </div>
 
-      <!-- Save -->
-      <div class="save-bar">
-        <t-button theme="primary" :loading="saving" @click="onSave">{{ $t('settings.storage.saveConfig') }}</t-button>
-        <span v-if="saveMessage" :class="['save-msg', saveSuccess ? 'success' : 'error']">
-          {{ saveMessage }}
-        </span>
-      </div>
-    </template>
+      <template #footer>
+        <div class="drawer-footer-actions">
+          <t-button theme="default" variant="outline" @click="drawerVisible = false">{{ $t('common.cancel') }}</t-button>
+          <t-button theme="primary" :loading="saving" @click="onSave">{{ $t('common.save') }}</t-button>
+        </div>
+      </template>
+    </t-drawer>
   </div>
 </template>
 
@@ -515,10 +517,8 @@ import {
   getStorageEngineConfig,
   updateStorageEngineConfig,
   getStorageEngineStatus,
-  listMinioBuckets,
   checkStorageEngine,
   type StorageEngineConfig,
-  type MinioBucketInfo,
 } from '@/api/system'
 
 const { t } = useI18n()
@@ -573,8 +573,6 @@ const engineStatus = ref<{ local: boolean; minio: boolean; cos: boolean }>({
   cos: true,
 })
 const minioEnvAvailable = ref(false)
-const minioBuckets = ref<MinioBucketInfo[]>([])
-const loadingBuckets = ref(false)
 const saving = ref(false)
 const saveMessage = ref('')
 const saveSuccess = ref(false)
@@ -590,12 +588,52 @@ const s3CheckResult = ref<{ ok: boolean; message: string } | null>(null)
 const checkingOss = ref(false)
 const ossCheckResult = ref<{ ok: boolean; message: string } | null>(null)
 
+const drawerVisible = ref(false)
+const currentEngine = ref<string | null>(null)
+
+const currentCheckState = computed(() => {
+  switch (currentEngine.value) {
+    case 'minio': return { loading: checkingMinio.value, result: minioCheckResult.value, onCheck: onCheckMinio }
+    case 'cos': return { loading: checkingCos.value, result: cosCheckResult.value, onCheck: onCheckCos }
+    case 'tos': return { loading: checkingTos.value, result: tosCheckResult.value, onCheck: onCheckTos }
+    case 's3': return { loading: checkingS3.value, result: s3CheckResult.value, onCheck: onCheckS3 }
+    case 'oss': return { loading: checkingOss.value, result: ossCheckResult.value, onCheck: onCheckOss }
+    default: return { loading: false, result: null, onCheck: () => {} }
+  }
+})
+
+const drawerTitle = computed(() => {
+  if (!currentEngine.value) return ''
+  const titles: Record<string, string> = {
+    local: t('settings.storage.localTitle'),
+    minio: 'MinIO',
+    cos: t('settings.storage.cosTitle'),
+    tos: t('settings.storage.tosTitle'),
+    s3: t('settings.storage.s3Title'),
+    oss: t('settings.storage.ossTitle'),
+  }
+  return titles[currentEngine.value] || currentEngine.value
+})
+
 const minioAvailable = computed(() => {
   if (config.value.minio?.mode === 'remote') {
     return !!(config.value.minio.endpoint && config.value.minio.access_key_id && config.value.minio.secret_access_key)
   }
   return minioEnvAvailable.value
 })
+
+function openDrawer(engine: string) {
+  currentEngine.value = engine
+  drawerVisible.value = true
+  saveMessage.value = ''
+  
+  // Reset check results
+  minioCheckResult.value = null
+  cosCheckResult.value = null
+  tosCheckResult.value = null
+  s3CheckResult.value = null
+  ossCheckResult.value = null
+}
 
 async function loadConfig() {
   try {
@@ -684,27 +722,11 @@ async function loadStatus() {
   }
 }
 
-async function loadMinioBuckets() {
-  if (!minioEnvAvailable.value || loadingBuckets.value) return
-  loadingBuckets.value = true
-  try {
-    const res = await listMinioBuckets()
-    if (res?.data?.buckets) {
-      minioBuckets.value = res.data.buckets
-    }
-  } catch {
-    minioBuckets.value = []
-  } finally {
-    loadingBuckets.value = false
-  }
-}
-
 async function loadAll() {
   loading.value = true
   error.value = ''
   try {
     await Promise.all([loadConfig(), loadStatus()])
-    if (minioEnvAvailable.value) loadMinioBuckets()
   } catch (e: unknown) {
     error.value = e instanceof Error ? e.message : t('settings.storage.loadFailed')
   } finally {
@@ -773,12 +795,17 @@ async function onSave() {
     await loadStatus()
     saveSuccess.value = true
     saveMessage.value = t('settings.storage.saveSuccess')
+    drawerVisible.value = false
   } catch (e: unknown) {
     saveSuccess.value = false
     saveMessage.value = e instanceof Error ? e.message : t('settings.storage.saveFailed')
   } finally {
     saving.value = false
   }
+}
+
+async function onSaveDefaultEngine() {
+  await onSave()
 }
 
 async function onCheckMinio() {
@@ -788,10 +815,6 @@ async function onCheckMinio() {
     const payload = buildPayload()
     const res = await checkStorageEngine({ provider: 'minio', minio: payload.minio })
     minioCheckResult.value = res?.data ?? { ok: false, message: t('settings.storage.unknownError') }
-    // Refresh bucket list if a new bucket was auto-created
-    if (res?.data?.bucket_created) {
-      loadMinioBuckets()
-    }
   } catch (e: unknown) {
     minioCheckResult.value = { ok: false, message: e instanceof Error ? e.message : t('settings.storage.requestFailed') }
   } finally {
@@ -942,81 +965,166 @@ onMounted(loadAll)
   align-items: center;
 }
 
-.engine-section {
-  margin-top: 32px;
-  padding-top: 32px;
-  border-top: 1px solid var(--td-component-stroke);
+// ---- 引擎卡片布局 ----
+.engine-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 16px;
+  margin-top: 24px;
 }
 
-.engine-header {
-  margin-bottom: 16px;
-}
+.engine-card {
+  border: 1px solid var(--td-component-stroke);
+  border-radius: 8px;
+  padding: 16px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  background: var(--td-bg-color-container);
+  display: flex;
+  flex-direction: column;
 
-.engine-header-info {
-  .engine-title-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-bottom: 6px;
-
-    h3 {
-      font-size: 17px;
-      font-weight: 600;
-      color: var(--td-text-color-primary);
-      margin: 0;
-    }
+  &:hover {
+    border-color: var(--td-brand-color);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
   }
 
-  p {
-    font-size: 13px;
-    color: var(--td-text-color-placeholder);
+  &.active {
+    border-color: var(--td-brand-color);
+    background: rgba(var(--td-brand-color-5-rgba), 0.05);
+  }
+}
+
+.engine-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+
+  h3 {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--td-text-color-primary);
     margin: 0;
+    font-family: 'SF Mono', 'Monaco', 'Menlo', monospace;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.engine-card-desc {
+  font-size: 13px;
+  color: var(--td-text-color-secondary);
+  margin: 0;
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+// ---- 抽屉内容 ----
+.drawer-content {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.engine-info-block {
+  .engine-desc {
+    font-size: 13px;
+    color: var(--td-text-color-secondary);
+    margin: 0 0 8px 0;
     line-height: 1.5;
   }
 }
 
+// 输入框样式
+:deep(.t-input),
+:deep(.t-select) {
+  width: 100%;
+  font-size: 13px;
+
+  .t-input__inner,
+  .t-input__wrap,
+  input {
+    font-size: 13px;
+    border-radius: 6px;
+    border-color: var(--td-component-stroke);
+    transition: all 0.15s ease;
+  }
+
+  &:hover .t-input__inner,
+  &:hover .t-input__wrap,
+  &:hover input {
+    border-color: var(--td-component-stroke);
+  }
+
+  &.t-is-focused .t-input__inner,
+  &.t-is-focused .t-input__wrap,
+  &.t-is-focused input {
+    border-color: var(--td-brand-color);
+    box-shadow: 0 0 0 2px rgba(7, 192, 95, 0.1);
+  }
+}
+
 .engine-link {
-  color: var(--td-text-color-placeholder);
+  color: var(--td-brand-color);
   text-decoration: none;
   margin-left: 4px;
+  font-size: 13px;
 
   &:hover {
-    color: var(--td-brand-color);
+    text-decoration: underline;
   }
 }
 
 .engine-form {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 0;
 }
 
-.form-field {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+.form-item {
+  margin-bottom: 20px;
 
-  label {
-    font-size: 13px;
-    font-weight: 500;
-    color: var(--td-text-color-secondary);
+  &:last-child {
+    margin-bottom: 0;
   }
+}
 
-  &--inline {
-    flex-direction: row;
-    align-items: center;
-    gap: 12px;
+.form-label {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--td-text-color-primary);
 
-    label {
-      flex-shrink: 0;
-    }
+  &.required::after {
+    content: '*';
+    color: var(--td-error-color);
+    margin-left: 4px;
+    font-weight: 600;
+  }
+}
+
+.form-item--inline {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 20px;
+
+  .form-label {
+    margin-bottom: 0;
+    flex-shrink: 0;
   }
 }
 
 .mode-selector {
   display: flex;
   gap: 8px;
-  margin-bottom: 16px;
+  margin-bottom: 20px;
 }
 
 .mode-option {
@@ -1069,41 +1177,71 @@ onMounted(loadAll)
   }
 }
 
-.test-bar {
+.drawer-actions {
   display: flex;
   align-items: center;
-  gap: 12px;
   margin-top: 16px;
   padding-top: 16px;
-  border-top: 1px solid var(--td-component-stroke);
+  border-top: 1px dashed var(--td-component-stroke);
 }
 
-.test-msg {
-  font-size: 13px;
-
-  &.success {
-    color: var(--td-success-color);
-  }
-
-  &.created {
-    color: var(--td-warning-color);
-  }
-
-  &.error {
-    color: var(--td-error-color);
-  }
-}
-
-.save-bar {
+.api-test-section {
   display: flex;
   align-items: center;
   gap: 12px;
-  position: sticky;
-  bottom: 0;
-  margin-top: 32px;
-  padding: 16px 0 4px;
-  background: linear-gradient(to bottom, rgba(255, 255, 255, 0) 0%, var(--td-bg-color-container) 12%);
-  z-index: 10;
+
+  .test-message {
+    font-size: 13px;
+    line-height: 1.5;
+    flex: 1;
+
+    &.success {
+      color: var(--td-brand-color-active);
+    }
+
+    &.error {
+      color: var(--td-error-color);
+    }
+
+    &.created {
+      color: var(--td-warning-color);
+    }
+  }
+
+  :deep(.t-button) {
+    min-width: 88px;
+    height: 32px;
+    font-size: 13px;
+    border-radius: 6px;
+    flex-shrink: 0;
+  }
+}
+
+.drawer-footer-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  width: 100%;
+
+  :deep(.t-button) {
+    min-width: 80px;
+    height: 36px;
+    font-weight: 500;
+    font-size: 14px;
+    border-radius: 6px;
+    transition: all 0.15s ease;
+
+    &.t-button--variant-outline {
+      color: var(--td-text-color-secondary);
+      border-color: var(--td-component-stroke);
+
+      &:hover {
+        border-color: var(--td-brand-color);
+        color: var(--td-brand-color);
+        background: rgba(7, 192, 95, 0.04);
+      }
+    }
+  }
 }
 
 .save-msg {
