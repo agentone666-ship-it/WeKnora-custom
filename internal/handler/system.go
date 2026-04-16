@@ -808,7 +808,7 @@ func (h *SystemHandler) checkOSS(c *gin.Context, ctx context.Context, cfg *types
 	// Strip URL scheme before SSRF check — OSS endpoint may include http:// or https://
 	ssrfEndpoint := strings.TrimPrefix(strings.TrimPrefix(endpoint, "https://"), "http://")
 	if blocked, reason := isBlockedStorageEndpoint(ssrfEndpoint); blocked {
-		logger.Warnf(ctx, "Storage check: OSS endpoint blocked by SSRF protection", "endpoint", endpoint)
+		logger.Warnf(ctx, "Storage check: OSS endpoint blocked by SSRF protection, endpoint: %s", endpoint)
 		c.JSON(200, gin.H{"code": 0, "data": StorageCheckResponse{OK: false, Message: reason}})
 		return
 	}
@@ -825,16 +825,16 @@ func (h *SystemHandler) checkOSS(c *gin.Context, ctx context.Context, cfg *types
 	if err != nil {
 		errMsg := err.Error()
 		if strings.Contains(errMsg, "403") || strings.Contains(errMsg, "AccessDenied") {
-			logger.Errorf(ctx, "Storage check: OSS auth failed", "endpoint", endpoint, "bucket", cfg.BucketName)
+			logger.Errorf(ctx, "Storage check: OSS auth failed, endpoint: %s, bucket: %s", endpoint, cfg.BucketName)
 			c.JSON(200, gin.H{"code": 0, "data": StorageCheckResponse{OK: false, Message: "认证失败，请检查 Access Key / Secret Key 是否正确"}})
 			return
 		}
 		if strings.Contains(errMsg, "404") || strings.Contains(errMsg, "NoSuchBucket") {
-			logger.Errorf(ctx, "Storage check: OSS bucket not found", "bucket", cfg.BucketName)
+			logger.Errorf(ctx, "Storage check: OSS bucket not found, bucket: %s", cfg.BucketName)
 			c.JSON(200, gin.H{"code": 0, "data": StorageCheckResponse{OK: false, Message: fmt.Sprintf("Bucket「%s」不存在", cfg.BucketName)}})
 			return
 		}
-		logger.Errorf(ctx, "Storage check: OSS connectivity failed", "endpoint", endpoint, "bucket", cfg.BucketName, "error", err)
+		logger.Errorf(ctx, "Storage check: OSS connectivity failed, endpoint: %s, bucket: %s, error: %v", endpoint, cfg.BucketName, err)
 		c.JSON(200, gin.H{"code": 0, "data": StorageCheckResponse{OK: false, Message: fmt.Sprintf("OSS 连通性检测失败: %s", sanitizeStorageCheckError(err))}})
 		return
 	}
