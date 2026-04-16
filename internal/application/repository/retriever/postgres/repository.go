@@ -348,6 +348,9 @@ func (g *pgRepository) VectorRetrieve(ctx context.Context,
 	if expandedTopK > 1000 {
 		expandedTopK = 1000 // Maximum 1000 candidates
 	}
+	if expandedTopK < params.TopK {
+		expandedTopK = params.TopK // Ensure subquery limit is at least final limit
+	}
 
 	// Optimized query: Use subquery to calculate distance once
 	// Strategy: Use ORDER BY with vector distance to leverage HNSW index,
@@ -364,16 +367,16 @@ func (g *pgRepository) VectorRetrieve(ctx context.Context,
 		FROM (
 			SELECT 
 				id, content, source_id, source_type, chunk_id, knowledge_id, knowledge_base_id, tag_id,
-				embedding::halfvec(%d) <=> $1::halfvec as distance
+				embedding <=> $1::halfvec as distance
 			FROM embeddings
 			%s
-			ORDER BY embedding::halfvec(%d) <=> $1::halfvec
+			ORDER BY embedding <=> $1::halfvec
 			LIMIT $%d
 		) AS candidates
 		WHERE distance <= $%d
 		ORDER BY distance ASC
 		LIMIT $%d
-	`, dimension, whereClause, dimension, subqueryLimitParam, thresholdParam, finalLimitParam)
+	`, whereClause, subqueryLimitParam, thresholdParam, finalLimitParam)
 
 	allVars = append(allVars, expandedTopK)       // LIMIT in subquery
 	allVars = append(allVars, 1-params.Threshold) // Distance threshold
