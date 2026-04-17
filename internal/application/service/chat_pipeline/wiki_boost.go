@@ -2,6 +2,7 @@ package chatpipeline
 
 import (
 	"context"
+	"sort"
 
 	"github.com/Tencent/WeKnora/internal/logger"
 	"github.com/Tencent/WeKnora/internal/types"
@@ -49,16 +50,28 @@ func (p *PluginWikiBoost) OnEvent(
 		return err
 	}
 
-	// Check if any search target is a wiki KB
+	// Fast path: skip all work if there are no wiki_page chunks in the result set.
+	// This avoids hitting the KB service on every chat turn for non-wiki queries.
+	hasWikiChunk := false
+	for i := range chatManage.RerankResult {
+		if chatManage.RerankResult[i].ChunkType == types.ChunkTypeWikiPage {
+			hasWikiChunk = true
+			break
+		}
+	}
+	if !hasWikiChunk {
+		return nil
+	}
+
+	// Confirm at least one search target is actually a wiki KB.
 	hasWikiKB := false
 	for _, target := range chatManage.SearchTargets {
 		kb, err := p.kbService.GetKnowledgeBaseByIDOnly(ctx, target.KnowledgeBaseID)
-		if err == nil && kb.IsWikiEnabled() {
+		if err == nil && kb != nil && kb.IsWikiEnabled() {
 			hasWikiKB = true
 			break
 		}
 	}
-
 	if !hasWikiKB {
 		return nil
 	}
@@ -74,15 +87,10 @@ func (p *PluginWikiBoost) OnEvent(
 
 	if boostedCount > 0 {
 		logger.Infof(ctx, "WikiBoost: boosted %d wiki page chunks by %.1fx", boostedCount, wikiBoostFactor)
-
-		// Re-sort by score after boosting
-		for i := 0; i < len(chatManage.RerankResult); i++ {
-			for j := i + 1; j < len(chatManage.RerankResult); j++ {
-				if chatManage.RerankResult[j].Score > chatManage.RerankResult[i].Score {
-					chatManage.RerankResult[i], chatManage.RerankResult[j] = chatManage.RerankResult[j], chatManage.RerankResult[i]
-				}
-			}
-		}
+		// Re-sort by score after boosting; stable sort preserves ordering for ties.
+		sort.SliceStable(chatManage.RerankResult, func(i, j int) bool {
+			return chatManage.RerankResult[i].Score > chatManage.RerankResult[j].Score
+		})
 	}
 
 	return nil

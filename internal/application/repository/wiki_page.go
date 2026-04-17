@@ -2,8 +2,10 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
@@ -179,13 +181,35 @@ func (r *wikiPageRepository) ListByType(ctx context.Context, kbID string, pageTy
 // ListBySourceRef retrieves all wiki pages that reference a given source knowledge ID.
 // Handles both old format ("knowledgeID") and new format ("knowledgeID|title") in source_refs JSON array.
 func (r *wikiPageRepository) ListBySourceRef(ctx context.Context, kbID string, sourceKnowledgeID string) ([]*types.WikiPage, error) {
+	// Build the JSON needle safely so arbitrary IDs cannot break out of the
+	// quoted string (e.g. ids containing quotes or backslashes).
+	needle, err := json.Marshal([]string{sourceKnowledgeID})
+	if err != nil {
+		return nil, fmt.Errorf("marshal source ref needle: %w", err)
+	}
+
+	// For the "knowledgeID|title" prefix form, match against the JSON-encoded
+	// value: json.Marshal escapes special chars so the LIKE pattern is safe.
+	prefix, err := json.Marshal(sourceKnowledgeID + "|")
+	if err != nil {
+		return nil, fmt.Errorf("marshal source ref prefix: %w", err)
+	}
+	// prefix is a JSON string including the surrounding quotes; e.g. "abc|".
+	// We strip the trailing quote so LIKE can continue into the title portion.
+	prefixStr := string(prefix)
+	if len(prefixStr) >= 2 && prefixStr[len(prefixStr)-1] == '"' {
+		prefixStr = prefixStr[:len(prefixStr)-1]
+	}
+	// Escape LIKE metacharacters in the already-JSON-escaped prefix, then wrap
+	// with %…% to match anywhere in the serialized JSON array.
+	likePattern := "%" + escapeLikePattern(prefixStr) + "%"
+
 	var pages []*types.WikiPage
-	// Match either exact "knowledgeID" or "knowledgeID|..." prefix in the JSON array
 	if err := r.db.WithContext(ctx).
-		Where("knowledge_base_id = ? AND (source_refs @> ? OR source_refs::text LIKE ?)",
+		Where("knowledge_base_id = ? AND (source_refs @> ?::jsonb OR source_refs::text LIKE ?)",
 			kbID,
-			fmt.Sprintf(`["%s"]`, sourceKnowledgeID),
-			fmt.Sprintf(`%%"%s|%%`, sourceKnowledgeID),
+			string(needle),
+			likePattern,
 		).
 		Find(&pages).Error; err != nil {
 		return nil, err
@@ -233,7 +257,20 @@ func (r *wikiPageRepository) DeleteByID(ctx context.Context, id string) error {
 	return nil
 }
 
-// Search performs full-text search on wiki pages within a knowledge base
+// escapeLikePattern escapes LIKE / ILIKE metacharacters so the returned string
+// can be safely concatenated with % wildcards without unintended matches.
+// Order matters: escape the backslash first, then the wildcards.
+func escapeLikePattern(s string) string {
+	replacer := strings.NewReplacer(
+		`\`, `\\`,
+		`%`, `\%`,
+		`_`, `\_`,
+	)
+	return replacer.Replace(s)
+}
+
+// Search performs case-insensitive POSIX regex search on wiki pages within a knowledge base.
+// The query is interpreted as a PostgreSQL regular expression (via ~*).
 func (r *wikiPageRepository) Search(ctx context.Context, kbID string, query string, limit int) ([]*types.WikiPage, error) {
 	if limit <= 0 {
 		limit = 10

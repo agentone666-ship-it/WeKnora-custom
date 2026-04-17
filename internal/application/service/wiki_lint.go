@@ -33,11 +33,15 @@ const (
 
 // WikiLintIssue represents a single lint finding
 type WikiLintIssue struct {
-	Type        WikiLintIssueType     `json:"type"`
-	Severity    WikiLintIssueSeverity `json:"severity"`
-	PageSlug    string                `json:"page_slug"`
-	Description string                `json:"description"`
-	AutoFixable bool                  `json:"auto_fixable"`
+	Type     WikiLintIssueType     `json:"type"`
+	Severity WikiLintIssueSeverity `json:"severity"`
+	PageSlug string                `json:"page_slug"`
+	// TargetSlug identifies the other page involved in the issue (e.g. the
+	// broken link target, or the entity slug for a missing cross-ref). It is
+	// the structured field used by AutoFix instead of parsing Description.
+	TargetSlug  string `json:"target_slug,omitempty"`
+	Description string `json:"description"`
+	AutoFixable bool   `json:"auto_fixable"`
 }
 
 // WikiLintReport is the complete lint report for a wiki KB
@@ -131,6 +135,7 @@ func (s *WikiLintService) RunLint(ctx context.Context, kbID string) (*WikiLintRe
 					Type:        LintIssueBrokenLink,
 					Severity:    SeverityError,
 					PageSlug:    page.Slug,
+					TargetSlug:  outLink,
 					Description: fmt.Sprintf("Page '%s' links to [[%s]] which does not exist", page.Title, outLink),
 					AutoFixable: true,
 				})
@@ -178,8 +183,9 @@ func (s *WikiLintService) RunLint(ctx context.Context, kbID string) (*WikiLintRe
 						Type:        LintIssueMissingCrossRef,
 						Severity:    SeverityInfo,
 						PageSlug:    page.Slug,
+						TargetSlug:  slug,
 						Description: fmt.Sprintf("Page '%s' mentions '%s' but doesn't link to [[%s]]", page.Title, title, slug),
-						AutoFixable: true,
+						AutoFixable: false,
 					})
 				}
 			}
@@ -275,19 +281,17 @@ func (s *WikiLintService) AutoFix(ctx context.Context, kbID string) (int, error)
 
 		switch issue.Type {
 		case LintIssueBrokenLink:
-			// Remove broken links from page content
+			// Replace [[broken-slug]] with plain text so the reference text is
+			// preserved but no longer renders as a dangling wiki link.
+			if issue.TargetSlug == "" {
+				continue
+			}
 			page, err := s.wikiService.GetPageBySlug(ctx, kbID, issue.PageSlug)
 			if err != nil {
 				continue
 			}
-			// Extract the broken slug from the description
-			parts := strings.Split(issue.Description, "[[")
-			if len(parts) < 2 {
-				continue
-			}
-			brokenSlug := strings.Split(parts[1], "]]")[0]
-			// Remove the [[broken-link]] from content
-			page.Content = strings.ReplaceAll(page.Content, "[["+brokenSlug+"]]", brokenSlug)
+			target := issue.TargetSlug
+			page.Content = strings.ReplaceAll(page.Content, "[["+target+"]]", target)
 			if _, err := s.wikiService.UpdatePage(ctx, page); err == nil {
 				fixed++
 			}

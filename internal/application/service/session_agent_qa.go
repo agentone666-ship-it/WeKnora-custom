@@ -227,12 +227,12 @@ func (s *sessionService) buildAgentConfig(
 		Thinking:                    customAgent.Config.Thinking,
 		RetrieveKBOnlyWhenMentioned: customAgent.Config.RetrieveKBOnlyWhenMentioned,
 		LLMCallTimeout:              customAgent.Config.LLMCallTimeout,
+		RetainRetrievalHistory:      customAgent.Config.RetainRetrievalHistory,
 	}
 
 	// Falls back to global configuration if no specific timeout is set for the agent.
 	if agentConfig.LLMCallTimeout == 0 && s.cfg.Agent != nil && s.cfg.Agent.LLMCallTimeout > 0 {
 		agentConfig.LLMCallTimeout = s.cfg.Agent.LLMCallTimeout
-		RetainRetrievalHistory:      customAgent.Config.RetainRetrievalHistory,
 	}
 
 	// Configure skills based on CustomAgentConfig

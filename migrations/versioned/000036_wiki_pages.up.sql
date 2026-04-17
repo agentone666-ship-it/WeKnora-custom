@@ -1,7 +1,7 @@
--- Migration: 000032_wiki_pages
+-- Migration: 000036_wiki_pages
 -- Description: Add wiki_pages table and wiki_config column to knowledge_bases.
 -- Wiki pages are LLM-generated, interlinked markdown documents that form a persistent wiki.
-DO $$ BEGIN RAISE NOTICE '[Migration 000032] Creating wiki_pages table and adding wiki_config column'; END $$;
+DO $$ BEGIN RAISE NOTICE '[Migration 000036] Creating wiki_pages table and adding wiki_config column'; END $$;
 
 -- Add wiki_config column to knowledge_bases
 ALTER TABLE knowledge_bases ADD COLUMN IF NOT EXISTS wiki_config JSONB;
@@ -55,4 +55,4 @@ CREATE INDEX IF NOT EXISTS idx_wiki_pages_deleted_at
 CREATE INDEX IF NOT EXISTS idx_wiki_pages_fulltext
     ON wiki_pages USING GIN (to_tsvector('simple', coalesce(title, '') || ' ' || coalesce(content, '')));
 
-DO $$ BEGIN RAISE NOTICE '[Migration 000032] wiki_pages table and wiki_config column created successfully'; END $$;
+DO $$ BEGIN RAISE NOTICE '[Migration 000036] wiki_pages table and wiki_config column created successfully'; END $$;

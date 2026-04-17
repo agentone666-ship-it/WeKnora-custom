@@ -1,5 +1,13 @@
 import { get, post, put, del } from "../../utils/request";
 
+// encodeSlugPath encodes each segment of a hierarchical wiki slug (e.g.
+// "foo/bar baz?") so the URL is safe while preserving the "/" separators
+// between segments. Using encodeURIComponent on the whole slug would also
+// escape the "/" and break hierarchical routing on the backend.
+function encodeSlugPath(slug: string): string {
+  return slug.split("/").map(encodeURIComponent).join("/");
+}
+
 // Wiki Page Types
 export interface WikiPage {
   id: string;
@@ -86,15 +94,15 @@ export function createWikiPage(kbId: string, data: Partial<WikiPage>) {
 }
 
 export function getWikiPage(kbId: string, slug: string) {
-  return get(`/api/v1/knowledgebase/${kbId}/wiki/pages/${slug}`);
+  return get(`/api/v1/knowledgebase/${kbId}/wiki/pages/${encodeSlugPath(slug)}`);
 }
 
 export function updateWikiPage(kbId: string, slug: string, data: Partial<WikiPage>) {
-  return put(`/api/v1/knowledgebase/${kbId}/wiki/pages/${slug}`, data);
+  return put(`/api/v1/knowledgebase/${kbId}/wiki/pages/${encodeSlugPath(slug)}`, data);
 }
 
 export function deleteWikiPage(kbId: string, slug: string) {
-  return del(`/api/v1/knowledgebase/${kbId}/wiki/pages/${slug}`);
+  return del(`/api/v1/knowledgebase/${kbId}/wiki/pages/${encodeSlugPath(slug)}`);
 }
 
 export function getWikiIndex(kbId: string) {

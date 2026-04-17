@@ -10,6 +10,7 @@ import (
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
 	"github.com/hibiken/asynq"
+	"github.com/redis/go-redis/v9"
 )
 
 // KnowledgePostProcessService acts as an orchestrator for all post-processing tasks
@@ -19,6 +20,7 @@ type KnowledgePostProcessService struct {
 	kbService     interfaces.KnowledgeBaseService
 	chunkService  interfaces.ChunkService
 	taskEnqueuer  interfaces.TaskEnqueuer
+	redisClient   *redis.Client
 }
 
 func NewKnowledgePostProcessService(
@@ -26,12 +28,14 @@ func NewKnowledgePostProcessService(
 	kbService interfaces.KnowledgeBaseService,
 	chunkService interfaces.ChunkService,
 	taskEnqueuer interfaces.TaskEnqueuer,
+	redisClient *redis.Client,
 ) interfaces.TaskHandler {
 	return &KnowledgePostProcessService{
 		knowledgeRepo: knowledgeRepo,
 		kbService:     kbService,
 		chunkService:  chunkService,
 		taskEnqueuer:  taskEnqueuer,
+		redisClient:   redisClient,
 	}
 }
 
@@ -117,7 +121,7 @@ func (s *KnowledgePostProcessService) Handle(ctx context.Context, task *asynq.Ta
 
 	// 6. Spawn Wiki Ingest Task for wiki-type knowledge bases
 	if kb.Type == types.KnowledgeBaseTypeWiki && len(textChunks) > 0 {
-		EnqueueWikiIngest(ctx, s.taskEnqueuer, payload.TenantID, payload.KnowledgeBaseID, payload.KnowledgeID)
+		EnqueueWikiIngest(ctx, s.taskEnqueuer, s.redisClient, payload.TenantID, payload.KnowledgeBaseID, payload.KnowledgeID)
 		logger.Infof(ctx, "[KnowledgePostProcess] Enqueued wiki ingest task for %s", payload.KnowledgeID)
 	}
 	return nil
