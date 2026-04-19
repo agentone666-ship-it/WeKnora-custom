@@ -522,6 +522,12 @@ function toggleGraphFilterType(type: string) {
 function applyGraphFilters() {
   if (!graphReady.value) return
   
+  // Build a map for O(1) lookups
+  const nodeMap = new Map()
+  for (const n of graphNodes) {
+    nodeMap.set(n.slug, n)
+  }
+
   // Only show nodes whose type is in the active filter set
   for (const { g, node } of graphNodeElsRef) {
     if (graphFilterTypes.value.has(node.type)) {
@@ -533,8 +539,8 @@ function applyGraphFilters() {
   
   // Only show edges where BOTH source and target are visible
   for (const { line, source, target } of graphEdgeElsRef) {
-    const sNode = graphNodes.find(n => n.slug === source)
-    const tNode = graphNodes.find(n => n.slug === target)
+    const sNode = nodeMap.get(source)
+    const tNode = nodeMap.get(target)
     
     if (sNode && tNode && graphFilterTypes.value.has(sNode.type) && graphFilterTypes.value.has(tNode.type)) {
       line.style.display = ''
@@ -546,7 +552,7 @@ function applyGraphFilters() {
   // Clear any existing highlight when filtering changes
   if (graphHighlightSlug.value || graphSelectedSlug.value) {
     const selectedStillVisible = graphSelectedSlug.value && 
-      graphFilterTypes.value.has(graphNodes.find(n => n.slug === graphSelectedSlug.value)?.type || '')
+      graphFilterTypes.value.has(nodeMap.get(graphSelectedSlug.value)?.type || '')
       
     if (!selectedStillVisible) {
       graphSelectedSlug.value = null
@@ -1187,7 +1193,7 @@ function renderGraph() {
     circle.setAttribute('fill', nodeColorMap[n.type] || '#8c8c8c')
     circle.setAttribute('stroke', '#fff')
     circle.setAttribute('stroke-width', '2')
-    circle.setAttribute('filter', 'url(#node-shadow)')
+    // circle.setAttribute('filter', 'url(#node-shadow)')
     circle.style.transition = 'r 0.2s, stroke-width 0.2s, opacity 0.2s'
     g.appendChild(circle)
 
@@ -1268,7 +1274,7 @@ function renderGraph() {
   let alpha = 1.0
   function tick() {
     alpha *= 0.985
-    if (alpha < 0.005) { graphAnimFrame = 0; return }
+    if (alpha < 0.02) { graphAnimFrame = 0; return }
 
     // Repulsion: Optimized using 1D spatial sorting (X-axis) to reduce O(n²) to O(n log n)
     // This allows smooth rendering even for > 1000 nodes
