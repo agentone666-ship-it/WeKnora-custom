@@ -506,42 +506,17 @@ func (s *wikiPageService) UpdateIssueStatus(ctx context.Context, issueID string,
 
 // InjectCrossLinks scans affected pages and injects [[wiki-links]] for mentions
 // of other wiki page titles in the content. Pure text replacement, no LLM call.
+// Shares the linkifyContent helper with the ingest pipeline so both paths honor
+// the same code-block / existing-link / word-boundary rules.
 func (s *wikiPageService) InjectCrossLinks(ctx context.Context, kbID string, affectedSlugs []string) {
-	// Build a title→slug lookup from ALL pages in this KB
 	allPages, err := s.ListAllPages(ctx, kbID)
 	if err != nil || len(allPages) < 2 {
 		return
 	}
 
-	type pageRef struct {
-		slug      string
-		matchText string
-	}
-	var allRefs []pageRef
-	for _, p := range allPages {
-		if p.PageType == types.WikiPageTypeIndex || p.PageType == types.WikiPageTypeLog {
-			continue
-		}
-		if p.Title != "" {
-			allRefs = append(allRefs, pageRef{slug: p.Slug, matchText: p.Title})
-		}
-		for _, alias := range p.Aliases {
-			if alias != "" {
-				allRefs = append(allRefs, pageRef{slug: p.Slug, matchText: alias})
-			}
-		}
-	}
-	if len(allRefs) == 0 {
+	refs := collectLinkRefs(allPages)
+	if len(refs) == 0 {
 		return
-	}
-
-	// Sort by title length descending
-	for i := 0; i < len(allRefs); i++ {
-		for j := i + 1; j < len(allRefs); j++ {
-			if len([]rune(allRefs[j].matchText)) > len([]rune(allRefs[i].matchText)) {
-				allRefs[i], allRefs[j] = allRefs[j], allRefs[i]
-			}
-		}
 	}
 
 	affectedSet := make(map[string]bool, len(affectedSlugs))
@@ -558,30 +533,16 @@ func (s *wikiPageService) InjectCrossLinks(ctx context.Context, kbID string, aff
 			continue
 		}
 
-		content := p.Content
-		changed := false
-
-		for _, ref := range allRefs {
-			if ref.slug == p.Slug {
-				continue
-			}
-			if strings.Contains(content, "[["+ref.slug+"|") || strings.Contains(content, "[["+ref.slug+"]]") {
-				continue
-			}
-			if strings.Contains(content, ref.matchText) {
-				content = replaceFirstOutsideLinks(content, ref.matchText, "[["+ref.slug+"|"+ref.matchText+"]]")
-				changed = true
-			}
+		newContent, changed := linkifyContent(p.Content, refs, p.Slug)
+		if !changed {
+			continue
 		}
-
-		if changed {
-			p.Content = content
-			if _, err := s.UpdatePage(ctx, p); err != nil {
-				logger.Warnf(ctx, "wiki: cross-link injection failed for %s: %v", p.Slug, err)
-			} else {
-				updated++
-			}
+		p.Content = newContent
+		if _, err := s.UpdatePage(ctx, p); err != nil {
+			logger.Warnf(ctx, "wiki: cross-link injection failed for %s: %v", p.Slug, err)
+			continue
 		}
+		updated++
 	}
 
 	if updated > 0 {

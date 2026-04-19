@@ -412,49 +412,23 @@ func (s *wikiIngestService) cleanDeadLinks(ctx context.Context, kbID string) {
 // injectCrossLinks scans affected pages and injects [[wiki-links]] for mentions
 // of other wiki page titles in the content. Pure text replacement, no LLM call.
 // Processes entity/concept/synthesis/comparison and summary pages (not index/log).
+//
+// The actual matching is delegated to linkifyContent, which handles code-block
+// and existing-link exclusions plus ASCII word-boundary checks.
 func (s *wikiIngestService) injectCrossLinks(ctx context.Context, kbID string, affectedSlugs []string) {
-	// Build a title→slug lookup from ALL pages in this KB
 	allPages, err := s.wikiService.ListAllPages(ctx, kbID)
 	if err != nil || len(allPages) < 2 {
 		return
 	}
 
-	type pageRef struct {
-		slug      string
-		matchText string
-	}
-	var allRefs []pageRef
-	for _, p := range allPages {
-		if p.PageType == types.WikiPageTypeIndex || p.PageType == types.WikiPageTypeLog {
-			continue
-		}
-		if p.Title != "" {
-			allRefs = append(allRefs, pageRef{slug: p.Slug, matchText: p.Title})
-		}
-		for _, alias := range p.Aliases {
-			if alias != "" {
-				allRefs = append(allRefs, pageRef{slug: p.Slug, matchText: alias})
-			}
-		}
-	}
-	if len(allRefs) == 0 {
+	refs := collectLinkRefs(allPages)
+	if len(refs) == 0 {
 		return
 	}
 
-	// Sort by title length descending — match longer names first to avoid
-	// partial matches (e.g. "北京邮电大学" before "北京")
-	for i := 0; i < len(allRefs); i++ {
-		for j := i + 1; j < len(allRefs); j++ {
-			if len([]rune(allRefs[j].matchText)) > len([]rune(allRefs[i].matchText)) {
-				allRefs[i], allRefs[j] = allRefs[j], allRefs[i]
-			}
-		}
-	}
-
-	// Process only the pages we just created/updated
 	affectedSet := make(map[string]bool, len(affectedSlugs))
-	for _, s := range affectedSlugs {
-		affectedSet[s] = true
+	for _, slug := range affectedSlugs {
+		affectedSet[slug] = true
 	}
 
 	var updated int
@@ -462,36 +436,20 @@ func (s *wikiIngestService) injectCrossLinks(ctx context.Context, kbID string, a
 		if !affectedSet[p.Slug] {
 			continue
 		}
-		// Skip system pages (index, log). We allow summary to be processed so it gets links to other KB entities.
 		if p.PageType == types.WikiPageTypeIndex || p.PageType == types.WikiPageTypeLog {
 			continue
 		}
 
-		content := p.Content
-		changed := false
-
-		for _, ref := range allRefs {
-			if ref.slug == p.Slug {
-				continue
-			}
-			// Skip if already linked with this slug (either [[slug]] or [[slug|...]])
-			if strings.Contains(content, "[["+ref.slug+"|") || strings.Contains(content, "[["+ref.slug+"]]") {
-				continue
-			}
-			if strings.Contains(content, ref.matchText) {
-				content = replaceFirstOutsideLinks(content, ref.matchText, "[["+ref.slug+"|"+ref.matchText+"]]")
-				changed = true
-			}
+		newContent, changed := linkifyContent(p.Content, refs, p.Slug)
+		if !changed {
+			continue
 		}
-
-		if changed {
-			p.Content = content
-			if _, err := s.wikiService.UpdatePage(ctx, p); err != nil {
-				logger.Warnf(ctx, "wiki ingest: cross-link injection failed for %s: %v", p.Slug, err)
-			} else {
-				updated++
-			}
+		p.Content = newContent
+		if _, err := s.wikiService.UpdatePage(ctx, p); err != nil {
+			logger.Warnf(ctx, "wiki ingest: cross-link injection failed for %s: %v", p.Slug, err)
+			continue
 		}
+		updated++
 	}
 
 	if updated > 0 {
@@ -499,37 +457,24 @@ func (s *wikiIngestService) injectCrossLinks(ctx context.Context, kbID string, a
 	}
 }
 
-// replaceFirstOutsideLinks replaces the first occurrence of `old` with `new` in s,
-// but only if it's not already inside a [[...]] wiki link.
-func replaceFirstOutsideLinks(s, old, newStr string) string {
-	idx := 0
-	for {
-		pos := strings.Index(s[idx:], old)
-		if pos < 0 {
-			return s // not found
+// collectLinkRefs flattens (title + aliases) of all non-system pages into a
+// single linkRef slice suitable for linkifyContent.
+func collectLinkRefs(pages []*types.WikiPage) []linkRef {
+	refs := make([]linkRef, 0, len(pages)*2)
+	for _, p := range pages {
+		if p.PageType == types.WikiPageTypeIndex || p.PageType == types.WikiPageTypeLog {
+			continue
 		}
-		absPos := idx + pos
-
-		// Check if this occurrence is inside a [[ ... ]] link
-		// Look backwards for [[ without encountering ]]
-		insideLink := false
-		for i := absPos - 1; i >= 0 && i >= absPos-200; i-- {
-			if i > 0 && s[i-1:i+1] == "]]" {
-				break // closed link before us
-			}
-			if i > 0 && s[i-1:i+1] == "[[" {
-				insideLink = true
-				break
+		if p.Title != "" {
+			refs = append(refs, linkRef{slug: p.Slug, matchText: p.Title})
+		}
+		for _, alias := range p.Aliases {
+			if alias != "" {
+				refs = append(refs, linkRef{slug: p.Slug, matchText: alias})
 			}
 		}
-
-		if !insideLink {
-			return s[:absPos] + newStr + s[absPos+len(old):]
-		}
-
-		// Skip this match, try next
-		idx = absPos + len(old)
 	}
+	return refs
 }
 
 // getExistingPageSlugsForKnowledge returns all page slugs that currently reference
