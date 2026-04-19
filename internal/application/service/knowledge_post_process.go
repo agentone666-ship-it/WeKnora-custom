@@ -119,8 +119,8 @@ func (s *KnowledgePostProcessService) Handle(ctx context.Context, task *asynq.Ta
 		}
 	}
 
-	// 6. Spawn Wiki Ingest Task for wiki-type knowledge bases
-	if kb.Type == types.KnowledgeBaseTypeWiki && len(textChunks) > 0 {
+	// 6. Spawn Wiki Ingest Task if wiki is enabled and auto ingest is enabled
+	if kb.IsWikiEnabled() && kb.WikiConfig.AutoIngest && len(textChunks) > 0 {
 		EnqueueWikiIngest(ctx, s.taskEnqueuer, s.redisClient, payload.TenantID, payload.KnowledgeBaseID, payload.KnowledgeID)
 		logger.Infof(ctx, "[KnowledgePostProcess] Enqueued wiki ingest task for %s", payload.KnowledgeID)
 	}
