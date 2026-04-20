@@ -55,13 +55,36 @@
 
                       <!-- 索引策略 (紧跟类型选择) -->
                       <div v-if="!isFAQ" class="form-item">
-                        <label class="form-label">{{ $t('knowledgeEditor.indexing.title') }}</label>
+                        <label class="form-label required">{{ $t('knowledgeEditor.indexing.title') }}</label>
+                        <p class="form-tip">{{ $t('knowledgeEditor.indexing.description') }}</p>
                         <div class="indexing-checks">
-                          <t-checkbox
-                            :checked="formData.indexingStrategy.vectorEnabled"
-                            @change="(val: boolean) => { formData.indexingStrategy.vectorEnabled = val; formData.indexingStrategy.keywordEnabled = val; }"
-                          >{{ $t('knowledgeEditor.indexing.searchTitle') }}</t-checkbox>
-                          <t-checkbox v-model="formData.indexingStrategy.wikiEnabled">{{ $t('knowledgeEditor.indexing.wikiTitle') }}</t-checkbox>
+                          <div
+                            class="indexing-check-item"
+                            :class="{ 'is-checked': formData.indexingStrategy.vectorEnabled }"
+                            @click="toggleVectorIndexing"
+                          >
+                            <t-checkbox
+                              :checked="formData.indexingStrategy.vectorEnabled"
+                              class="indexing-check-box"
+                            >{{ $t('knowledgeEditor.indexing.searchTitle') }}</t-checkbox>
+                            <p class="indexing-check-desc">{{ $t('knowledgeEditor.indexing.searchDesc') }}</p>
+                          </div>
+                          <div
+                            class="indexing-check-item"
+                            :class="{ 'is-checked': formData.indexingStrategy.wikiEnabled }"
+                            @click="formData.indexingStrategy.wikiEnabled = !formData.indexingStrategy.wikiEnabled"
+                          >
+                            <t-checkbox
+                              :checked="formData.indexingStrategy.wikiEnabled"
+                              class="indexing-check-box"
+                            >
+                              <span class="indexing-check-title">
+                                {{ $t('knowledgeEditor.indexing.wikiTitle') }}
+                                <span class="indexing-new-badge">NEW</span>
+                              </span>
+                            </t-checkbox>
+                            <p class="indexing-check-desc">{{ $t('knowledgeEditor.indexing.wikiDesc') }}</p>
+                          </div>
                         </div>
                       </div>
 
@@ -576,6 +599,13 @@ const handleModelConfigUpdate = (config: any) => {
   if (formData.value) {
     formData.value.modelConfig = { ...config }
   }
+}
+
+const toggleVectorIndexing = () => {
+  if (!formData.value) return
+  const next = !formData.value.indexingStrategy.vectorEnabled
+  formData.value.indexingStrategy.vectorEnabled = next
+  formData.value.indexingStrategy.keywordEnabled = next
 }
 
 const handleChunkingConfigUpdate = (config: any) => {
@@ -1235,9 +1265,70 @@ watch(
 }
 
 .indexing-checks {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.indexing-check-item {
   display: flex;
-  gap: 24px;
-  flex-wrap: wrap;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid var(--td-component-stroke);
+  border-radius: 8px;
+  background: var(--td-bg-color-container);
+  cursor: pointer;
+  user-select: none;
+  transition: border-color 0.2s ease, background 0.2s ease;
+
+  &:hover {
+    border-color: var(--td-brand-color);
+  }
+
+  &.is-checked {
+    border-color: var(--td-brand-color);
+    background: var(--td-brand-color-light);
+  }
+
+  :deep(.t-checkbox__label) {
+    font-weight: 500;
+    color: var(--td-text-color-primary);
+  }
+}
+
+// 禁用内部 checkbox 自身的点击事件，统一由卡片处理
+.indexing-check-box {
+  pointer-events: none;
+}
+
+.indexing-check-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.indexing-new-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 6px;
+  height: 16px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.4px;
+  color: var(--td-brand-color);
+  background: var(--td-brand-color-light);
+}
+
+.indexing-check-desc {
+  margin: 0;
+  padding-left: 24px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--td-text-color-placeholder);
 }
 
 .faq-guide {
