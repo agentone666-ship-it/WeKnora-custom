@@ -3153,7 +3153,58 @@ export default {
       dataAnalysisDesc: 'Понимание файлов данных и проведение анализа',
       dataSchema: 'Схема данных',
       dataSchemaDesc: 'Получение метаинформации табличных файлов',
-      requiresKb: '(требуется настройка базы знаний)'
+      requiresKb: '(требуется настройка базы знаний)',
+      requiresRagKb: '(требуется база знаний с включённым векторным/ключевым индексом)',
+      requiresWikiKb: '(требуется база знаний с включённой Wiki)',
+      // Wiki чтение
+      wikiSearch: 'Поиск по Wiki',
+      wikiSearchDesc: 'Поиск страниц Wiki по ключевым словам / семантике',
+      wikiReadPage: 'Читать страницу Wiki',
+      wikiReadPageDesc: 'Прочитать полное содержимое указанной Wiki-страницы',
+      wikiReadSourceDoc: 'Читать исходный документ',
+      wikiReadSourceDocDesc: 'Глубокое чтение исходных документов, на которых построена Wiki-страница',
+      wikiFlagIssue: 'Отметить проблему в Wiki',
+      wikiFlagIssueDesc: 'Отметить фактические ошибки или конфликты слияния',
+      // Wiki редактирование (разрушительное)
+      wikiWritePage: 'Создать/перезаписать Wiki',
+      wikiWritePageDesc: 'Создать новую или полностью перезаписать существующую страницу',
+      wikiReplaceText: 'Заменить текст в Wiki',
+      wikiReplaceTextDesc: 'Заменить конкретный текст на Wiki-странице',
+      wikiRenamePage: 'Переименовать Wiki',
+      wikiRenamePageDesc: 'Переименовать страницу Wiki и автоматически обновить перекрёстные ссылки',
+      wikiDeletePage: 'Удалить Wiki',
+      wikiDeletePageDesc: 'Удалить страницу Wiki и автоматически очистить битые ссылки',
+      // Wiki проверки
+      wikiReadIssue: 'Просмотр проблемы Wiki',
+      wikiReadIssueDesc: 'Просмотр деталей конкретной проблемы страницы Wiki',
+      wikiUpdateIssue: 'Обновить проблему Wiki',
+      wikiUpdateIssueDesc: 'Обновить статус проблемы страницы Wiki',
+      // Служебные (только предпросмотр)
+      webSearch: 'Поиск в сети',
+      webFetch: 'Загрузка веб-страницы',
+      finalAnswer: 'Отправить окончательный ответ',
+      // Группы
+      groupBase: 'Базовые',
+      groupRag: 'Поиск в базе знаний (RAG)',
+      groupWikiRead: 'Чтение Wiki',
+      groupWikiEdit: 'Редактирование Wiki',
+      groupWikiIssue: 'Проверка Wiki',
+      groupData: 'Анализ данных',
+      writeWarning: 'Изменяет содержимое Wiki',
+      dangerTag: 'Запись',
+      // Пресет
+      presetLabel: 'Пресет поиска',
+      presetDesc: 'Переключение пресета одним кликом меняет флажки ниже (инструменты RAG/Wiki)',
+      // Строка состояния
+      statusNoKb: 'База знаний не подключена',
+      statusKb: 'В области: {rag} RAG баз · {wiki} Wiki баз',
+      kbMetricRag: 'RAG баз',
+      kbMetricWiki: 'Wiki баз',
+      statusInactive: '{count} отмеченных инструментов не смогут работать при текущей конфигурации',
+      // Предпросмотр итоговых инструментов
+      effectiveLabel: 'Итоговые активные инструменты',
+      effectiveDesc: 'Рассчитано на основе текущей конфигурации — это набор инструментов, которые агент сможет вызывать после сохранения',
+      effectiveEmpty: 'Нет доступных инструментов — агент перейдёт к простому чату с моделью'
     },
     im: {
       title: 'Интеграция IM',

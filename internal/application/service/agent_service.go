@@ -25,6 +25,23 @@ import (
 
 const MAX_ITERATIONS = 100 // Max iterations for agent execution
 
+// dedupStrings removes duplicate strings while preserving the first occurrence order.
+func dedupStrings(in []string) []string {
+	if len(in) == 0 {
+		return in
+	}
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	return out
+}
+
 // agentService implements agent-related business logic
 type agentService struct {
 	cfg                   *config.Config
@@ -323,9 +340,19 @@ func (s *agentService) registerTools(
 	chatModel chat.Chat,
 	sessionID string,
 ) error {
-	// Use config's allowed tools if specified, otherwise use defaults
+	// Source of truth policy:
+	//   - `config.AllowedTools` is the explicit, user-editable whitelist.
+	//   - We no longer silently *inject* tools the user didn't pick (esp. wiki tools).
+	//   - We still *filter out* tools whose capability prerequisites are missing
+	//     (no KB in scope, no Wiki-capable KB, etc.) so the LLM can't call tools
+	//     that would error at runtime.
+	//   - Legacy agents without AllowedTools fall back to DefaultAllowedTools(),
+	//     and for them we preserve the historical "auto-append wiki tools when
+	//     a wiki KB is in scope" behavior for backward compatibility.
+	hasExplicitAllowedTools := len(config.AllowedTools) > 0
+
 	var allowedTools []string
-	if len(config.AllowedTools) > 0 {
+	if hasExplicitAllowedTools {
 		allowedTools = make([]string, len(config.AllowedTools))
 		copy(allowedTools, config.AllowedTools)
 		logger.Infof(ctx, "Using custom allowed tools from config: %v", allowedTools)
@@ -334,47 +361,7 @@ func (s *agentService) registerTools(
 		logger.Infof(ctx, "Using default allowed tools: %v", allowedTools)
 	}
 
-	// Filter out knowledge base tools if no knowledge bases or knowledge IDs are configured
-	hasKnowledge := len(config.KnowledgeBases) > 0 || len(config.KnowledgeIDs) > 0
-	if !hasKnowledge {
-		filteredTools := make([]string, 0)
-		kbTools := map[string]bool{
-			tools.ToolKnowledgeSearch:     true,
-			tools.ToolGrepChunks:          true,
-			tools.ToolListKnowledgeChunks: true,
-			tools.ToolQueryKnowledgeGraph: true,
-			tools.ToolGetDocumentInfo:     true,
-			tools.ToolDatabaseQuery:       true,
-			tools.ToolDataAnalysis:        true,
-			tools.ToolDataSchema:          true,
-		}
-
-		// If no knowledge and no web search, also disable todo_write (not useful for simple chat)
-		if !config.WebSearchEnabled {
-			kbTools[tools.ToolTodoWrite] = true
-		}
-
-		for _, toolName := range allowedTools {
-			if !kbTools[toolName] {
-				filteredTools = append(filteredTools, toolName)
-			}
-		}
-		allowedTools = filteredTools
-		logger.Infof(ctx, "Pure Agent Mode: Knowledge base tools filtered out, remaining: %v", allowedTools)
-	}
-
-	// If web search is enabled, add web_search to allowedTools
-	if config.WebSearchEnabled {
-		allowedTools = append(allowedTools, tools.ToolWebSearch)
-		allowedTools = append(allowedTools, tools.ToolWebFetch)
-	}
-
-	// Detect KB capabilities for retrieval preference logic
-	retrievalPref := config.RetrievalPreference
-	if retrievalPref == "" {
-		retrievalPref = "auto"
-	}
-
+	// ---- Capability detection from SearchTargets ----
 	var hasVectorKB, hasWikiKB bool
 	var wikiKBIDs []string
 	var wikiScopes []tools.WikiScope
@@ -400,57 +387,175 @@ func (s *agentService) registerTools(
 		}
 	}
 
-	// Apply retrieval preference to tool list
+	// Filter out knowledge base tools if no knowledge bases or knowledge IDs are configured
+	hasKnowledge := len(config.KnowledgeBases) > 0 || len(config.KnowledgeIDs) > 0
+	if !hasKnowledge {
+		filteredTools := make([]string, 0)
+		kbTools := map[string]bool{
+			tools.ToolKnowledgeSearch:     true,
+			tools.ToolGrepChunks:          true,
+			tools.ToolListKnowledgeChunks: true,
+			tools.ToolQueryKnowledgeGraph: true,
+			tools.ToolGetDocumentInfo:     true,
+			tools.ToolDatabaseQuery:       true,
+			tools.ToolDataAnalysis:        true,
+			tools.ToolDataSchema:          true,
+			// Wiki tools also require at least one KB in scope.
+			tools.ToolWikiReadPage:      true,
+			tools.ToolWikiSearch:        true,
+			tools.ToolWikiReadSourceDoc: true,
+			tools.ToolWikiFlagIssue:     true,
+			tools.ToolWikiWritePage:     true,
+			tools.ToolWikiReplaceText:   true,
+			tools.ToolWikiRenamePage:    true,
+			tools.ToolWikiDeletePage:    true,
+			tools.ToolWikiReadIssue:     true,
+			tools.ToolWikiUpdateIssue:   true,
+		}
+
+		// If no knowledge and no web search, also disable todo_write (not useful for simple chat)
+		if !config.WebSearchEnabled {
+			kbTools[tools.ToolTodoWrite] = true
+		}
+
+		for _, toolName := range allowedTools {
+			if !kbTools[toolName] {
+				filteredTools = append(filteredTools, toolName)
+			}
+		}
+		allowedTools = filteredTools
+		logger.Infof(ctx, "Pure Agent Mode: Knowledge base tools filtered out, remaining: %v", allowedTools)
+	}
+
+	// If web search is enabled, add web_search to allowedTools
+	if config.WebSearchEnabled {
+		allowedTools = append(allowedTools, tools.ToolWebSearch)
+		allowedTools = append(allowedTools, tools.ToolWebFetch)
+	}
+
+	retrievalPref := config.RetrievalPreference
+	if retrievalPref == "" {
+		retrievalPref = "auto"
+	}
+
+	// Default wiki read-only set used for backward-compat auto-injection below.
+	// Edit/issue wiki tools are intentionally excluded — they must be explicitly
+	// opted in via AllowedTools because they can mutate data.
+	defaultWikiReadTools := []string{
+		tools.ToolWikiReadPage,
+		tools.ToolWikiSearch,
+		tools.ToolWikiReadSourceDoc,
+		tools.ToolWikiFlagIssue,
+	}
+
+	// ---- Apply retrieval preference ----
+	// Preference is now a *filter*, never an injector (for explicit lists).
+	// For legacy agents without explicit AllowedTools, we still auto-append
+	// wiki read tools so existing integrations keep working.
+	//
+	// NOTE: ragToolSet must stay in sync with frontend `knowledgeBaseTools`
+	// in AgentEditorModal.vue. These are *all* tools that retrieve/inspect
+	// content from RAG-style knowledge bases; wiki_only must strip the whole
+	// set, otherwise the agent can still reach RAG data via graph/db/doc
+	// info tools despite the user asking for Wiki only.
+	ragToolSet := map[string]bool{
+		tools.ToolKnowledgeSearch:     true,
+		tools.ToolGrepChunks:          true,
+		tools.ToolListKnowledgeChunks: true,
+		tools.ToolQueryKnowledgeGraph: true,
+		tools.ToolGetDocumentInfo:     true,
+		tools.ToolDatabaseQuery:       true,
+	}
+	allWikiToolSet := map[string]bool{
+		tools.ToolWikiReadPage:      true,
+		tools.ToolWikiSearch:        true,
+		tools.ToolWikiReadSourceDoc: true,
+		tools.ToolWikiFlagIssue:     true,
+		tools.ToolWikiWritePage:     true,
+		tools.ToolWikiReplaceText:   true,
+		tools.ToolWikiRenamePage:    true,
+		tools.ToolWikiDeletePage:    true,
+		tools.ToolWikiReadIssue:     true,
+		tools.ToolWikiUpdateIssue:   true,
+	}
+
 	switch retrievalPref {
 	case "vector_only":
-		// Keep vector tools, no wiki tools (even if KB has wiki)
-		logger.Infof(ctx, "Retrieval preference: vector_only, skipping wiki tools")
+		filtered := make([]string, 0, len(allowedTools))
+		dropped := make([]string, 0)
+		for _, t := range allowedTools {
+			if allWikiToolSet[t] {
+				dropped = append(dropped, t)
+				continue
+			}
+			filtered = append(filtered, t)
+		}
+		allowedTools = filtered
+		logger.Infof(ctx, "Retrieval preference: vector_only, wiki tools filtered out: %v", dropped)
 	case "wiki_only":
-		// Remove vector search tools, add wiki tools if available
-		if hasWikiKB {
-			vectorSearchTools := map[string]bool{
-				tools.ToolKnowledgeSearch:     true,
-				tools.ToolGrepChunks:          true,
-				tools.ToolListKnowledgeChunks: true,
+		filtered := make([]string, 0, len(allowedTools))
+		dropped := make([]string, 0)
+		for _, t := range allowedTools {
+			if ragToolSet[t] {
+				dropped = append(dropped, t)
+				continue
 			}
-			filteredTools := make([]string, 0, len(allowedTools))
-			for _, t := range allowedTools {
-				if !vectorSearchTools[t] {
-					filteredTools = append(filteredTools, t)
-				}
-			}
-			allowedTools = filteredTools
-			allowedTools = append(allowedTools,
-				tools.ToolWikiReadPage,
-				tools.ToolWikiSearch,
-				tools.ToolWikiReadSourceDoc,
-				tools.ToolWikiFlagIssue,
-			)
-			logger.Infof(ctx, "Retrieval preference: wiki_only, wiki tools added, vector tools removed")
+			filtered = append(filtered, t)
 		}
+		allowedTools = filtered
+		// Only legacy agents get auto-append here; explicit lists are authoritative.
+		if !hasExplicitAllowedTools && hasWikiKB {
+			allowedTools = append(allowedTools, defaultWikiReadTools...)
+		}
+		logger.Infof(ctx, "Retrieval preference: wiki_only, RAG tools filtered out: %v", dropped)
 	case "hybrid":
-		// Keep vector tools AND add wiki tools
-		if hasWikiKB {
-			allowedTools = append(allowedTools,
-				tools.ToolWikiReadPage,
-				tools.ToolWikiSearch,
-				tools.ToolWikiReadSourceDoc,
-				tools.ToolWikiFlagIssue,
-			)
-			logger.Infof(ctx, "Retrieval preference: hybrid, both vector and wiki tools")
+		if !hasExplicitAllowedTools && hasWikiKB {
+			allowedTools = append(allowedTools, defaultWikiReadTools...)
+			logger.Infof(ctx, "Retrieval preference: hybrid (legacy), wiki read tools auto-added")
 		}
-	default: // "auto" — preserve original behavior: auto-detect from KB capabilities
-		if len(wikiKBIDs) > 0 {
-			allowedTools = append(allowedTools,
-				tools.ToolWikiReadPage,
-				tools.ToolWikiSearch,
-				tools.ToolWikiReadSourceDoc,
-				tools.ToolWikiFlagIssue,
-			)
-			logger.Infof(ctx, "Retrieval preference: auto, wiki KBs detected (%d), wiki tools added", len(wikiKBIDs))
+	default: // "auto"
+		if !hasExplicitAllowedTools && hasWikiKB {
+			allowedTools = append(allowedTools, defaultWikiReadTools...)
+			logger.Infof(ctx, "Retrieval preference: auto (legacy), wiki read tools auto-added")
 		}
 	}
-	_ = hasVectorKB // used for future optimization
+
+	// Hard safety nets: drop tools whose runtime prerequisite is missing.
+	// This guards against stale configs where e.g. the user ticked wiki tools
+	// earlier but later swapped in a non-wiki KB (or vice versa for RAG).
+	if !hasWikiKB {
+		filtered := make([]string, 0, len(allowedTools))
+		dropped := make([]string, 0)
+		for _, t := range allowedTools {
+			if allWikiToolSet[t] {
+				dropped = append(dropped, t)
+				continue
+			}
+			filtered = append(filtered, t)
+		}
+		allowedTools = filtered
+		if len(dropped) > 0 {
+			logger.Warnf(ctx, "Dropped wiki tools %v because no wiki-capable KB is in scope", dropped)
+		}
+	}
+	if !hasVectorKB {
+		filtered := make([]string, 0, len(allowedTools))
+		dropped := make([]string, 0)
+		for _, t := range allowedTools {
+			if ragToolSet[t] {
+				dropped = append(dropped, t)
+				continue
+			}
+			filtered = append(filtered, t)
+		}
+		allowedTools = filtered
+		if len(dropped) > 0 {
+			logger.Warnf(ctx, "Dropped RAG tools %v because no RAG-capable KB is in scope", dropped)
+		}
+	}
+
+	// Deduplicate while preserving original order.
+	allowedTools = dedupStrings(allowedTools)
 
 	logger.Infof(ctx, "Registering tools: %v, webSearchEnabled: %v", allowedTools, config.WebSearchEnabled)
 	allowedTools = append(allowedTools, tools.ToolFinalAnswer)

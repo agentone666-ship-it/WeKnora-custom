@@ -603,30 +603,124 @@
                     <h2>{{ $t('agent.editor.toolsConfig') }}</h2>
                     <p class="section-description">{{ $t('agent.editor.toolsConfigDesc') }}</p>
                   </div>
-                  
+
+                  <!-- 合并面板：能力状态 + 预设切换 -->
+                  <div class="tools-overview">
+                    <div class="tools-overview-row">
+                      <div class="tools-status-chip">
+                        <t-icon name="folder" />
+                        <template v-if="kbSelectionMode === 'none'">
+                          <span>{{ $t('agentEditor.tools.statusNoKb') }}</span>
+                        </template>
+                        <template v-else>
+                          <span class="tools-status-metric">
+                            <strong>{{ ragKbCount }}</strong> {{ $t('agentEditor.tools.kbMetricRag') }}
+                          </span>
+                          <span class="tools-status-sep">·</span>
+                          <span class="tools-status-metric">
+                            <strong>{{ wikiKbCount }}</strong> {{ $t('agentEditor.tools.kbMetricWiki') }}
+                          </span>
+                        </template>
+                      </div>
+                      <div v-if="inactiveToolCount > 0" class="tools-status-chip tools-status-chip--warn">
+                        <t-icon name="error-circle" />
+                        <span>{{ $t('agentEditor.tools.statusInactive', { count: inactiveToolCount }) }}</span>
+                      </div>
+                    </div>
+                    <div class="tools-overview-row tools-overview-row--preset">
+                      <div class="tools-preset-label">
+                        <span class="tools-preset-title">{{ $t('agentEditor.tools.presetLabel') }}</span>
+                        <span class="tools-preset-hint">{{ $t('agentEditor.tools.presetDesc') }}</span>
+                      </div>
+                      <t-radio-group
+                        :value="formData.config.retrieval_preference"
+                        @change="onRetrievalPresetChange"
+                        size="small"
+                        variant="default-filled"
+                      >
+                        <t-radio-button value="auto">{{ $t('agent.editor.retrievalPreferenceAuto') }}</t-radio-button>
+                        <t-radio-button value="vector_only">{{ $t('agent.editor.retrievalPreferenceVectorOnly') }}</t-radio-button>
+                        <t-radio-button value="wiki_only">{{ $t('agent.editor.retrievalPreferenceWikiOnly') }}</t-radio-button>
+                        <t-radio-button value="hybrid">{{ $t('agent.editor.retrievalPreferenceHybrid') }}</t-radio-button>
+                      </t-radio-group>
+                    </div>
+                  </div>
+
                   <div class="settings-group">
-                    <!-- 允许的工具 -->
+                    <!-- 允许的工具（按组渲染，统一网格） -->
                     <div class="setting-row setting-row-vertical">
                       <div class="setting-info">
                         <label>{{ $t('agent.editor.allowedTools') }}</label>
                         <p class="desc">{{ $t('agentEditor.desc.selectTools') }}</p>
                       </div>
                       <div class="setting-control setting-control-full">
-                        <t-checkbox-group v-model="formData.config.allowed_tools" class="tools-checkbox-group">
-                          <t-checkbox 
-                            v-for="tool in availableTools" 
-                            :key="tool.value" 
-                            :value="tool.value"
-                            :disabled="tool.disabled"
-                            :class="['tool-checkbox-item', { 'tool-disabled': tool.disabled }]"
+                        <t-checkbox-group v-model="formData.config.allowed_tools" class="tool-groups">
+                          <section
+                            v-for="group in groupedAvailableTools"
+                            :key="group.key"
+                            :class="['tool-group', `tool-group--${group.key}`]"
                           >
-                            <div class="tool-item-content">
-                              <span class="tool-name">{{ tool.label }}</span>
-                              <span v-if="tool.description" class="tool-desc">{{ tool.description }}</span>
-                              <span v-if="tool.disabled" class="tool-disabled-hint">{{ $t('agentEditor.tools.requiresKb') }}</span>
+                            <header class="tool-group-header">
+                              <span class="tool-group-bar" />
+                              <span class="tool-group-title">{{ group.label }}</span>
+                              <span class="tool-group-count">{{ group.tools.length }}</span>
+                              <span v-if="group.key === 'wiki_edit'" class="tool-group-warning">
+                                <t-icon name="error-circle" />
+                                {{ $t('agentEditor.tools.writeWarning') }}
+                              </span>
+                            </header>
+                            <div class="tool-grid">
+                              <t-checkbox
+                                v-for="tool in group.tools"
+                                :key="tool.value"
+                                :value="tool.value"
+                                :disabled="tool.disabled"
+                                :class="['tool-card', { 'tool-card--disabled': tool.disabled, 'tool-card--danger': tool.danger }]"
+                              >
+                                <div class="tool-card-body">
+                                  <div class="tool-card-head">
+                                    <span class="tool-card-name">{{ tool.label }}</span>
+                                    <span v-if="tool.danger" class="tool-card-badge">
+                                      {{ $t('agentEditor.tools.dangerTag') }}
+                                    </span>
+                                  </div>
+                                  <span v-if="tool.description" class="tool-card-desc">{{ tool.description }}</span>
+                                  <span v-if="tool.disabled && tool.disabledReason" class="tool-card-hint">
+                                    {{ tool.disabledReason }}
+                                  </span>
+                                </div>
+                              </t-checkbox>
                             </div>
-                          </t-checkbox>
+                          </section>
                         </t-checkbox-group>
+                      </div>
+                    </div>
+
+                    <!-- 有效工具预览：所见即所得 -->
+                    <div class="setting-row setting-row-vertical">
+                      <div class="setting-info">
+                        <label>{{ $t('agentEditor.tools.effectiveLabel') }}</label>
+                        <p class="desc">{{ $t('agentEditor.tools.effectiveDesc') }}</p>
+                      </div>
+                      <div class="setting-control setting-control-full">
+                        <div class="effective-tools">
+                          <template v-if="effectiveTools.length === 0">
+                            <div class="effective-tools-empty">
+                              {{ $t('agentEditor.tools.effectiveEmpty') }}
+                            </div>
+                          </template>
+                          <template v-else>
+                            <span
+                              v-for="item in effectiveTools"
+                              :key="item.value"
+                              :class="['effective-chip', { 'effective-chip--inactive': !item.active }]"
+                              :title="item.reason || ''"
+                            >
+                              <span class="effective-chip-label">{{ item.label }}</span>
+                              <span v-if="!item.active" class="effective-chip-reason">{{ item.reason }}</span>
+                            </span>
+                          </template>
+                        </div>
                       </div>
                     </div>
 
@@ -1339,8 +1433,17 @@ const defaultRerankThreshold = ref(0.5);
 const defaultMaxCompletionTokens = ref(2048);
 const defaultTemperature = ref(0.7);
 
-// 知识库相关工具列表
+// 知识库相关工具列表（RAG 向量检索工具，依赖 RAG 能力）
 const knowledgeBaseTools = ['grep_chunks', 'knowledge_search', 'list_knowledge_chunks', 'query_knowledge_graph', 'get_document_info', 'database_query'];
+
+// Wiki 读取类工具（依赖 Wiki 能力，阅读/搜索用途）
+const wikiReadTools = ['wiki_search', 'wiki_read_page', 'wiki_read_source_doc', 'wiki_flag_issue'];
+// Wiki 编辑类工具（修改 Wiki 内容，需谨慎授权）
+const wikiEditTools = ['wiki_write_page', 'wiki_replace_text', 'wiki_rename_page', 'wiki_delete_page'];
+// Wiki 巡检类工具
+const wikiIssueTools = ['wiki_read_issue', 'wiki_update_issue'];
+// 全部 Wiki 工具
+const allWikiTools = [...wikiReadTools, ...wikiEditTools, ...wikiIssueTools];
 
 // 初始化标志，防止初始化时触发 watch 自动添加工具
 const isInitializing = ref(false);
@@ -1355,17 +1458,48 @@ const mcpSelectionMode = ref<'all' | 'selected' | 'none'>('none');
 const skillsSelectionMode = ref<'all' | 'selected' | 'none'>('none');
 
 // 可用工具列表 (与后台 definitions.go 保持一致)
+// group 决定 UI 分组：base / rag / wiki_read / wiki_edit / wiki_issue / data
+// requiresKB:   需要任意知识库配置才可用（配合 hasKnowledgeBase）
+// requiresRag:  需要作用域内存在启用了向量/关键词索引的知识库（配合 hasRagKnowledgeBase）
+// requiresWiki: 需要作用域内存在启用了 Wiki 索引的知识库（配合 hasWikiKnowledgeBase）
+// danger:       写类破坏性工具，UI 上给出显著提示
 const allTools = computed(() => [
-  { value: 'thinking', label: t('agentEditor.tools.thinking'), description: t('agentEditor.tools.thinkingDesc'), requiresKB: false },
-  { value: 'todo_write', label: t('agentEditor.tools.todoWrite'), description: t('agentEditor.tools.todoWriteDesc'), requiresKB: false },
-  { value: 'grep_chunks', label: t('agentEditor.tools.grepChunks'), description: t('agentEditor.tools.grepChunksDesc'), requiresKB: true },
-  { value: 'knowledge_search', label: t('agentEditor.tools.knowledgeSearch'), description: t('agentEditor.tools.knowledgeSearchDesc'), requiresKB: true },
-  { value: 'list_knowledge_chunks', label: t('agentEditor.tools.listChunks'), description: t('agentEditor.tools.listChunksDesc'), requiresKB: true },
-  { value: 'query_knowledge_graph', label: t('agentEditor.tools.queryGraph'), description: t('agentEditor.tools.queryGraphDesc'), requiresKB: true },
-  { value: 'get_document_info', label: t('agentEditor.tools.getDocInfo'), description: t('agentEditor.tools.getDocInfoDesc'), requiresKB: true },
-  { value: 'database_query', label: t('agentEditor.tools.dbQuery'), description: t('agentEditor.tools.dbQueryDesc'), requiresKB: true },
-  { value: 'data_analysis', label: t('agentEditor.tools.dataAnalysis'), description: t('agentEditor.tools.dataAnalysisDesc'), requiresKB: true },
-  { value: 'data_schema', label: t('agentEditor.tools.dataSchema'), description: t('agentEditor.tools.dataSchemaDesc'), requiresKB: true },
+  // 基础思考类
+  { value: 'thinking', label: t('agentEditor.tools.thinking'), description: t('agentEditor.tools.thinkingDesc'), requiresKB: false, requiresRag: false, requiresWiki: false, group: 'base' },
+  { value: 'todo_write', label: t('agentEditor.tools.todoWrite'), description: t('agentEditor.tools.todoWriteDesc'), requiresKB: false, requiresRag: false, requiresWiki: false, group: 'base' },
+  // 知识库语义/关键词检索（均需 RAG 能力）
+  { value: 'grep_chunks', label: t('agentEditor.tools.grepChunks'), description: t('agentEditor.tools.grepChunksDesc'), requiresKB: true, requiresRag: true, requiresWiki: false, group: 'rag' },
+  { value: 'knowledge_search', label: t('agentEditor.tools.knowledgeSearch'), description: t('agentEditor.tools.knowledgeSearchDesc'), requiresKB: true, requiresRag: true, requiresWiki: false, group: 'rag' },
+  { value: 'list_knowledge_chunks', label: t('agentEditor.tools.listChunks'), description: t('agentEditor.tools.listChunksDesc'), requiresKB: true, requiresRag: true, requiresWiki: false, group: 'rag' },
+  { value: 'query_knowledge_graph', label: t('agentEditor.tools.queryGraph'), description: t('agentEditor.tools.queryGraphDesc'), requiresKB: true, requiresRag: true, requiresWiki: false, group: 'rag' },
+  { value: 'get_document_info', label: t('agentEditor.tools.getDocInfo'), description: t('agentEditor.tools.getDocInfoDesc'), requiresKB: true, requiresRag: true, requiresWiki: false, group: 'rag' },
+  { value: 'database_query', label: t('agentEditor.tools.dbQuery'), description: t('agentEditor.tools.dbQueryDesc'), requiresKB: true, requiresRag: true, requiresWiki: false, group: 'rag' },
+  // Wiki 读取类（阅读、搜索、标记问题）
+  { value: 'wiki_search', label: t('agentEditor.tools.wikiSearch'), description: t('agentEditor.tools.wikiSearchDesc'), requiresKB: true, requiresRag: false, requiresWiki: true, group: 'wiki_read' },
+  { value: 'wiki_read_page', label: t('agentEditor.tools.wikiReadPage'), description: t('agentEditor.tools.wikiReadPageDesc'), requiresKB: true, requiresRag: false, requiresWiki: true, group: 'wiki_read' },
+  { value: 'wiki_read_source_doc', label: t('agentEditor.tools.wikiReadSourceDoc'), description: t('agentEditor.tools.wikiReadSourceDocDesc'), requiresKB: true, requiresRag: false, requiresWiki: true, group: 'wiki_read' },
+  { value: 'wiki_flag_issue', label: t('agentEditor.tools.wikiFlagIssue'), description: t('agentEditor.tools.wikiFlagIssueDesc'), requiresKB: true, requiresRag: false, requiresWiki: true, group: 'wiki_read' },
+  // Wiki 编辑类（会直接修改 Wiki 内容）
+  { value: 'wiki_write_page', label: t('agentEditor.tools.wikiWritePage'), description: t('agentEditor.tools.wikiWritePageDesc'), requiresKB: true, requiresRag: false, requiresWiki: true, group: 'wiki_edit', danger: true },
+  { value: 'wiki_replace_text', label: t('agentEditor.tools.wikiReplaceText'), description: t('agentEditor.tools.wikiReplaceTextDesc'), requiresKB: true, requiresRag: false, requiresWiki: true, group: 'wiki_edit', danger: true },
+  { value: 'wiki_rename_page', label: t('agentEditor.tools.wikiRenamePage'), description: t('agentEditor.tools.wikiRenamePageDesc'), requiresKB: true, requiresRag: false, requiresWiki: true, group: 'wiki_edit', danger: true },
+  { value: 'wiki_delete_page', label: t('agentEditor.tools.wikiDeletePage'), description: t('agentEditor.tools.wikiDeletePageDesc'), requiresKB: true, requiresRag: false, requiresWiki: true, group: 'wiki_edit', danger: true },
+  // Wiki 巡检类
+  { value: 'wiki_read_issue', label: t('agentEditor.tools.wikiReadIssue'), description: t('agentEditor.tools.wikiReadIssueDesc'), requiresKB: true, requiresRag: false, requiresWiki: true, group: 'wiki_issue' },
+  { value: 'wiki_update_issue', label: t('agentEditor.tools.wikiUpdateIssue'), description: t('agentEditor.tools.wikiUpdateIssueDesc'), requiresKB: true, requiresRag: false, requiresWiki: true, group: 'wiki_issue' },
+  // 数据分析（不依赖检索类能力，只需要作用域里有 KB 存放数据文件）
+  { value: 'data_analysis', label: t('agentEditor.tools.dataAnalysis'), description: t('agentEditor.tools.dataAnalysisDesc'), requiresKB: true, requiresRag: false, requiresWiki: false, group: 'data' },
+  { value: 'data_schema', label: t('agentEditor.tools.dataSchema'), description: t('agentEditor.tools.dataSchemaDesc'), requiresKB: true, requiresRag: false, requiresWiki: false, group: 'data' },
+]);
+
+// 工具分组元信息
+const toolGroups = computed(() => [
+  { key: 'base',       label: t('agentEditor.tools.groupBase') },
+  { key: 'rag',        label: t('agentEditor.tools.groupRag') },
+  { key: 'wiki_read',  label: t('agentEditor.tools.groupWikiRead') },
+  { key: 'wiki_edit',  label: t('agentEditor.tools.groupWikiEdit') },
+  { key: 'wiki_issue', label: t('agentEditor.tools.groupWikiIssue') },
+  { key: 'data',       label: t('agentEditor.tools.groupData') },
 ]);
 
 // 知识库分组：我的 vs 共享的
@@ -1376,6 +1510,30 @@ const sharedKbOptions = computed(() => kbOptions.value.filter(kb => kb.shared));
 const hasKnowledgeBase = computed(() => {
   return kbSelectionMode.value !== 'none';
 });
+
+// 当前配置下进入到智能体作用域的知识库列表
+// 注意：用户可能选了 knowledge_bases（按库级），也可能选了 knowledge_ids（按文档级）
+// 这里仅用于 UI 上的工具可用性判定，按库级来计算
+const kbsInScope = computed(() => {
+  if (kbSelectionMode.value === 'none') return [];
+  if (kbSelectionMode.value === 'all') return kbOptions.value;
+  const selectedIds = formData.value.config.knowledge_bases || [];
+  return kbOptions.value.filter(kb => selectedIds.includes(kb.value));
+});
+
+// 是否存在至少一个启用了 RAG 能力的知识库（向量 or 关键词）
+const hasRagKnowledgeBase = computed(() => {
+  return kbsInScope.value.some(kb => kb.ragEnabled);
+});
+
+// 是否存在至少一个启用了 Wiki 能力的知识库
+const hasWikiKnowledgeBase = computed(() => {
+  return kbsInScope.value.some(kb => kb.wikiEnabled);
+});
+
+// 作用域内 RAG/Wiki 知识库数量（用于顶部状态栏）
+const ragKbCount = computed(() => kbsInScope.value.filter(kb => kb.ragEnabled).length);
+const wikiKbCount = computed(() => kbsInScope.value.filter(kb => kb.wikiEnabled).length);
 
 // 检测选择的知识库中是否包含 FAQ 类型
 const hasFaqKnowledgeBase = computed(() => {
@@ -1390,11 +1548,75 @@ const hasFaqKnowledgeBase = computed(() => {
 });
 
 const availableTools = computed(() => {
-  return allTools.value.map(tool => ({
-    ...tool,
-    disabled: tool.requiresKB && !hasKnowledgeBase.value
-  }));
+  return allTools.value.map(tool => {
+    // 通用知识库依赖：未配置任何知识库时禁用，优先级最高
+    const needKbAndMissing = tool.requiresKB && !hasKnowledgeBase.value;
+    // Wiki 依赖：有 KB 但作用域内没有启用 Wiki 的 KB
+    const needWikiAndMissing = tool.requiresWiki && !hasWikiKnowledgeBase.value;
+    // RAG 依赖：有 KB 但作用域内没有启用向量/关键词索引的 KB
+    const needRagAndMissing = tool.requiresRag && !hasRagKnowledgeBase.value;
+    const disabled = needKbAndMissing || needWikiAndMissing || needRagAndMissing;
+    let disabledReason: string | undefined;
+    if (needKbAndMissing) {
+      disabledReason = t('agentEditor.tools.requiresKb');
+    } else if (needWikiAndMissing) {
+      disabledReason = t('agentEditor.tools.requiresWikiKb');
+    } else if (needRagAndMissing) {
+      disabledReason = t('agentEditor.tools.requiresRagKb');
+    }
+    return {
+      ...tool,
+      disabled,
+      disabledReason,
+    };
+  });
 });
+
+// 按分组切片后的工具列表，用于模板分组渲染
+const groupedAvailableTools = computed(() => {
+  const map: Record<string, typeof availableTools.value> = {};
+  for (const tool of availableTools.value) {
+    const g = tool.group || 'base';
+    if (!map[g]) map[g] = [];
+    map[g].push(tool);
+  }
+  return toolGroups.value
+    .map(g => ({
+      ...g,
+      tools: map[g.key] || [],
+    }))
+    .filter(g => g.tools.length > 0);
+});
+
+// ==================== 有效工具预览 ====================
+// 最终运行时智能体实际能使用的工具集合（仅做预览展示）
+// 规则：基于 allowed_tools 过滤
+//   1) 勾选但缺失对应能力（无 KB / 无 Wiki 能力 KB）的工具会被灰显/隐藏
+//   2) 无论是否勾选，web_search / web_fetch 随 web_search_enabled 出现
+//   3) final_answer 始终存在
+//   4) 当 kb_selection_mode === 'none' 时，RAG/Wiki 工具都视为不可用
+const effectiveTools = computed(() => {
+  const chosen = new Set(formData.value.config.allowed_tools || []);
+  const items: Array<{ value: string; label: string; reason?: string; active: boolean }> = [];
+  for (const tool of availableTools.value) {
+    const picked = chosen.has(tool.value);
+    if (!picked) continue;
+    if (tool.disabled) {
+      items.push({ value: tool.value, label: tool.label, active: false, reason: tool.disabledReason });
+    } else {
+      items.push({ value: tool.value, label: tool.label, active: true });
+    }
+  }
+  if (formData.value.config.web_search_enabled) {
+    items.push({ value: 'web_search', label: t('agentEditor.tools.webSearch'), active: true });
+    items.push({ value: 'web_fetch',  label: t('agentEditor.tools.webFetch'),  active: true });
+  }
+  items.push({ value: 'final_answer', label: t('agentEditor.tools.finalAnswer'), active: true });
+  return items;
+});
+
+// 勾选了但当前配置下无法生效的工具数量（用于顶部状态提示）
+const inactiveToolCount = computed(() => effectiveTools.value.filter(i => !i.active).length);
 
 // 可用文件类型列表
 const availableFileTypes = [
@@ -1843,22 +2065,21 @@ watch(agentMode, (val, _oldVal) => {
   if (val === 'smart-reasoning') {
     // 切换到 Agent 模式，根据知识库配置启用工具
     if (formData.value.config.allowed_tools.length === 0) {
-      if (hasKnowledgeBase.value) {
-        // 有知识库时，启用所有工具
-        formData.value.config.allowed_tools = [
-          'thinking',
-          'todo_write',
+      const tools = ['thinking', 'todo_write'];
+      if (hasRagKnowledgeBase.value) {
+        tools.push(
           'knowledge_search',
           'grep_chunks',
           'list_knowledge_chunks',
           'query_knowledge_graph',
           'get_document_info',
           'database_query',
-        ];
-      } else {
-        // 没有知识库时，只启用非知识库工具
-        formData.value.config.allowed_tools = ['thinking', 'todo_write'];
+        );
       }
+      if (hasWikiKnowledgeBase.value) {
+        tools.push(...wikiReadTools);
+      }
+      formData.value.config.allowed_tools = tools;
     }
     if (formData.value.config.max_iterations <= 1) {
       formData.value.config.max_iterations = 10;
@@ -1900,28 +2121,75 @@ watch(agentMode, (val, _oldVal) => {
   }
 });
 
-// 监听知识库配置变化，自动移除/添加知识库相关工具
+// 监听知识库配置变化，自动移除/添加 RAG 工具
 watch(hasKnowledgeBase, (hasKB, oldHasKB) => {
   // 如果当前在检索策略页面但没有知识库能力了，切换到基础设置
   if (!hasKB && currentSection.value === 'retrieval') {
     currentSection.value = 'basic';
   }
-  
+
   // 初始化期间或非 Agent 模式下不自动调整工具
   if (isInitializing.value || !isAgentMode.value) return;
-  
+
   if (hasKB && !oldHasKB) {
     // 从无知识库变为有知识库，自动添加知识库相关工具
     const currentTools = formData.value.config.allowed_tools || [];
     const toolsToAdd = knowledgeBaseTools.filter((tool: string) => !currentTools.includes(tool));
     formData.value.config.allowed_tools = [...currentTools, ...toolsToAdd];
   } else if (!hasKB && oldHasKB) {
-    // 从有知识库变为无知识库，移除知识库相关工具
+    // 从有知识库变为无知识库，移除所有 KB 依赖工具（含 Wiki）
     formData.value.config.allowed_tools = formData.value.config.allowed_tools.filter(
-      (tool: string) => !knowledgeBaseTools.includes(tool)
+      (tool: string) => !knowledgeBaseTools.includes(tool) && !allWikiTools.includes(tool)
     );
   }
 });
+
+// 监听 Wiki 能力变化：当 Wiki 能力消失时移除已勾选的 Wiki 工具（避免"勾了但跑不起来"）
+watch(hasWikiKnowledgeBase, (hasWiki, oldHasWiki) => {
+  if (isInitializing.value || !isAgentMode.value) return;
+  if (!hasWiki && oldHasWiki) {
+    formData.value.config.allowed_tools = formData.value.config.allowed_tools.filter(
+      (tool: string) => !allWikiTools.includes(tool)
+    );
+  }
+});
+
+// 检索策略预设：一键改写 allowed_tools
+// auto        -> 按作用域内知识库能力自动补齐（RAG 库 → RAG 工具；Wiki 库 → Wiki 读取工具）
+// vector_only -> 只保留 RAG 工具，移除 Wiki 工具
+// wiki_only   -> 只保留 Wiki 读取工具，移除 RAG 工具
+// hybrid      -> 两者都补齐
+const onRetrievalPresetChange = (val: string) => {
+  formData.value.config.retrieval_preference = val as 'auto' | 'vector_only' | 'wiki_only' | 'hybrid';
+
+  if (!isAgentMode.value) return;
+
+  const current = new Set(formData.value.config.allowed_tools || []);
+
+  const addAll = (list: string[]) => list.forEach(t => current.add(t));
+  const removeAll = (list: string[]) => list.forEach(t => current.delete(t));
+
+  switch (val) {
+    case 'vector_only':
+      if (hasRagKnowledgeBase.value) addAll(knowledgeBaseTools);
+      removeAll(allWikiTools);
+      break;
+    case 'wiki_only':
+      removeAll(knowledgeBaseTools);
+      if (hasWikiKnowledgeBase.value) addAll(wikiReadTools);
+      break;
+    case 'hybrid':
+      if (hasRagKnowledgeBase.value) addAll(knowledgeBaseTools);
+      if (hasWikiKnowledgeBase.value) addAll(wikiReadTools);
+      break;
+    case 'auto':
+    default:
+      if (hasRagKnowledgeBase.value) addAll(knowledgeBaseTools);
+      if (hasWikiKnowledgeBase.value) addAll(wikiReadTools);
+      break;
+  }
+  formData.value.config.allowed_tools = Array.from(current);
+};
 
 // 监听运行模式变化，自动切换页面
 watch(isAgentMode, (isAgent) => {
@@ -3393,67 +3661,344 @@ const handleSave = async () => {
   }
 }
 
-// 工具选择样式
-.tools-checkbox-group {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 12px;
+// ===== 工具配置：overview 面板 =====
+.tools-overview {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 20px;
+  padding: 14px 16px;
+  background: var(--td-bg-color-secondarycontainer);
+  border-radius: 10px;
+  border: 1px solid var(--td-component-stroke);
+}
+
+.tools-overview-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 12px;
+
+  &--preset {
+    border-top: 1px dashed var(--td-component-stroke);
+    padding-top: 10px;
+    justify-content: space-between;
+  }
+}
+
+.tools-status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font-size: 13px;
+  color: var(--td-text-color-secondary);
+  background: var(--td-bg-color-container);
+  border-radius: 999px;
+  border: 1px solid var(--td-component-stroke);
+
+  .t-icon {
+    color: var(--td-text-color-secondary);
+    font-size: 14px;
+  }
+
+  .tools-status-metric {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 4px;
+
+    strong {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--td-text-color-primary);
+    }
+  }
+
+  .tools-status-sep {
+    color: var(--td-text-color-placeholder);
+  }
+
+  &--warn {
+    color: var(--td-warning-color);
+    background: var(--td-warning-color-1, rgba(237, 118, 20, 0.08));
+    border-color: var(--td-warning-color-light, #fcd7b6);
+
+    .t-icon { color: var(--td-warning-color); }
+  }
+}
+
+.tools-preset-label {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 2px;
+
+  .tools-preset-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--td-text-color-primary);
+  }
+
+  .tools-preset-hint {
+    font-size: 12px;
+    color: var(--td-text-color-secondary);
+  }
+}
+
+// ===== 按组的卡片网格 =====
+.tool-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
   width: 100%;
 }
 
-.tool-checkbox-item {
+.tool-group {
   display: flex;
-  align-items: flex-start;
-  padding: 12px 16px;
-  background: var(--td-bg-color-secondarycontainer);
-  border-radius: 8px;
-  border: 1px solid var(--td-component-stroke);
-  transition: all 0.2s ease;
+  flex-direction: column;
+  gap: 10px;
+}
 
-  &:hover {
-    border-color: var(--td-brand-color);
-    background: var(--td-success-color-light);
+.tool-group-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 2px;
+
+  .tool-group-bar {
+    display: inline-block;
+    width: 3px;
+    height: 14px;
+    border-radius: 2px;
+    background: var(--td-brand-color);
   }
 
+  .tool-group-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--td-text-color-primary);
+    letter-spacing: 0.2px;
+  }
+
+  .tool-group-count {
+    min-width: 20px;
+    padding: 0 6px;
+    font-size: 11px;
+    color: var(--td-text-color-secondary);
+    background: var(--td-bg-color-secondarycontainer);
+    border-radius: 999px;
+    text-align: center;
+    line-height: 18px;
+  }
+
+  .tool-group-warning {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    font-size: 12px;
+    color: var(--td-warning-color);
+    background: var(--td-warning-color-1, rgba(237, 118, 20, 0.08));
+    border: 1px solid var(--td-warning-color-light, #fcd7b6);
+    border-radius: 999px;
+
+    .t-icon { font-size: 13px; }
+  }
+}
+
+// 不同分组的左侧色条
+.tool-group--base      .tool-group-bar { background: var(--td-gray-color-6, #a0a7ab); }
+.tool-group--rag       .tool-group-bar { background: var(--td-brand-color); }
+.tool-group--wiki_read .tool-group-bar { background: var(--td-success-color, #2ba471); }
+.tool-group--wiki_edit .tool-group-bar { background: var(--td-warning-color, #ed7b2f); }
+.tool-group--wiki_issue .tool-group-bar { background: var(--td-purple-5, #8e56dd); }
+.tool-group--data      .tool-group-bar { background: var(--td-cyan-6, #09a3b7); }
+
+// 统一两列网格；小屏退化单列
+.tool-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  width: 100%;
+
+  @media (max-width: 720px) {
+    grid-template-columns: 1fr;
+  }
+}
+
+// ===== 工具卡片（基于 t-checkbox 的 label 结构） =====
+.tool-card {
+  margin: 0; // 清掉 TDesign checkbox 默认外边距
+  padding: 12px 14px;
+  background: var(--td-bg-color-container);
+  border-radius: 8px;
+  border: 1px solid var(--td-component-stroke);
+  transition: border-color .2s, background .2s;
+  cursor: pointer;
+  overflow: hidden;
+
+  &:hover:not(.tool-card--disabled) {
+    border-color: var(--td-brand-color);
+    background: var(--td-brand-color-1, rgba(0, 82, 217, 0.04));
+  }
+
+  // checkbox 的勾选框 + label 改造
   :deep(.t-checkbox__input) {
     margin-top: 2px;
+    flex-shrink: 0;
   }
 
   :deep(.t-checkbox__label) {
     flex: 1;
+    min-width: 0;
+    padding-left: 10px;
+  }
+
+  &.t-is-checked {
+    border-color: var(--td-brand-color);
+    background: var(--td-brand-color-1, rgba(0, 82, 217, 0.06));
+  }
+
+  &--disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+  }
+
+  &--danger {
+    border-color: var(--td-warning-color-light, #fcd7b6);
+
+    &:hover:not(.tool-card--disabled) {
+      border-color: var(--td-warning-color);
+      background: var(--td-warning-color-1, rgba(237, 118, 20, 0.06));
+    }
+
+    &.t-is-checked {
+      border-color: var(--td-warning-color);
+      background: var(--td-warning-color-1, rgba(237, 118, 20, 0.08));
+    }
   }
 }
 
-.tool-item-content {
+.tool-card-body {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  min-width: 0;
 }
 
-.tool-name {
-  font-size: 14px;
+.tool-card-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.tool-card-name {
+  font-size: 13.5px;
   font-weight: 500;
   color: var(--td-text-color-primary);
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
-.tool-desc {
+.tool-card-badge {
+  flex: 0 0 auto;
+  font-size: 10.5px;
+  line-height: 1;
+  padding: 3px 6px;
+  color: var(--td-warning-color);
+  background: transparent;
+  border: 1px solid var(--td-warning-color-light, #fcd7b6);
+  border-radius: 4px;
+  letter-spacing: 0.3px;
+}
+
+.tool-card-desc {
   font-size: 12px;
   color: var(--td-text-color-secondary);
   line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
-.tool-disabled-hint {
+.tool-card-hint {
   font-size: 11px;
   color: var(--td-warning-color);
   font-style: italic;
+  line-height: 1.4;
 }
 
-.tool-disabled {
-  opacity: 0.6;
-  
-  .tool-name, .tool-desc {
+.tool-card--disabled {
+  .tool-card-name,
+  .tool-card-desc {
     color: var(--td-text-color-placeholder);
   }
+}
+
+// ===== 有效工具预览（芯片组）=====
+.effective-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 12px;
+  background: var(--td-bg-color-container);
+  border-radius: 8px;
+  border: 1px dashed var(--td-component-stroke);
+  min-height: 52px;
+  align-items: flex-start;
+}
+
+.effective-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--td-brand-color);
+  background: var(--td-brand-color-1, rgba(0, 82, 217, 0.08));
+  border: 1px solid var(--td-brand-color-2, rgba(0, 82, 217, 0.16));
+  border-radius: 999px;
+  max-width: 100%;
+}
+
+.effective-chip-label {
+  font-weight: 500;
+}
+
+.effective-chip-reason {
+  font-size: 11px;
+  color: var(--td-warning-color);
+  font-style: normal;
+
+  &::before {
+    content: "· ";
+    color: var(--td-text-color-placeholder);
+    margin-right: 2px;
+  }
+}
+
+.effective-chip--inactive {
+  color: var(--td-text-color-placeholder);
+  background: var(--td-bg-color-secondarycontainer);
+  border-color: var(--td-component-stroke);
+
+  .effective-chip-label {
+    text-decoration: line-through;
+  }
+}
+
+.effective-tools-empty {
+  font-size: 12px;
+  color: var(--td-text-color-placeholder);
+  font-style: italic;
 }
 
 // Skills 选择样式
