@@ -2158,6 +2158,7 @@ export default {
       rebuildSkip: "稍后可在数据源中手动触发重建",
     },
     wikiBrowser: {
+      viewInGraph: '在图谱中查看',
       tabDocuments: "文档",
       tabWiki: "Wiki",
       tabGraph: "图谱",

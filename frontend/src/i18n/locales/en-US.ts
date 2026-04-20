@@ -1633,6 +1633,7 @@ export default {
       rebuildSkip: 'You can manually trigger a rebuild later from Data Sources',
     },
     wikiBrowser: {
+      viewInGraph: 'View in Graph',
       tabDocuments: 'Documents',
       tabWiki: 'Wiki',
       tabGraph: 'Graph',

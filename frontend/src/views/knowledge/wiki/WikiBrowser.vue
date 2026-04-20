@@ -87,7 +87,7 @@
         <div v-if="!graphReady" class="wiki-reader-empty wiki-graph-empty">
           <t-loading v-if="graphLoading" />
           <div v-else class="wiki-empty-icon">
-            <t-icon name="chart-ring" size="48px" />
+            <t-icon name="chart-bubble" size="48px" />
           </div>
           <p class="wiki-empty-desc">{{ graphLoading ? $t('knowledgeEditor.wikiBrowser.graphEmpty') : $t('knowledgeEditor.wikiBrowser.graphNoData') }}</p>
         </div>
@@ -849,6 +849,12 @@ async function loadGraph() {
     graphData.value = (res as any).data || res as any
     await nextTick()
     renderGraph()
+    if (route.query.slug && typeof route.query.slug === 'string') {
+      graphSelectedSlug.value = null // reset first to ensure watch triggers
+      setTimeout(() => {
+        handleGraphSearchSelect(route.query.slug as string)
+      }, 300)
+    }
   } catch (e) {
     console.error('Failed to load graph:', e)
   } finally {

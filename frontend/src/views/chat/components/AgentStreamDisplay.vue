@@ -335,6 +335,36 @@
   
   <!-- Image Preview -->
   <picturePreview :reviewImg="imagePreviewVisible" :reviewUrl="imagePreviewUrl" @closePreImg="closeImagePreview" />
+  
+  <!-- Wiki Page Detail Drawer -->
+  <t-drawer
+    v-model:visible="wikiDrawerVisible"
+    :header="wikiDrawerPage?.title || ''"
+    size="480px"
+    :footer="false"
+    placement="right"
+    attach="body"
+    :show-overlay="true"
+    :close-btn="true"
+    :close-on-overlay-click="true"
+    class="wiki-graph-drawer"
+  >
+    <template v-if="wikiDrawerPage">
+      <div class="wiki-reader-meta" style="margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center;">
+        <div style="display: flex; align-items: center; gap: 12px;">
+          <t-tag size="small" :theme="getTypeTheme(wikiDrawerPage.page_type)" variant="light-outline">
+            {{ getTypeLabel(wikiDrawerPage.page_type) }}
+          </t-tag>
+          <span class="wiki-reader-meta-text">{{ $t('knowledgeEditor.wikiBrowser.version', { ver: wikiDrawerPage.version || 1 }) }}</span>
+        </div>
+        <t-link theme="primary" hover="color" @click="navigateToWikiGraph">
+          <template #prefixIcon><t-icon name="chart-bubble" /></template>
+          {{ $t('knowledgeEditor.wikiBrowser.viewInGraph') }}
+        </t-link>
+      </div>
+      <div ref="wikiDrawerBodyRef" class="wiki-reader-body" v-html="wikiDrawerContent" @click="handleWikiDrawerClick"></div>
+    </template>
+  </t-drawer>
 </template>
 
 <script setup lang="ts">
@@ -347,6 +377,7 @@ import DOMPurify from 'dompurify';
 import ToolResultRenderer from './ToolResultRenderer.vue';
 import picturePreview from '@/components/picture-preview.vue';
 import { getChunkByIdOnly } from '@/api/knowledge-base';
+import { getWikiPage, type WikiPage } from '@/api/wiki';
 import { MessagePlugin } from 'tdesign-vue-next';
 import { useUIStore } from '@/stores/ui';
 import { useSettingsStore } from '@/stores/settings';
@@ -510,6 +541,110 @@ const openImagePreview = (url: string) => {
 
 const closeImagePreview = () => {
   imagePreviewVisible.value = false;
+};
+
+// Wiki Drawer 状态
+const wikiDrawerVisible = ref(false);
+const wikiDrawerPage = ref<WikiPage | null>(null);
+const wikiDrawerBodyRef = ref<HTMLElement | null>(null);
+const currentWikiKbId = ref<string>('');
+
+function getTypeTheme(type: string): string {
+  const map: Record<string, string> = {
+    summary: 'primary', entity: 'success', concept: 'warning',
+    synthesis: 'primary', comparison: 'danger', index: 'default', log: 'default',
+  };
+  return map[type] || 'default';
+}
+
+function getTypeLabel(type: string): string {
+  const map: Record<string, string> = {
+    summary: t('knowledgeEditor.wikiBrowser.filterSummary'),
+    entity: t('knowledgeEditor.wikiBrowser.filterEntity'),
+    concept: t('knowledgeEditor.wikiBrowser.filterConcept'),
+    synthesis: t('knowledgeEditor.wikiBrowser.filterSynthesis'),
+    comparison: t('knowledgeEditor.wikiBrowser.filterComparison'),
+    index: 'Index',
+    log: 'Log',
+  };
+  return map[type] || type;
+}
+
+const wikiDrawerContent = computed(() => {
+  if (!wikiDrawerPage.value) return '';
+  const content = wikiDrawerPage.value.content || '';
+  
+  // Pre-process wiki links [[slug|name]] to custom HTML tags for the drawer
+  let preprocessed = content.replace(/\[\[([^\]]+)\]\]/g, (_, inner: string) => {
+    const pipeIdx = inner.indexOf('|');
+    const slug = pipeIdx > 0 ? inner.substring(0, pipeIdx).trim() : inner.trim();
+    let display = slug;
+    if (pipeIdx > 0) {
+      display = inner.substring(pipeIdx + 1).trim();
+    } else {
+      const parts = slug.split('/');
+      display = parts.length > 1 ? parts.slice(1).join('/') : slug;
+    }
+    return `<a href="#" class="wiki-content-link citation-wiki" data-slug="${escapeHtml(slug)}">${escapeHtml(display)}</a>`;
+  });
+
+  return marked.parse(preprocessed, { breaks: true, async: false }) as string;
+});
+
+watch(wikiDrawerContent, async () => {
+  await nextTick();
+  if (wikiDrawerBodyRef.value) {
+    await hydrateProtectedFileImages(wikiDrawerBodyRef.value);
+  }
+});
+
+const openWikiDrawer = async (kbId: string, slug: string) => {
+  if (!kbId || !slug) return;
+  try {
+    currentWikiKbId.value = kbId;
+    const res = await getWikiPage(kbId, slug);
+    wikiDrawerPage.value = (res as any).data || res as any;
+    wikiDrawerVisible.value = true;
+  } catch (e) {
+    console.error(`Failed to load page ${slug}:`, e);
+    MessagePlugin.warning(t('agentStream.citation.loadFailed'));
+  }
+};
+
+const navigateToWikiGraph = () => {
+  if (currentWikiKbId.value && wikiDrawerPage.value?.slug) {
+    wikiDrawerVisible.value = false;
+    try {
+      router.push(`/platform/knowledge-bases/${currentWikiKbId.value}?tab=graph&slug=${encodeURIComponent(wikiDrawerPage.value.slug)}`);
+    } catch (error) {
+      console.error('Failed to navigate to wiki graph:', error);
+    }
+  }
+};
+
+const handleWikiDrawerClick = (e: MouseEvent) => {
+  const target = e.target as HTMLElement;
+  if (target.closest('.citation-wiki')) {
+    e.preventDefault();
+    e.stopPropagation();
+    const slug = target.closest('.citation-wiki')?.getAttribute('data-slug');
+    if (slug) openWikiDrawer(currentWikiKbId.value, slug);
+  } else if (target.tagName.toLowerCase() === 'img') {
+    e.preventDefault();
+    const src = target.getAttribute('src');
+    if (src) openImagePreview(src);
+  } else {
+    // allow link navigation inside drawer
+    const aEl = target.closest?.('a') as HTMLAnchorElement | null;
+    // @ts-ignore
+    if (aEl && aEl.href && window.runtime && window.runtime.BrowserOpenURL) {
+      if (aEl.href.startsWith('http://') || aEl.href.startsWith('https://')) {
+        e.preventDefault();
+        // @ts-ignore
+        window.runtime.BrowserOpenURL(aEl.href);
+      }
+    }
+  }
 };
 
 // 浮层状态（Web/KB 共用）
@@ -1046,13 +1181,14 @@ type KbTooltipState = {
 
 const kbChunkDetails = ref<Record<string, KbTooltipState>>({});
 
-const escapeHtml = (value: string): string =>
-  value
+function escapeHtml(value: string): string {
+  return value
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
 
 const buildKbTooltipContent = (content: string): string => {
   const escapedContent = escapeHtml(content).replace(/\n/g, '<br>');
@@ -1288,11 +1424,7 @@ const onRootClick = (e: Event) => {
     const kbId = getKbIdForWiki(slug);
     
     if (kbId && slug) {
-      try {
-        router.push(`/platform/knowledge-bases/${kbId}?tab=wiki&slug=${encodeURIComponent(slug)}`);
-      } catch (error) {
-        console.error('Failed to navigate to wiki page:', error);
-      }
+      openWikiDrawer(kbId, slug);
     } else {
       MessagePlugin.warning(t('agentStream.citation.noKbForWiki'));
     }
@@ -1353,11 +1485,7 @@ const onRootKeydown = (e: KeyboardEvent) => {
       const kbId = getKbIdForWiki(slug || '');
       
       if (kbId && slug) {
-        try {
-          router.push(`/platform/knowledge-bases/${kbId}?tab=wiki&slug=${encodeURIComponent(slug)}`);
-        } catch (error) {
-          console.error('Failed to navigate to wiki page:', error);
-        }
+        openWikiDrawer(kbId, slug);
       } else {
         MessagePlugin.warning(t('agentStream.citation.noKbForWiki'));
       }
@@ -2042,18 +2170,6 @@ const handleAddToKnowledge = (answerEvent: any) => {
   gap: 0;
   margin-bottom: 10px;
   position: relative;
-}
-
-:deep(a.wiki-content-link) {
-  color: var(--td-brand-color);
-  text-decoration: none;
-  border-bottom: 1px dashed var(--td-brand-color);
-  cursor: pointer;
-  font-weight: 500;
-  &:hover {
-    border-bottom-style: solid;
-    text-decoration: none !important;
-  }
 }
 
 // Streaming steps container
@@ -3150,6 +3266,114 @@ const handleAddToKnowledge = (answerEvent: any) => {
 </style>
 
 <style lang="less">
+/* Global styles for teleported components */
+
+.wiki-graph-drawer {
+  box-shadow: -4px 0 16px rgba(0, 0, 0, 0.08);
+
+  .wiki-reader-meta {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .wiki-reader-meta-text {
+    font-size: 13px;
+    color: var(--td-text-color-placeholder);
+  }
+
+  .wiki-reader-body {
+    line-height: 1.6;
+    font-size: 14px;
+    color: var(--td-text-color-primary);
+
+    h1 { font-size: 24px; margin: 28px 0 16px; font-weight: 600; line-height: 1.4; }
+    h2 { font-size: 18px; margin: 24px 0 12px; font-weight: 600; line-height: 1.4; }
+    h3 { font-size: 16px; margin: 20px 0 10px; font-weight: 600; line-height: 1.5; }
+    h4, h5, h6 { font-size: 14px; margin: 16px 0 8px; font-weight: 600; line-height: 1.5; }
+    
+    p { margin: 0 0 14px; }
+    
+    ul, ol { 
+      margin: 0 0 14px; 
+      padding-left: 24px; 
+    }
+    li { 
+      margin-bottom: 6px; 
+      line-height: 1.6;
+    }
+    li > p {
+      margin-bottom: 6px;
+    }
+
+    blockquote {
+      margin: 0 0 14px;
+      padding: 10px 16px;
+      background: var(--td-bg-color-secondarycontainer);
+      border-left: 4px solid var(--td-component-border);
+      border-radius: 0 4px 4px 0;
+      color: var(--td-text-color-secondary);
+    }
+    
+    code {
+      font-family: monospace;
+      font-size: 13px;
+      padding: 2px 4px;
+      background: var(--td-bg-color-secondarycontainer);
+      border-radius: 4px;
+      color: var(--td-brand-color);
+    }
+    
+    pre {
+      margin: 0 0 14px;
+      padding: 12px 16px;
+      background: var(--td-bg-color-secondarycontainer);
+      border-radius: 6px;
+      overflow-x: auto;
+      
+      code {
+        padding: 0;
+        background: transparent;
+        color: inherit;
+      }
+    }
+
+    p:has(img) {
+      text-align: center;
+      color: var(--td-text-color-secondary);
+      font-size: 13px;
+      margin-top: 16px;
+      margin-bottom: 24px;
+      
+      img {
+        max-width: 100%;
+        max-height: 400px;
+        object-fit: contain;
+        border-radius: 6px;
+        display: block;
+        margin: 0 auto 8px;
+        cursor: zoom-in;
+        transition: opacity 0.2s;
+        
+        &:hover {
+          opacity: 0.9;
+        }
+      }
+    }
+
+    a.wiki-content-link {
+      color: var(--td-brand-color);
+      text-decoration: none;
+      border-bottom: 1px dashed var(--td-brand-color);
+      cursor: pointer;
+      font-weight: 500;
+      &:hover {
+        border-bottom-style: solid;
+        text-decoration: none !important;
+      }
+    }
+  }
+}
 // Dark mode: invert agent icon (uses currentColor which doesn't work in <img>)
 html[theme-mode="dark"] .tree-root-title img {
   filter: invert(1);
