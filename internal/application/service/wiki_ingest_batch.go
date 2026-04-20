@@ -381,7 +381,7 @@ func (s *wikiIngestService) mapOneDocument(
 		return nil, nil, nil
 	}
 
-	content := reconstructContent(chunks)
+	content := reconstructEnrichedContent(ctx, s.chunkRepo, payload.TenantID, chunks)
 	rawRuneCount := len([]rune(content))
 	if len([]rune(content)) > maxContentForWiki {
 		content = string([]rune(content)[:maxContentForWiki])
@@ -538,14 +538,22 @@ func (s *wikiIngestService) extractEntitiesAndConceptsNoUpsert(
 	oldPageSlugs map[string]bool,
 	batchCtx *WikiBatchContext,
 ) ([]extractedItem, []extractedItem, map[string]extractedItem, error) {
+	// Only entity/* and concept/* slugs are relevant for LLM slug-continuity —
+	// summary slugs are code-generated from the document title and never appear
+	// in the extraction output, so including them just wastes tokens and risks
+	// confusing the model.
 	var prevSlugsText string
 	if len(oldPageSlugs) > 0 {
 		var sb strings.Builder
 		for slug := range oldPageSlugs {
+			if !strings.HasPrefix(slug, "entity/") && !strings.HasPrefix(slug, "concept/") {
+				continue
+			}
 			fmt.Fprintf(&sb, "- %s\n", slug)
 		}
 		prevSlugsText = sb.String()
-	} else {
+	}
+	if prevSlugsText == "" {
 		prevSlugsText = "(none — this is a new document)"
 	}
 
@@ -756,9 +764,27 @@ func (s *wikiIngestService) reduceSlugUpdates(
 			hasRetractionsStr = "1"
 		}
 
+		// Fall back gracefully if title/type are still unset (shouldn't happen
+		// for well-formed updates — both get populated from `additions` above,
+		// and retract-only paths require an existing page — but stay defensive
+		// so we never feed the LLM an empty identity block).
+		pageTitle := page.Title
+		if pageTitle == "" {
+			pageTitle = slug
+		}
+		pageType := string(page.PageType)
+		if pageType == "" {
+			pageType = "wiki page"
+		}
+		pageAliases := strings.Join(page.Aliases, ", ")
+
 		updatedContent, err := s.generateWithTemplate(ctx, chatModel, agent.WikiPageModifyPrompt, map[string]string{
 			"HasAdditions":            hasAdditionsStr,
 			"HasRetractions":          hasRetractionsStr,
+			"PageSlug":                slug,
+			"PageTitle":               pageTitle,
+			"PageType":                pageType,
+			"PageAliases":             pageAliases,
 			"ExistingContent":         existingContent,
 			"NewContent":              newContentBuilder.String(),
 			"DeletedContent":          deletedContent.String(),

@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/Tencent/WeKnora/internal/searchutil"
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
 )
@@ -50,6 +51,41 @@ If neither query nor range is provided, it returns the beginning of the document
 		),
 		knowledgeService: knowledgeService,
 		chunkService:     chunkService,
+	}
+}
+
+// enrichChunkImageInfo populates chunk.ImageInfo for a batch of parent text
+// chunks by looking up their image_ocr / image_caption children. Chunks that
+// already have a non-empty ImageInfo are left untouched.
+func enrichChunkImageInfo(
+	ctx context.Context,
+	chunkRepo interfaces.ChunkRepository,
+	tenantID uint64,
+	chunks []*types.Chunk,
+) {
+	if len(chunks) == 0 || chunkRepo == nil {
+		return
+	}
+	ids := make([]string, 0, len(chunks))
+	for _, c := range chunks {
+		if c.ImageInfo == "" && c.ID != "" {
+			ids = append(ids, c.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	infoMap := searchutil.CollectImageInfoByChunkIDs(ctx, chunkRepo, tenantID, ids)
+	if len(infoMap) == 0 {
+		return
+	}
+	for _, c := range chunks {
+		if c.ImageInfo != "" {
+			continue
+		}
+		if merged, ok := infoMap[c.ID]; ok && merged != "" {
+			c.ImageInfo = merged
+		}
 	}
 }
 
@@ -163,6 +199,12 @@ func (t *wikiReadSourceDocTool) Execute(ctx context.Context, args json.RawMessag
 		if len(chunks) == 0 {
 			break
 		}
+
+		// Lazily enrich ImageInfo from image_ocr / image_caption child chunks.
+		// Parent text chunks don't carry image_info themselves (see
+		// image_multimodal.go); without this the source-doc reader would
+		// silently drop OCR text and captions for image-heavy documents.
+		enrichChunkImageInfo(ctx, t.chunkService.GetRepository(), knowledge.TenantID, chunks)
 
 		for _, c := range chunks {
 			chunkNum := c.ChunkIndex + 1

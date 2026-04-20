@@ -115,6 +115,15 @@ Output ONLY valid JSON. Example:
 // WikiPageModifyPrompt updates an existing wiki page with new additions and removes stale/deleted information in a single pass.
 const WikiPageModifyPrompt = `You are a wiki editor tasked with updating an existing wiki page. You must process a set of NEW information to add, AND/OR a set of deleted documents whose exclusive contributions must be REMOVED.
 
+<page_metadata>
+  <slug>{{.PageSlug}}</slug>
+  <title>{{.PageTitle}}</title>
+  <type>{{.PageType}}</type>{{if .PageAliases}}
+  <aliases>{{.PageAliases}}</aliases>{{end}}
+</page_metadata>
+
+This wiki page is specifically about **{{.PageTitle}}** (a {{.PageType}}). Every statement on the page MUST be directly about this exact {{.PageType}} — not about related, adjacent, or similarly-named things.
+
 <existing_page_content>
 {{.ExistingContent}}
 </existing_page_content>
@@ -146,15 +155,15 @@ const WikiPageModifyPrompt = `You are a wiki editor tasked with updating an exis
 {{end}}
 {{if .HasAdditions}}
 3. ADD and MERGE the facts, details, and context from the <new_information> into the page.
-   - **CRITICAL CONFLICT CHECK**: First verify that the <new_information> describes the EXACT SAME core entity/concept as this page. If the new info clearly belongs to a DIFFERENT but related product/entity (e.g., this page is about "Hunyuan Model" but the new info is about "Qwen3"), you MUST REJECT that part of the new information and DO NOT add it.
-   - If it is the same core entity and contradicts old content, prefer the newer information.
+   - **CRITICAL CONFLICT CHECK**: First verify that the <new_information> is actually about **{{.PageTitle}}** (as declared in <page_metadata>). If a piece of new info clearly belongs to a DIFFERENT but related thing (e.g., this page is about "Hunyuan Model" but the new info is about "Qwen3"; or this page is about "居民身份证" but the new info is about "工作居住证"), you MUST REJECT that part of the new information and DO NOT add it.
+   - If it is genuinely about {{.PageTitle}} and contradicts old content, prefer the newer information.
 {{end}}
-4. Preserve existing information that is still valid.
-5. Keep [[slug|name]] wiki-link references ONLY if the slug appears in the <valid_wiki_links> list above. Remove any [[slug|name]] whose slug is NOT in that list. Do NOT invent new wiki-link slugs.
-6. Maintain the existing page structure and formatting style.
+4. Preserve existing information that is still valid and still about {{.PageTitle}}.
+5. Keep [[slug|name]] wiki-link references ONLY if the slug appears in the <valid_wiki_links> list above. Remove any [[slug|name]] whose slug is NOT in that list. Do NOT invent new wiki-link slugs. The page's own slug ({{.PageSlug}}) MUST NOT appear as a [[...]] link inside its own content.
+6. Maintain the existing page structure and formatting style. Use "# {{.PageTitle}}" as the top-level heading if the page does not already have one.
 7. **Image rule**: Include relevant images using Markdown syntax: ![caption](url) from new information if applicable.
 {{if .HasRetractions}}
-8. If after removing deleted content the page becomes nearly empty and there is no new information to add, output just: "SUMMARY: (empty page)\n# [Title]\n\n*This page's primary source document was removed.*"
+8. If after removing deleted content the page becomes nearly empty and there is no new information to add, output just: "SUMMARY: (empty page)\n# {{.PageTitle}}\n\n*This page's primary source document was removed.*"
 {{end}}
 9. Write in {{.Language}}.
 </instructions>
@@ -243,8 +252,11 @@ const WikiDeduplicationPrompt = `You are a strict deduplication system. Given a 
 - "Competition Categories" → "Age Groups" (age groups are one aspect of categories, not the same concept)
 - "Performance Standard" → "Competition Rounds" (both relate to competitions, but are different concepts)
 - "Machine Learning" → "Neural Networks" (neural networks are a subset of ML, not the same concept)
+- "居民身份证 / Resident ID Card" → "工作居住证 / Work Residence Permit" (both are government-issued documents but completely different credentials)
+- "驾驶证 / Driver's License" → "行驶证 / Vehicle Registration" (both are car-related certificates but different documents)
+- "学位证 / Degree Certificate" → "毕业证 / Graduation Certificate" (both educational documents but distinct)
 
-### Key principle: **related ≠ same**. **ABSOLUTELY DO NOT** merge different products, different companies, or different versions just because they belong to the same industry. When in doubt, do NOT merge. It is far better to have two separate pages for the same thing than to wrongly merge two different things.
+### Key principle: **related ≠ same**. Two items sharing a few characters in their name, or belonging to the same domain / document family / industry, is NOT a reason to merge. **ABSOLUTELY DO NOT** merge different products, different companies, different versions, or different certificates/documents just because they belong to the same category. When in doubt, do NOT merge. It is far better to have two separate pages for the same thing than to wrongly merge two different things.
 
 Return a JSON object with a "merges" map. The key is the NEW item's slug, the value is the EXISTING page's slug that it should merge into. Only include items where you are highly confident they are the same thing.
 

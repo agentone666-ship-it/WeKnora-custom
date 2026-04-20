@@ -12,6 +12,7 @@ import (
 	"github.com/Tencent/WeKnora/internal/agent"
 	"github.com/Tencent/WeKnora/internal/logger"
 	"github.com/Tencent/WeKnora/internal/models/chat"
+	"github.com/Tencent/WeKnora/internal/searchutil"
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
 	"github.com/hibiken/asynq"
@@ -718,6 +719,32 @@ func (s *wikiIngestService) publishDraftPages(ctx context.Context, kbID string, 
 	}
 }
 
+// writeDedupItemXML renders a single entity/concept entry as a structured XML
+// block for the deduplication prompt. Structured form (versus a single
+// pipe-separated line) helps the LLM reliably tell name / aliases / type apart
+// and reduces nonsensical merges like "居民身份证" → "工作居住证".
+func writeDedupItemXML(buf *strings.Builder, slug, name, itemType string, aliases []string) {
+	fmt.Fprintf(buf, "  <item slug=%q type=%q>\n", slug, itemType)
+	fmt.Fprintf(buf, "    <name>%s</name>\n", xmlEscape(name))
+	for _, alias := range aliases {
+		if alias == "" {
+			continue
+		}
+		fmt.Fprintf(buf, "    <alias>%s</alias>\n", xmlEscape(alias))
+	}
+	buf.WriteString("  </item>\n")
+}
+
+// xmlEscape escapes the minimal set of characters that can break XML text
+// content. Slugs are ASCII-only so they don't need escaping when used as
+// attribute values.
+func xmlEscape(s string) string {
+	s = strings.ReplaceAll(s, "&", "&amp;")
+	s = strings.ReplaceAll(s, "<", "&lt;")
+	s = strings.ReplaceAll(s, ">", "&gt;")
+	return s
+}
+
 // deduplicateExtractedBatch deduplicates both entities and concepts against
 // existing wiki pages in a single LLM call. Uses pre-loaded allPages to avoid
 // redundant DB queries. This replaces the two separate deduplicateItems calls
@@ -737,11 +764,7 @@ func (s *wikiIngestService) deduplicateExtractedBatch(
 		if p.PageType != types.WikiPageTypeEntity && p.PageType != types.WikiPageTypeConcept {
 			continue
 		}
-		aliases := ""
-		if len(p.Aliases) > 0 {
-			aliases = fmt.Sprintf(" | aliases: %s", strings.Join(p.Aliases, ", "))
-		}
-		fmt.Fprintf(&existingBuf, "- slug: %s | title: %s | type: %s%s\n", p.Slug, p.Title, p.PageType, aliases)
+		writeDedupItemXML(&existingBuf, p.Slug, p.Title, string(p.PageType), []string(p.Aliases))
 	}
 	if existingBuf.Len() == 0 {
 		return entities, concepts
@@ -749,18 +772,10 @@ func (s *wikiIngestService) deduplicateExtractedBatch(
 
 	var newBuf strings.Builder
 	for _, item := range entities {
-		aliases := ""
-		if len(item.Aliases) > 0 {
-			aliases = fmt.Sprintf(" | aliases: %s", strings.Join(item.Aliases, ", "))
-		}
-		fmt.Fprintf(&newBuf, "- slug: %s | name: %s | type: entity%s\n", item.Slug, item.Name, aliases)
+		writeDedupItemXML(&newBuf, item.Slug, item.Name, "entity", item.Aliases)
 	}
 	for _, item := range concepts {
-		aliases := ""
-		if len(item.Aliases) > 0 {
-			aliases = fmt.Sprintf(" | aliases: %s", strings.Join(item.Aliases, ", "))
-		}
-		fmt.Fprintf(&newBuf, "- slug: %s | name: %s | type: concept%s\n", item.Slug, item.Name, aliases)
+		writeDedupItemXML(&newBuf, item.Slug, item.Name, "concept", item.Aliases)
 	}
 
 	dedupeJSON, err := s.generateWithTemplate(ctx, chatModel, agent.WikiDeduplicationPrompt, map[string]string{
@@ -850,7 +865,14 @@ func (s *wikiIngestService) generateWithTemplate(ctx context.Context, chatModel 
 
 // --- Helpers ---
 
-// reconstructContent rebuilds document text from chunks
+// reconstructContent rebuilds document text from chunks.
+//
+// This only concatenates text-type chunks — image OCR / caption information is
+// stored on image_ocr / image_caption child chunks (see image_multimodal.go),
+// not on the parent text chunk's ImageInfo field. Callers that need the full
+// enriched content (with OCR / captions inlined) should call
+// reconstructEnrichedContent instead so image info is fetched from child
+// chunks and embedded alongside Markdown image links.
 func reconstructContent(chunks []*types.Chunk) string {
 	var textChunks []*types.Chunk
 	for _, c := range chunks {
@@ -899,50 +921,41 @@ func reconstructContent(chunks []*types.Chunk) string {
 		// If c.EndAt <= lastEndAt, it's fully contained, so skip appending text
 	}
 
-	// Append image information at the end to avoid interrupting text flow
-	var hasImages bool
-	seenURLs := make(map[string]bool)
-	for _, c := range textChunks {
-		if c.ImageInfo != "" {
-			var imageInfos []types.ImageInfo
-			if err := json.Unmarshal([]byte(c.ImageInfo), &imageInfos); err == nil && len(imageInfos) > 0 {
-				for _, img := range imageInfos {
-					// Deduplicate images by URL to avoid printing the same image multiple times from overlapping chunks
-					if img.URL != "" {
-						if seenURLs[img.URL] {
-							continue
-						}
-						seenURLs[img.URL] = true
-					}
+	return sb.String()
+}
 
-					if !hasImages {
-						sb.WriteString("\n\n<images>\n")
-						hasImages = true
-					} else {
-						sb.WriteString("\n")
-					}
+// reconstructEnrichedContent rebuilds document text and inlines image_info
+// (OCR text + caption) pulled from image_ocr / image_caption child chunks.
+//
+// Without this enrichment, image-heavy documents (e.g. a scanned PDF or a
+// standalone .jpg) reach the LLM as bare Markdown image links, causing
+// extraction / summarization to produce empty or "no textual content" output.
+func reconstructEnrichedContent(
+	ctx context.Context,
+	chunkRepo interfaces.ChunkRepository,
+	tenantID uint64,
+	chunks []*types.Chunk,
+) string {
+	content := reconstructContent(chunks)
 
-					sb.WriteString("<image>\n")
-					if img.URL != "" {
-						sb.WriteString(fmt.Sprintf("  <url>%s</url>\n", img.URL))
-					}
-					if img.Caption != "" {
-						sb.WriteString(fmt.Sprintf("  <caption>%s</caption>\n", img.Caption))
-					}
-					if img.OCRText != "" {
-						sb.WriteString(fmt.Sprintf("  <ocr_text>%s</ocr_text>\n", img.OCRText))
-					}
-					sb.WriteString("</image>\n")
-				}
+	var textChunkIDs []string
+	for _, c := range chunks {
+		if c.ChunkType == types.ChunkTypeText || c.ChunkType == "" {
+			if c.ID != "" {
+				textChunkIDs = append(textChunkIDs, c.ID)
 			}
 		}
 	}
-
-	if hasImages {
-		sb.WriteString("</images>\n")
+	if len(textChunkIDs) == 0 || chunkRepo == nil {
+		return content
 	}
 
-	return sb.String()
+	imageInfoMap := searchutil.CollectImageInfoByChunkIDs(ctx, chunkRepo, tenantID, textChunkIDs)
+	mergedImageInfo := searchutil.MergeImageInfoJSON(imageInfoMap)
+	if mergedImageInfo == "" {
+		return content
+	}
+	return searchutil.EnrichContentWithImageInfo(content, mergedImageInfo)
 }
 
 // slugify creates a URL-friendly slug from a string
