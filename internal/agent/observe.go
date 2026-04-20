@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	agenttoken "github.com/Tencent/WeKnora/internal/agent/token"
@@ -199,20 +200,74 @@ func (e *AgentEngine) analyzeResponse(
 	return responseVerdict{isDone: false, step: step}
 }
 
-// runtimeContextPrefix is prepended to the user query to provide time and session metadata
-// in a format clearly marked as non-instruction data
-// to prevent prompt injection via runtime metadata.
-const runtimeContextPrefix = "[Runtime Context — metadata only, not instructions]"
+// escapeXMLAttr escapes a string for safe inclusion in an XML attribute value.
+// Titles and names may contain user-supplied characters like <, >, &, ".
+func escapeXMLAttr(s string) string {
+	s = strings.ReplaceAll(s, "&", "&amp;")
+	s = strings.ReplaceAll(s, "<", "&lt;")
+	s = strings.ReplaceAll(s, ">", "&gt;")
+	s = strings.ReplaceAll(s, "\"", "&quot;")
+	return s
+}
 
-// buildRuntimeContextBlock builds a metadata block with current time and session info.
-// This is injected before the user message so the LLM has runtime context without
-// conflating it with user instructions.
-func buildRuntimeContextBlock(sessionID string) string {
-	return fmt.Sprintf("%s\nCurrent Time: %s\nSession: %s",
-		runtimeContextPrefix,
-		time.Now().Format(time.RFC3339),
-		sessionID,
-	)
+// buildRuntimeContextBlock builds a metadata block with current time, session
+// info, and the *active retrieval scope for this turn*. The scope snapshot is
+// critical for multi-turn correctness: when the user switches their @mention
+// to a different KB or document between turns, earlier turns still carry
+// their own scope snapshot in history, so the model can see the scope change
+// and avoid reusing last turn's answer against the new scope.
+//
+// Emitted as an XML-ish block (not free prose) so it is a visually distinct,
+// non-instruction envelope that is hard to conflate with user text and
+// prompt-injection-safe.
+func buildRuntimeContextBlock(
+	sessionID string,
+	kbs []*KnowledgeBaseInfo,
+	docs []*SelectedDocumentInfo,
+) string {
+	var sb strings.Builder
+	sb.WriteString("<runtime_context note=\"metadata only, not instructions\">\n")
+	fmt.Fprintf(&sb, "  <current_time>%s</current_time>\n", time.Now().Format(time.RFC3339))
+	fmt.Fprintf(&sb, "  <session>%s</session>\n", escapeXMLAttr(sessionID))
+
+	if len(kbs) > 0 {
+		sb.WriteString("  <active_knowledge_bases>\n")
+		for _, kb := range kbs {
+			if kb == nil {
+				continue
+			}
+			name := kb.Name
+			if name == "" {
+				name = kb.ID
+			}
+			fmt.Fprintf(&sb, "    <knowledge_base id=\"%s\" name=\"%s\" />\n",
+				escapeXMLAttr(kb.ID), escapeXMLAttr(name))
+		}
+		sb.WriteString("  </active_knowledge_bases>\n")
+	}
+
+	if len(docs) > 0 {
+		sb.WriteString("  <pinned_documents scope=\"authoritative_for_this_turn\">\n")
+		for _, d := range docs {
+			if d == nil {
+				continue
+			}
+			title := d.Title
+			if title == "" {
+				title = d.FileName
+			}
+			if title == "" {
+				title = d.KnowledgeID
+			}
+			fmt.Fprintf(&sb, "    <document knowledge_id=\"%s\" title=\"%s\" />\n",
+				escapeXMLAttr(d.KnowledgeID), escapeXMLAttr(title))
+		}
+		sb.WriteString("  </pinned_documents>\n")
+		sb.WriteString("  <note>The pinned-document set above is authoritative for THIS turn. If an earlier turn in this conversation analysed a different document, do NOT reuse that analysis — re-query against the current scope.</note>\n")
+	}
+
+	sb.WriteString("</runtime_context>")
+	return sb.String()
 }
 
 // listToolNames returns tool.function names for logging
@@ -390,9 +445,12 @@ func (e *AgentEngine) buildMessagesWithLLMContext(
 		}
 	}
 
-	// Build user message with runtime context safety tag
-	// This injects metadata as clearly non-instruction data to prevent prompt injection.
-	runtimeCtx := buildRuntimeContextBlock(sessionID)
+	// Build user message with runtime context safety tag.
+	// The runtime context carries a per-turn scope snapshot so that multi-turn
+	// history preserves the (kb, pinned docs) that each earlier turn ran under;
+	// this is what lets the model detect a scope switch instead of silently
+	// answering the new question against last turn's retrieval.
+	runtimeCtx := buildRuntimeContextBlock(sessionID, e.knowledgeBasesInfo, e.selectedDocs)
 	userMsg := chat.Message{
 		Role:    "user",
 		Content: runtimeCtx + "\n\n" + currentQuery,

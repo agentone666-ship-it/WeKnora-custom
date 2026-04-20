@@ -97,6 +97,35 @@ func isStructuralPage(page *types.WikiPage) bool {
 	return false
 }
 
+// registerLinkedSlugs records the KB that owns this page for every slug the
+// page links to (outbound) or is linked from (inbound). Wiki links are
+// KB-local — a `[[slug]]` inside page X in KB A always refers to another
+// page in KB A — so sharing the KB mapping with neighbours is safe and lets
+// the frontend resolve a slug the model echoed from a page body (e.g. an
+// `index` page's table of contents) without an extra round trip.
+func registerLinkedSlugs(foundKBs map[string][]string, page *types.WikiPage, kbID string) {
+	if page == nil || kbID == "" {
+		return
+	}
+	add := func(slug string) {
+		if slug == "" {
+			return
+		}
+		for _, existing := range foundKBs[slug] {
+			if existing == kbID {
+				return
+			}
+		}
+		foundKBs[slug] = append(foundKBs[slug], kbID)
+	}
+	for _, s := range page.OutLinks {
+		add(s)
+	}
+	for _, s := range page.InLinks {
+		add(s)
+	}
+}
+
 // pageIntersectsKnowledgeIDs reports whether the page should pass the
 // knowledge-ID scope filter.
 //
@@ -331,6 +360,10 @@ func (t *wikiReadPageTool) Execute(ctx context.Context, args json.RawMessage) (*
 				kbID string
 			}{page, actualKBID})
 			foundKBs[slug] = append(foundKBs[slug], actualKBID)
+			// Also register the page's neighbours so that when the model
+			// echoes a link like `[[summary/xyz]]` from this page's body,
+			// the frontend can resolve it to the same KB without guessing.
+			registerLinkedSlugs(foundKBs, page, actualKBID)
 			t.mu.Lock()
 			t.seenLinks[seenLinkKey(actualKBID, slug)] = true
 			t.mu.Unlock()
@@ -510,6 +543,9 @@ func (t *wikiSearchTool) Execute(ctx context.Context, args json.RawMessage) (*ty
 				}
 				allHits = append(allHits, searchHit{page: p, kbID: actualKBID})
 				foundKBs[p.Slug] = append(foundKBs[p.Slug], actualKBID)
+				// Register neighbour slugs so links surfaced from this
+				// page's body can be routed to the same KB by the frontend.
+				registerLinkedSlugs(foundKBs, p, actualKBID)
 			}
 		}
 		_ = filteredCount // reserved for future debug surface

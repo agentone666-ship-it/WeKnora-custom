@@ -1346,15 +1346,31 @@ const onHoverOut = (e: Event) => {
 const getKbIdForWiki = (slug: string): string => {
   if (route.params.kbId) return route.params.kbId as string;
 
-  // Try to extract from agent event stream (retrieval pipeline)
+  // The backend ships `found_kbs` as a map<slug, string[]> — a single slug can
+  // legitimately resolve to more than one KB when multiple wiki KBs are in
+  // scope. For navigation we just pick the first one; cross-KB disambiguation
+  // (if ever needed) can layer on top. We also defensively handle the legacy
+  // string shape in case older tool outputs are still cached in a session.
+  const pickKbId = (v: unknown): string => {
+    if (!v) return '';
+    if (typeof v === 'string') return v;
+    if (Array.isArray(v)) {
+      for (const item of v) {
+        if (typeof item === 'string' && item) return item;
+      }
+    }
+    return '';
+  };
+
+  // Try to extract from agent event stream (retrieval pipeline). Walk
+  // backwards so we prefer the most recent tool call's mapping.
   if (props.session?.agentEventStream) {
-    // Search backwards for the most recent wiki tool call that found this slug
     for (let i = props.session.agentEventStream.length - 1; i >= 0; i--) {
       const event = props.session.agentEventStream[i];
-      if (event.type === 'tool_call' && event.tool_data?.found_kbs) {
-        if (event.tool_data.found_kbs[slug]) {
-          return event.tool_data.found_kbs[slug];
-        }
+      const foundKbs = event?.tool_data?.found_kbs;
+      if (event.type === 'tool_call' && foundKbs) {
+        const hit = pickKbId(foundKbs[slug]);
+        if (hit) return hit;
       }
     }
   }
@@ -1624,10 +1640,13 @@ const preprocessMarkdown = (contentStr: string): string => {
           const parts = slug.split('/');
           display = parts.length > 1 ? parts.slice(1).join('/') : slug;
         }
-        
-        // Ensure it's a valid wiki slug format, containing at least one slash
-        if (!slug.includes('/')) return match;
-        
+
+        // Bail out on empty slug; otherwise accept any non-empty slug.
+        // Structural pages like "index" and "log" have no slash but are
+        // still valid targets — the drawer renderer already treats them
+        // as such, so the chat bubble must match.
+        if (!slug) return match;
+
         const safeSlug = escapeHtml(slug);
         const safeDisplay = escapeHtml(display);
         return `<a href="#" class="wiki-content-link citation-wiki" data-slug="${safeSlug}">${safeDisplay}</a>`;
