@@ -119,6 +119,13 @@ type CustomAgentConfig struct {
 	// When false, knowledge base retrieval happens according to KBSelectionMode
 	RetrieveKBOnlyWhenMentioned bool `yaml:"retrieve_kb_only_when_mentioned" json:"retrieve_kb_only_when_mentioned"`
 
+	// RetrievalPreference controls which retrieval tools the agent uses:
+	//   "auto"        - auto-detect from KB capabilities (default, preserves existing behavior)
+	//   "vector_only" - only use vector/keyword search tools, no wiki tools
+	//   "wiki_only"   - only use wiki tools, no vector/keyword search tools
+	//   "hybrid"      - use both vector/keyword search AND wiki tools
+	RetrievalPreference string `yaml:"retrieval_preference" json:"retrieval_preference"`
+
 	// Whether to retain retrieval history across turns
 	RetainRetrievalHistory bool `yaml:"retain_retrieval_history" json:"retain_retrieval_history"`
 
@@ -261,6 +268,9 @@ func (a *CustomAgent) EnsureDefaults() {
 	// Advanced settings defaults
 	if a.Config.FallbackStrategy == "" {
 		a.Config.FallbackStrategy = "model"
+	}
+	if a.Config.RetrievalPreference == "" {
+		a.Config.RetrievalPreference = "auto"
 	}
 	if a.Config.MaxCompletionTokens == 0 {
 		a.Config.MaxCompletionTokens = 2048

@@ -64,7 +64,13 @@ const checkKnowledgeBaseInitialization = async (): Promise<boolean> => {
         const kbResponse = await getKnowledgeBaseById(currentKbId);
         const kb = kbResponse.data;
         
-        if (!kb.embedding_model_id || !kb.summary_model_id) {
+        if (!kb.summary_model_id) {
+            MessagePlugin.warning(t('knowledgeBase.notInitialized'));
+            return false;
+        }
+        const strategy = kb.indexing_strategy;
+        const needsEmbedding = !strategy || strategy.vector_enabled || strategy.keyword_enabled;
+        if (needsEmbedding && !kb.embedding_model_id) {
             MessagePlugin.warning(t('knowledgeBase.notInitialized'));
             return false;
         }

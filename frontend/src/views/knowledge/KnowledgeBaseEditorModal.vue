@@ -52,6 +52,19 @@
                         </t-radio-group>
                         <p class="form-tip">{{ $t('knowledgeEditor.basic.typeDescription') }}</p>
                       </div>
+
+                      <!-- 索引策略 (紧跟类型选择) -->
+                      <div v-if="!isFAQ" class="form-item">
+                        <label class="form-label">{{ $t('knowledgeEditor.indexing.title') }}</label>
+                        <div class="indexing-checks">
+                          <t-checkbox
+                            :checked="formData.indexingStrategy.vectorEnabled"
+                            @change="(val: boolean) => { formData.indexingStrategy.vectorEnabled = val; formData.indexingStrategy.keywordEnabled = val; }"
+                          >{{ $t('knowledgeEditor.indexing.searchTitle') }}</t-checkbox>
+                          <t-checkbox v-model="formData.indexingStrategy.wikiEnabled">{{ $t('knowledgeEditor.indexing.wikiTitle') }}</t-checkbox>
+                        </div>
+                      </div>
+
                       <div class="form-item">
                         <label class="form-label required">{{ $t('knowledgeEditor.basic.nameLabel') }}</label>
                         <t-input 
@@ -62,13 +75,15 @@
                       </div>
                       <div class="form-item">
                         <label class="form-label">{{ $t('knowledgeEditor.basic.descriptionLabel') }}</label>
-                        <t-textarea 
-                          v-model="formData.description" 
+                        <t-textarea
+                          v-model="formData.description"
                           :placeholder="$t('knowledgeEditor.basic.descriptionPlaceholder')"
                           :maxlength="200"
                           :autosize="{ minRows: 3, maxRows: 6 }"
                         />
                       </div>
+
+                      <!-- Wiki 合成模型移至模型配置页 -->
                     </div>
                   </div>
                 </div>
@@ -80,6 +95,8 @@
                     v-if="formData"
                     :config="formData.modelConfig"
                     :has-files="hasFiles"
+                    :wiki-enabled="formData.indexingStrategy?.wikiEnabled"
+                    :rag-enabled="formData.indexingStrategy?.vectorEnabled || formData.indexingStrategy?.keywordEnabled"
                     :all-models="allModels"
                     @update:config="handleModelConfigUpdate"
                   />
@@ -120,72 +137,6 @@
                   </div>
                 </div>
 
-                <!-- Wiki 配置 -->
-                <div v-if="!isFAQ && formData" v-show="currentSection === 'wiki'" class="section">
-                  <div v-if="formData" class="kb-multimodal-settings">
-                    <div class="section-header">
-                      <h2>{{ $t('knowledgeEditor.wiki.title') }}</h2>
-                      <p class="section-description">{{ $t('knowledgeEditor.wiki.description') }}</p>
-                    </div>
-
-                    <div class="settings-group">
-                      <!-- Wiki 开关 -->
-                      <div class="setting-row">
-                        <div class="setting-info">
-                          <label>{{ $t('knowledgeEditor.wiki.enableLabel') }}</label>
-                          <p class="desc">{{ $t('knowledgeEditor.wiki.enableTip') }}</p>
-                        </div>
-                        <div class="setting-control">
-                          <t-switch v-model="formData.wikiConfig.enabled" size="medium" />
-                        </div>
-                      </div>
-
-                      <!-- 以下仅在 wiki 开启时显示 -->
-                      <template v-if="formData.wikiConfig.enabled">
-                        <!-- 自动 Ingest -->
-                        <div class="setting-row">
-                          <div class="setting-info">
-                            <label>{{ $t('knowledgeEditor.wiki.autoIngestLabel') }}</label>
-                            <p class="desc">{{ $t('knowledgeEditor.wiki.autoIngestTip') }}</p>
-                          </div>
-                          <div class="setting-control">
-                            <t-switch v-model="formData.wikiConfig.autoIngest" size="medium" />
-                          </div>
-                        </div>
-
-                        <!-- 合成模型 -->
-                        <div class="setting-row">
-                          <div class="setting-info">
-                            <label>{{ $t('knowledgeEditor.wiki.synthesisModelLabel') }}</label>
-                            <p class="desc">{{ $t('knowledgeEditor.wiki.synthesisModelTip') }}</p>
-                          </div>
-                          <div class="setting-control">
-                            <ModelSelector
-                              model-type="KnowledgeQA"
-                              :selected-model-id="formData.wikiConfig.synthesisModelId"
-                              :all-models="allModels"
-                              @update:selected-model-id="(val: string) => { if (formData) formData.wikiConfig.synthesisModelId = val }"
-                              @add-model="handleAddWikiModel"
-                              :placeholder="$t('knowledgeEditor.wiki.synthesisModelPlaceholder')"
-                            />
-                          </div>
-                        </div>
-
-                        <!-- 单次最大页面数 -->
-                        <div class="setting-row">
-                          <div class="setting-info">
-                            <label>{{ $t('knowledgeEditor.wiki.maxPagesLabel') }}</label>
-                            <p class="desc">{{ $t('knowledgeEditor.wiki.maxPagesTip') }}</p>
-                          </div>
-                          <div class="setting-control">
-                            <t-input-number v-model="formData.wikiConfig.maxPagesPerIngest" :min="0" :max="50" />
-                          </div>
-                        </div>
-                      </template>
-                    </div>
-                  </div>
-                </div>
-
                 <!-- 解析引擎 -->
                 <div v-if="!isFAQ && formData" v-show="currentSection === 'parser'" class="section">
                   <KBParserSettings
@@ -209,17 +160,6 @@
                     v-if="formData"
                     :config="formData.chunkingConfig"
                     @update:config="handleChunkingConfigUpdate"
-                  />
-                </div>
-
-                <!-- 图谱设置 -->
-                <div v-if="!isFAQ" v-show="currentSection === 'graph'" class="section">
-                  <GraphSettings
-                    v-if="formData"
-                    :graph-extract="formData.nodeExtractConfig"
-                    :model-id="formData.modelConfig.llmModelId"
-                    :all-models="allModels"
-                    @update:graphExtract="handleNodeExtractUpdate"
                   />
                 </div>
 
@@ -312,12 +252,24 @@
                   </div>
                 </div>
 
+                <!-- 知识图谱 -->
+                <div v-if="!isFAQ" v-show="currentSection === 'graph'" class="section">
+                  <GraphSettings
+                    v-if="formData"
+                    :graph-extract="formData.nodeExtractConfig"
+                    :model-id="formData.modelConfig.llmModelId"
+                    :all-models="allModels"
+                    @update:graphExtract="handleNodeExtractUpdate"
+                  />
+                </div>
+
                 <!-- 高级设置 -->
                 <div v-if="!isFAQ" v-show="currentSection === 'advanced'" class="section">
                   <KBAdvancedSettings
                     ref="advancedSettingsRef"
                     v-if="formData"
                     :question-generation="formData.questionGenerationConfig"
+                    :rag-enabled="formData.indexingStrategy?.vectorEnabled || formData.indexingStrategy?.keywordEnabled"
                     :all-models="allModels"
                     @update:question-generation="handleQuestionGenerationUpdate"
                   />
@@ -354,7 +306,7 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
 import { MessagePlugin, DialogPlugin } from 'tdesign-vue-next'
-import { createKnowledgeBase, getKnowledgeBaseById, listKnowledgeFiles, updateKnowledgeBase } from '@/api/knowledge-base'
+import { createKnowledgeBase, getKnowledgeBaseById, listKnowledgeFiles, updateKnowledgeBase, rebuildKBIndex } from '@/api/knowledge-base'
 import { updateKBConfig, type KBModelConfigRequest } from '@/api/initialization'
 import { listModels } from '@/api/model'
 import { useUIStore } from '@/stores/ui'
@@ -394,6 +346,7 @@ const loading = ref(false)
 const allModels = ref<any[]>([])
 const hasFiles = ref(false)
 const initialStorageProvider = ref<string>('')
+const initialIndexingStrategy = ref<any>(null)
 const dsCount = ref(0)
 
 const navItems = computed(() => {
@@ -411,7 +364,6 @@ const navItems = computed(() => {
       { key: 'storage', icon: 'cloud', label: t('knowledgeEditor.sidebar.storage') },
       { key: 'chunking', icon: 'file-copy', label: t('knowledgeEditor.sidebar.chunking') },
       { key: 'graph', icon: 'chart-bubble', label: t('knowledgeEditor.sidebar.graph') },
-      { key: 'wiki', icon: 'catalog', label: t('knowledgeEditor.sidebar.wiki') },
       { key: 'advanced', icon: 'setting', label: t('knowledgeEditor.sidebar.advanced') }
     )
     if (props.mode === 'edit' && props.kbId) {
@@ -461,7 +413,8 @@ const initFormData = (type: 'document' | 'faq' = 'document') => {
     },
     modelConfig: {
       llmModelId: '',
-      embeddingModelId: ''
+      embeddingModelId: '',
+      wikiSynthesisModelId: '',
     },
     chunkingConfig: {
       chunkSize: 512,
@@ -505,6 +458,12 @@ const initFormData = (type: 'document' | 'faq' = 'document') => {
       autoIngest: true,
       synthesisModelId: '',
       maxPagesPerIngest: 0,
+    },
+    indexingStrategy: {
+      vectorEnabled: true,
+      keywordEnabled: true,
+      wikiEnabled: false,
+      graphEnabled: false,
     },
   }
 }
@@ -552,7 +511,8 @@ const loadKBData = async () => {
       },
       modelConfig: {
         llmModelId: kb.summary_model_id || '',
-        embeddingModelId: kb.embedding_model_id || ''
+        embeddingModelId: kb.embedding_model_id || '',
+        wikiSynthesisModelId: kb.wiki_config?.synthesis_model_id || ''
       },
       chunkingConfig: {
         chunkSize: kb.chunking_config?.chunk_size || 512,
@@ -593,8 +553,15 @@ const loadKBData = async () => {
         synthesisModelId: kb.wiki_config?.synthesis_model_id || '',
         maxPagesPerIngest: kb.wiki_config?.max_pages_per_ingest || 0,
       },
+      indexingStrategy: {
+        vectorEnabled: kb.indexing_strategy?.vector_enabled ?? true,
+        keywordEnabled: kb.indexing_strategy?.keyword_enabled ?? true,
+        wikiEnabled: kb.indexing_strategy?.wiki_enabled ?? false,
+        graphEnabled: kb.indexing_strategy?.graph_enabled ?? false,
+      },
     }
     initialStorageProvider.value = formData.value.storageProvider
+    initialIndexingStrategy.value = { ...formData.value.indexingStrategy }
   } catch (error) {
     console.error('Failed to load knowledge base data:', error)
     MessagePlugin.error(t('knowledgeEditor.messages.loadDataFailed'))
@@ -676,9 +643,20 @@ const validateForm = (): boolean => {
     return false
   }
 
-  // 验证模型配置 - 必须配置 embedding 和 summary 模型
-  if (!formData.value.modelConfig.embeddingModelId) {
-    MessagePlugin.warning(t('knowledgeEditor.messages.embeddingRequired'))
+  // 验证索引策略 — 文档类型至少需要开启一种
+  if (formData.value.type !== 'faq') {
+    const s = formData.value.indexingStrategy
+    if (s && !s.vectorEnabled && !s.keywordEnabled && !s.wikiEnabled && !s.graphEnabled) {
+      MessagePlugin.warning(t('knowledgeEditor.indexing.atLeastOne'))
+      currentSection.value = 'basic'
+      return false
+    }
+  }
+
+  // 验证模型配置 - embedding 模型仅在检索索引启用时必须
+  const needsEmbedding = formData.value.indexingStrategy?.vectorEnabled || formData.value.indexingStrategy?.keywordEnabled
+  if (needsEmbedding && !formData.value.modelConfig.embeddingModelId) {
+    MessagePlugin.warning(t('knowledgeEditor.indexing.embeddingRequired'))
     currentSection.value = 'models'
     return false
   }
@@ -755,16 +733,8 @@ const buildSubmitData = () => {
     provider: formData.value.storageProvider || 'local'
   }
 
-  // 添加知识图谱配置
-  if (formData.value.nodeExtractConfig.enabled) {
-    data.extract_config = {
-      enabled: true,
-      text: formData.value.nodeExtractConfig.text,
-      tags: formData.value.nodeExtractConfig.tags,
-      nodes: formData.value.nodeExtractConfig.nodes,
-      relations: formData.value.nodeExtractConfig.relations
-    }
-  }
+  // 添加知识图谱配置 — now synced via indexingStrategy.graphEnabled
+  // extract_config is sent below along with indexing_strategy
 
   // 添加问题生成配置
   if (formData.value.questionGenerationConfig?.enabled) {
@@ -782,12 +752,34 @@ const buildSubmitData = () => {
   }
 
   // Always send wiki_config so enabled/disabled state is persisted
+  // Sync wiki_config.enabled from indexingStrategy.wikiEnabled
   if (formData.value.type !== 'faq') {
     data.wiki_config = {
-      enabled: formData.value.wikiConfig?.enabled ?? false,
+      enabled: formData.value.indexingStrategy?.wikiEnabled ?? false,
       auto_ingest: formData.value.wikiConfig?.autoIngest ?? true,
-      synthesis_model_id: formData.value.wikiConfig?.synthesisModelId || '',
+      synthesis_model_id: formData.value.modelConfig?.wikiSynthesisModelId || '',
       max_pages_per_ingest: formData.value.wikiConfig?.maxPagesPerIngest || 0,
+    }
+  }
+
+  // Send indexing strategy
+  if (formData.value.type !== 'faq') {
+    data.indexing_strategy = {
+      vector_enabled: formData.value.indexingStrategy?.vectorEnabled ?? true,
+      keyword_enabled: formData.value.indexingStrategy?.keywordEnabled ?? true,
+      wiki_enabled: formData.value.indexingStrategy?.wikiEnabled ?? false,
+      graph_enabled: formData.value.indexingStrategy?.graphEnabled ?? false,
+    }
+  }
+
+  // Sync extract_config.enabled from indexingStrategy.graphEnabled
+  if (formData.value.indexingStrategy?.graphEnabled && formData.value.nodeExtractConfig?.enabled) {
+    data.extract_config = {
+      enabled: true,
+      text: formData.value.nodeExtractConfig.text,
+      tags: formData.value.nodeExtractConfig.tags,
+      nodes: formData.value.nodeExtractConfig.nodes,
+      relations: formData.value.nodeExtractConfig.relations
     }
   }
 
@@ -859,10 +851,18 @@ const doSubmit = async () => {
       }
       if (formData.value.wikiConfig && formData.value.type !== 'faq') {
         updateConfig.wiki_config = {
-          enabled: formData.value.wikiConfig.enabled ?? false,
+          enabled: formData.value.indexingStrategy?.wikiEnabled ?? false,
           auto_ingest: formData.value.wikiConfig.autoIngest ?? true,
-          synthesis_model_id: formData.value.wikiConfig.synthesisModelId || '',
+          synthesis_model_id: formData.value.modelConfig?.wikiSynthesisModelId || '',
           max_pages_per_ingest: formData.value.wikiConfig.maxPagesPerIngest || 0,
+        }
+      }
+      if (formData.value.type !== 'faq') {
+        updateConfig.indexing_strategy = {
+          vector_enabled: formData.value.indexingStrategy?.vectorEnabled ?? true,
+          keyword_enabled: formData.value.indexingStrategy?.keywordEnabled ?? true,
+          wiki_enabled: formData.value.indexingStrategy?.wikiEnabled ?? false,
+          graph_enabled: formData.value.indexingStrategy?.graphEnabled ?? false,
         }
       }
       await updateKnowledgeBase(props.kbId, {
@@ -905,6 +905,41 @@ const doSubmit = async () => {
 
       await updateKBConfig(props.kbId, config)
       MessagePlugin.success(t('knowledgeEditor.messages.updateSuccess'))
+
+      // Check if indexing strategy changed and offer rebuild
+      if (hasFiles.value && initialIndexingStrategy.value && formData.value) {
+        const curr = formData.value.indexingStrategy
+        const prev = initialIndexingStrategy.value
+        const strategyChanged = (
+          curr.vectorEnabled !== prev.vectorEnabled ||
+          curr.keywordEnabled !== prev.keywordEnabled ||
+          curr.wikiEnabled !== prev.wikiEnabled ||
+          curr.graphEnabled !== prev.graphEnabled
+        )
+        if (strategyChanged) {
+          const dialog = DialogPlugin.confirm({
+            header: t('knowledgeEditor.indexing.rebuildConfirmTitle'),
+            body: t('knowledgeEditor.indexing.rebuildConfirmBody', { count: '...' }),
+            confirmBtn: t('common.confirm'),
+            cancelBtn: t('common.cancel'),
+            onConfirm: async () => {
+              dialog.destroy()
+              try {
+                const result: any = await rebuildKBIndex(props.kbId!)
+                const count = result?.data?.document_count ?? 0
+                MessagePlugin.success(t('knowledgeEditor.indexing.rebuildSuccess', { count }))
+              } catch (e) {
+                console.error('Rebuild index failed:', e)
+              }
+            },
+            onCancel: () => {
+              dialog.destroy()
+              MessagePlugin.info(t('knowledgeEditor.indexing.rebuildSkip'))
+            },
+          })
+        }
+      }
+
       emit('success', props.kbId)
     }
     
@@ -923,6 +958,7 @@ const resetState = () => {
   formData.value = null
   hasFiles.value = false
   initialStorageProvider.value = ''
+  initialIndexingStrategy.value = null
   saving.value = false
   loading.value = false
 }
@@ -1170,7 +1206,7 @@ watch(
 }
 
 .form-item {
-  margin-bottom: 20px;
+  margin-bottom: 16px;
 
   &:last-child {
     margin-bottom: 0;
@@ -1196,6 +1232,12 @@ watch(
   margin-top: 6px;
   font-size: 12px;
   color: var(--td-text-color-placeholder);
+}
+
+.indexing-checks {
+  display: flex;
+  gap: 24px;
+  flex-wrap: wrap;
 }
 
 .faq-guide {

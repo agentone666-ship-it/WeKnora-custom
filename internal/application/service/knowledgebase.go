@@ -297,6 +297,25 @@ func (s *knowledgeBaseService) UpdateKnowledgeBase(ctx context.Context,
 		if config.WikiConfig != nil {
 			kb.WikiConfig = config.WikiConfig
 		}
+		// Update indexing strategy — syncs to WikiConfig and ExtractConfig for backward compat
+		if config.IndexingStrategy != nil {
+			if !config.IndexingStrategy.HasAnyIndexing() {
+				return nil, errors.New("at least one indexing strategy must be enabled")
+			}
+			kb.IndexingStrategy = *config.IndexingStrategy
+			// Sync WikiEnabled → WikiConfig
+			if kb.WikiConfig != nil {
+				kb.WikiConfig.Enabled = config.IndexingStrategy.WikiEnabled
+			} else if config.IndexingStrategy.WikiEnabled {
+				kb.WikiConfig = &types.WikiConfig{Enabled: true, AutoIngest: true}
+			}
+			// Sync GraphEnabled → ExtractConfig
+			if kb.ExtractConfig != nil {
+				kb.ExtractConfig.Enabled = config.IndexingStrategy.GraphEnabled
+			} else if config.IndexingStrategy.GraphEnabled {
+				kb.ExtractConfig = &types.ExtractConfig{Enabled: true}
+			}
+		}
 	}
 	kb.UpdatedAt = time.Now()
 	kb.EnsureDefaults()

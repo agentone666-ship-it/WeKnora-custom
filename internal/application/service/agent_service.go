@@ -369,23 +369,79 @@ func (s *agentService) registerTools(
 		allowedTools = append(allowedTools, tools.ToolWebFetch)
 	}
 
-	// If any search target is a wiki KB, add wiki tools automatically
+	// Detect KB capabilities for retrieval preference logic
+	retrievalPref := config.RetrievalPreference
+	if retrievalPref == "" {
+		retrievalPref = "auto"
+	}
+
+	var hasVectorKB, hasWikiKB bool
 	var wikiKBIDs []string
 	for _, target := range config.SearchTargets {
 		kb, err := s.knowledgeBaseService.GetKnowledgeBaseByIDOnly(ctx, target.KnowledgeBaseID)
-		if err == nil && kb.IsWikiEnabled() {
+		if err != nil {
+			continue
+		}
+		if kb.IsVectorEnabled() || kb.IsKeywordEnabled() {
+			hasVectorKB = true
+		}
+		if kb.IsWikiEnabled() {
+			hasWikiKB = true
 			wikiKBIDs = append(wikiKBIDs, kb.ID)
 		}
 	}
-	if len(wikiKBIDs) > 0 {
-		allowedTools = append(allowedTools,
-			tools.ToolWikiReadPage,
-			tools.ToolWikiSearch,
-			tools.ToolWikiReadSourceDoc,
-			tools.ToolWikiFlagIssue,
-		)
-		logger.Infof(ctx, "Wiki KBs detected (%d), wiki tools added", len(wikiKBIDs))
+
+	// Apply retrieval preference to tool list
+	switch retrievalPref {
+	case "vector_only":
+		// Keep vector tools, no wiki tools (even if KB has wiki)
+		logger.Infof(ctx, "Retrieval preference: vector_only, skipping wiki tools")
+	case "wiki_only":
+		// Remove vector search tools, add wiki tools if available
+		if hasWikiKB {
+			vectorSearchTools := map[string]bool{
+				tools.ToolKnowledgeSearch:     true,
+				tools.ToolGrepChunks:          true,
+				tools.ToolListKnowledgeChunks: true,
+			}
+			filteredTools := make([]string, 0, len(allowedTools))
+			for _, t := range allowedTools {
+				if !vectorSearchTools[t] {
+					filteredTools = append(filteredTools, t)
+				}
+			}
+			allowedTools = filteredTools
+			allowedTools = append(allowedTools,
+				tools.ToolWikiReadPage,
+				tools.ToolWikiSearch,
+				tools.ToolWikiReadSourceDoc,
+				tools.ToolWikiFlagIssue,
+			)
+			logger.Infof(ctx, "Retrieval preference: wiki_only, wiki tools added, vector tools removed")
+		}
+	case "hybrid":
+		// Keep vector tools AND add wiki tools
+		if hasWikiKB {
+			allowedTools = append(allowedTools,
+				tools.ToolWikiReadPage,
+				tools.ToolWikiSearch,
+				tools.ToolWikiReadSourceDoc,
+				tools.ToolWikiFlagIssue,
+			)
+			logger.Infof(ctx, "Retrieval preference: hybrid, both vector and wiki tools")
+		}
+	default: // "auto" — preserve original behavior: auto-detect from KB capabilities
+		if len(wikiKBIDs) > 0 {
+			allowedTools = append(allowedTools,
+				tools.ToolWikiReadPage,
+				tools.ToolWikiSearch,
+				tools.ToolWikiReadSourceDoc,
+				tools.ToolWikiFlagIssue,
+			)
+			logger.Infof(ctx, "Retrieval preference: auto, wiki KBs detected (%d), wiki tools added", len(wikiKBIDs))
+		}
 	}
+	_ = hasVectorKB // used for future optimization
 
 	logger.Infof(ctx, "Registering tools: %v, webSearchEnabled: %v", allowedTools, config.WebSearchEnabled)
 	allowedTools = append(allowedTools, tools.ToolFinalAnswer)

@@ -77,14 +77,14 @@
               <span class="legend-action-icon"><t-icon name="focus" /></span>
               <span>{{ $t('knowledgeEditor.wikiBrowser.fitView') || '适应屏幕' }}</span>
             </div>
-            <div class="legend-action" @click="toggleArrows" :class="{ active: showArrows }">
-              <span class="legend-action-icon">→</span>
+            <div class="legend-action" @click="toggleArrows">
+              <span class="legend-action-icon"><t-icon :name="showArrows ? 'browse-off' : 'browse'" /></span>
               <span>{{ showArrows ? $t('knowledgeEditor.wikiBrowser.hideArrows') : $t('knowledgeEditor.wikiBrowser.showArrows') }}</span>
             </div>
           </div>
         </div>
 
-        <div v-if="!graphReady" class="wiki-reader-empty">
+        <div v-if="!graphReady" class="wiki-reader-empty wiki-graph-empty">
           <t-loading v-if="graphLoading" />
           <div v-else class="wiki-empty-icon">
             <t-icon name="chart-ring" size="48px" />
@@ -781,8 +781,27 @@ function handleContentClick(e: MouseEvent) {
 async function loadPages() {
   loading.value = true
   try {
-    const res = await listWikiPages(props.knowledgeBaseId, { page: 1, page_size: 500 })
-    pages.value = (res as any).data?.pages || (res as any).pages || []
+    const PAGE_SIZE = 500
+    const MAX_PAGES = 50 // safety cap: up to 25k pages
+    const collected: WikiPage[] = []
+    let page = 1
+    let totalPages = 1
+    while (page <= totalPages && page <= MAX_PAGES) {
+      const res = await listWikiPages(props.knowledgeBaseId, { page, page_size: PAGE_SIZE })
+      const body = (res as any).data || res
+      const batch: WikiPage[] = body?.pages || []
+      collected.push(...batch)
+      const reportedTotalPages = Number(body?.total_pages) || 0
+      if (reportedTotalPages > 0) {
+        totalPages = reportedTotalPages
+      } else if (batch.length < PAGE_SIZE) {
+        break
+      } else {
+        totalPages = page + 1
+      }
+      page++
+    }
+    pages.value = collected
     // Auto-select index page if nothing is selected
     if (!selectedPage.value && indexPage.value) {
       selectPage(indexPage.value)
@@ -1016,7 +1035,11 @@ const nodeColorMap: Record<string, string> = {
 function renderGraph() {
   const container = graphRef.value
   const data = graphData.value
-  if (!container || !data || !data.nodes?.length) return
+  if (!container) return
+  if (!data || !data.nodes?.length) {
+    container.innerHTML = ''
+    return
+  }
 
   // Stop any previous animation
   if (graphAnimFrame) { cancelAnimationFrame(graphAnimFrame); graphAnimFrame = 0 }
@@ -2290,6 +2313,16 @@ onUnmounted(() => {
   overflow: hidden;
   width: 100%;
   height: 100%;
+}
+
+.wiki-graph-empty {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 20;
+  background: var(--td-bg-color-container);
 }
 
 .wiki-graph-search-container {

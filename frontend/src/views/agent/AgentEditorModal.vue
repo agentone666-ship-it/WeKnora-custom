@@ -783,10 +783,10 @@
                           :min-collapsed-num="3"
                         >
                           <t-option-group v-if="myKbOptions.length" :label="$t('agent.editor.myKnowledgeBases')">
-                            <t-option 
-                              v-for="kb in myKbOptions" 
-                              :key="kb.value" 
-                              :value="kb.value" 
+                            <t-option
+                              v-for="kb in myKbOptions"
+                              :key="kb.value"
+                              :value="kb.value"
                               :label="kb.label"
                             >
                               <div class="kb-option-item">
@@ -794,15 +794,17 @@
                                   <t-icon :name="kb.type === 'faq' ? 'chat-bubble-help' : 'folder'" />
                                 </span>
                                 <span class="kb-option-label">{{ kb.label }}</span>
+                                <span v-if="kb.ragEnabled" class="kb-option-tag tag-rag">RAG</span>
+                                <span v-if="kb.wikiEnabled" class="kb-option-tag tag-wiki">Wiki</span>
                                 <span class="kb-option-count">{{ kb.count || 0 }}</span>
                               </div>
                             </t-option>
                           </t-option-group>
                           <t-option-group v-if="sharedKbOptions.length" :label="$t('agent.editor.sharedKnowledgeBases')">
-                            <t-option 
-                              v-for="kb in sharedKbOptions" 
-                              :key="kb.value" 
-                              :value="kb.value" 
+                            <t-option
+                              v-for="kb in sharedKbOptions"
+                              :key="kb.value"
+                              :value="kb.value"
                               :label="kb.label"
                             >
                               <div class="kb-option-item">
@@ -810,6 +812,8 @@
                                   <t-icon :name="kb.type === 'faq' ? 'chat-bubble-help' : 'folder'" />
                                 </span>
                                 <span class="kb-option-label">{{ kb.label }}</span>
+                                <span v-if="kb.ragEnabled" class="kb-option-tag tag-rag">RAG</span>
+                                <span v-if="kb.wikiEnabled" class="kb-option-tag tag-wiki">Wiki</span>
                                 <span v-if="kb.orgName" class="kb-option-org">{{ kb.orgName }}</span>
                                 <span class="kb-option-count">{{ kb.count || 0 }}</span>
                               </div>
@@ -1018,6 +1022,25 @@
                   </div>
                   
                   <div class="settings-group">
+                    <!-- 检索偏好 -->
+                    <div class="setting-row">
+                      <div class="setting-info">
+                        <label>{{ $t('agent.editor.retrievalPreference') }}</label>
+                        <p class="desc">{{ $t('agent.editor.retrievalPreferenceDesc') }}</p>
+                      </div>
+                      <div class="setting-control">
+                        <t-select
+                          v-model="formData.config.retrieval_preference"
+                          style="width: 200px"
+                        >
+                          <t-option value="auto">{{ $t('agent.editor.retrievalPreferenceAuto') }}</t-option>
+                          <t-option value="vector_only">{{ $t('agent.editor.retrievalPreferenceVectorOnly') }}</t-option>
+                          <t-option value="wiki_only">{{ $t('agent.editor.retrievalPreferenceWikiOnly') }}</t-option>
+                          <t-option value="hybrid">{{ $t('agent.editor.retrievalPreferenceHybrid') }}</t-option>
+                        </t-select>
+                      </div>
+                    </div>
+
                     <!-- 查询扩展（仅普通模式） -->
                     <div v-if="!isAgentMode" class="setting-row">
                       <div class="setting-info">
@@ -1276,7 +1299,7 @@ const emit = defineEmits<{
 const currentSection = ref(props.initialSection || 'basic');
 const saving = ref(false);
 const allModels = ref<ModelConfig[]>([]);
-const kbOptions = ref<{ label: string; value: string; type?: 'document' | 'faq'; count?: number; shared?: boolean; orgName?: string }[]>([]);
+const kbOptions = ref<{ label: string; value: string; type?: 'document' | 'faq'; count?: number; shared?: boolean; orgName?: string; ragEnabled?: boolean; wikiEnabled?: boolean }[]>([]);
 const mcpOptions = ref<{ label: string; value: string }[]>([]);
 const webSearchProviderList = ref<WebSearchProviderEntity[]>([]);
 const skillOptions = ref<{ name: string; description: string }[]>([]);
@@ -1525,6 +1548,8 @@ const defaultFormData = {
     // 知识库设置
     kb_selection_mode: 'none' as 'all' | 'selected' | 'none',
     knowledge_bases: [] as string[],
+    retrieve_kb_only_when_mentioned: false,
+    retrieval_preference: 'auto' as 'auto' | 'vector_only' | 'wiki_only' | 'hybrid',
     // 图片上传/多模态设置
     image_upload_enabled: false,
     vlm_model_id: '',
@@ -1590,9 +1615,19 @@ const contextTemplatePlaceholder = computed(() => {
   return t('agent.editor.contextTemplatePlaceholder');
 });
 
-// 是否需要配置 ReRank 模型（有知识库能力时需要）
+// 是否需要配置 ReRank 模型（仅当关联的知识库中有 RAG 类型时需要）
 const needsRerankModel = computed(() => {
-  return hasKnowledgeBase.value;
+  if (!hasKnowledgeBase.value) return false;
+  const mode = kbSelectionMode.value;
+  if (mode === 'all') {
+    // "全部"模式下，只要存在任何一个 RAG 知识库就需要
+    return kbOptions.value.some(kb => kb.ragEnabled);
+  }
+  if (mode === 'selected') {
+    const selectedIds = formData.value.config.knowledge_bases || [];
+    return kbOptions.value.some(kb => selectedIds.includes(kb.value) && kb.ragEnabled);
+  }
+  return false;
 });
 
 // 监听可见性变化，重置表单
@@ -1935,12 +1970,15 @@ const loadDependencies = async () => {
     const myKbs: typeof kbOptions.value = [];
     if (kbRes.data) {
       kbRes.data.forEach((kb: any) => {
-        myKbs.push({ 
-          label: kb.name, 
+        const strategy = kb.indexing_strategy;
+        myKbs.push({
+          label: kb.name,
           value: kb.id,
           type: kb.type || 'document',
           count: kb.type === 'faq' ? (kb.chunk_count || 0) : (kb.knowledge_count || 0),
           shared: false,
+          ragEnabled: !strategy || strategy.vector_enabled || strategy.keyword_enabled,
+          wikiEnabled: strategy?.wiki_enabled || false,
         });
       });
     }
@@ -1961,6 +1999,8 @@ const loadDependencies = async () => {
             count: kb.type === 'faq' ? (kb.chunk_count || 0) : (kb.knowledge_count || 0),
             shared: true,
             orgName: shared.org_name,
+            ragEnabled: !kb.indexing_strategy || kb.indexing_strategy.vector_enabled || kb.indexing_strategy.keyword_enabled,
+            wikiEnabled: kb.indexing_strategy?.wiki_enabled || false,
           });
         });
       }
@@ -3826,6 +3866,25 @@ const handleSave = async () => {
   background: var(--td-bg-color-secondarycontainer);
   padding: 1px 6px;
   border-radius: 4px;
+}
+
+.kb-option-tag {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 500;
+  padding: 0 5px;
+  border-radius: 3px;
+  line-height: 18px;
+}
+
+.tag-rag {
+  color: #165dff;
+  background: rgba(22, 93, 255, 0.1);
+}
+
+.tag-wiki {
+  color: #00b42a;
+  background: rgba(0, 180, 42, 0.1);
 }
 
 // FAQ 策略区域样式

@@ -1705,12 +1705,18 @@ func (s *knowledgeService) processChunks(ctx context.Context,
 		return
 	}
 
-	// Get embedding model for vectorization
-	embeddingModel, err := s.modelService.GetEmbeddingModel(ctx, kb.EmbeddingModelID)
-	if err != nil {
-		logger.GetLogger(ctx).WithField("error", err).Errorf("processChunks get embedding model failed")
-		span.RecordError(err)
-		return
+	// Get embedding model for vectorization — only needed when vector/keyword indexing is enabled
+	var embeddingModel embedding.Embedder
+	if kb.NeedsEmbeddingModel() {
+		var err error
+		embeddingModel, err = s.modelService.GetEmbeddingModel(ctx, kb.EmbeddingModelID)
+		if err != nil {
+			logger.GetLogger(ctx).WithField("error", err).Errorf("processChunks get embedding model failed")
+			span.RecordError(err)
+			return
+		}
+	} else {
+		logger.Infof(ctx, "Vector/keyword indexing disabled for KB %s, skipping embedding model", kb.ID)
 	}
 
 	// 幂等性处理：清理旧的chunks和索引数据，避免重复数据
@@ -1722,10 +1728,10 @@ func (s *knowledgeService) processChunks(ctx context.Context,
 		// 不返回错误，继续处理（可能没有旧数据）
 	}
 
-	// 删除旧的索引数据
+	// 删除旧的索引数据 — only when vector/keyword indexing is enabled
 	tenantInfo := ctx.Value(types.TenantInfoContextKey).(*types.Tenant)
 	retrieveEngine, err := retriever.NewCompositeRetrieveEngine(s.retrieveEngine, tenantInfo.GetEffectiveEngines())
-	if err == nil {
+	if err == nil && embeddingModel != nil {
 		if err := retrieveEngine.DeleteByKnowledgeIDList(ctx, []string{knowledge.ID}, embeddingModel.GetDimensions(), knowledge.Type); err != nil {
 			logger.Warnf(ctx, "Failed to delete existing index data (may not exist): %v", err)
 			// 不返回错误，继续处理（可能没有旧数据）
@@ -1905,63 +1911,16 @@ func (s *knowledgeService) processChunks(ctx context.Context,
 		}
 	}
 
-	// Create index information — only for child/flat chunks, NOT parent chunks.
-	// Parent chunks are stored for context retrieval but do not need vector embeddings.
-	// Prepend the document title to improve semantic alignment between
-	// question-style queries and statement-style chunk content.
-	indexInfoList := make([]*types.IndexInfo, 0, len(textChunks))
-	titlePrefix := ""
-	if t := strings.TrimSpace(knowledge.Title); t != "" {
-		titlePrefix = t + "\n"
-	}
-	for _, chunk := range textChunks {
-		indexContent := titlePrefix + chunk.Content
-		indexInfoList = append(indexInfoList, &types.IndexInfo{
-			Content:         indexContent,
-			SourceID:        chunk.ID,
-			SourceType:      types.ChunkSourceType,
-			ChunkID:         chunk.ID,
-			KnowledgeID:     knowledge.ID,
-			KnowledgeBaseID: knowledge.KnowledgeBaseID,
-			IsEnabled:       true,
-		})
-	}
-
-	// Initialize retrieval engine
-
-	// Calculate storage size required for embeddings
-	span.AddEvent("estimate storage size")
-	totalStorageSize := retrieveEngine.EstimateStorageSize(ctx, embeddingModel, indexInfoList)
-	if tenantInfo.StorageQuota > 0 {
-		// Re-fetch tenant storage information
-		tenantInfo, err = s.tenantRepo.GetTenantByID(ctx, tenantInfo.ID)
-		if err != nil {
-			knowledge.ParseStatus = types.ParseStatusFailed
-			knowledge.ErrorMessage = err.Error()
-			knowledge.UpdatedAt = time.Now()
-			s.repo.UpdateKnowledge(ctx, knowledge)
-			span.RecordError(err)
-			return
-		}
-		// Check if there's enough storage quota available
-		if tenantInfo.StorageUsed+totalStorageSize > tenantInfo.StorageQuota {
-			knowledge.ParseStatus = types.ParseStatusFailed
-			knowledge.ErrorMessage = "存储空间不足"
-			knowledge.UpdatedAt = time.Now()
-			s.repo.UpdateKnowledge(ctx, knowledge)
-			span.RecordError(errors.New("storage quota exceeded"))
-			return
-		}
-	}
-
-	// Check again if knowledge is being deleted before writing to database
+	// Check if knowledge is being deleted before writing to database
 	if s.isKnowledgeDeleting(ctx, knowledge.TenantID, knowledge.ID) {
 		logger.Infof(ctx, "Knowledge is being deleted, aborting before saving chunks: %s", knowledge.ID)
 		span.AddEvent("aborted: knowledge is being deleted before saving")
 		return
 	}
 
-	// Save chunks to database
+	// Save chunks to database — ALWAYS, regardless of indexing strategy.
+	// Chunks are needed for wiki generation, graph extraction, and summary generation
+	// even when vector/keyword indexing is disabled.
 	span.AddEvent("create chunks")
 	if err := s.chunkService.CreateChunks(ctx, insertChunks); err != nil {
 		knowledge.ParseStatus = types.ParseStatusFailed
@@ -1972,53 +1931,107 @@ func (s *knowledgeService) processChunks(ctx context.Context,
 		return
 	}
 
-	// Check again before batch indexing (this is a heavy operation)
-	if s.isKnowledgeDeleting(ctx, knowledge.TenantID, knowledge.ID) {
-		logger.Infof(ctx, "Knowledge is being deleted, cleaning up and aborting before indexing: %s", knowledge.ID)
-		// Clean up the chunks we just created
-		if err := s.chunkService.DeleteChunksByKnowledgeID(ctx, knowledge.ID); err != nil {
-			logger.Warnf(ctx, "Failed to cleanup chunks after deletion detected: %v", err)
+	// Create index information and perform vector indexing — only when vector/keyword is enabled.
+	// Chunks are ALWAYS saved to DB (above) because wiki and graph need them even without vector indexing.
+	var totalStorageSize int64
+	if kb.NeedsEmbeddingModel() && embeddingModel != nil {
+		// Create index information — only for child/flat chunks, NOT parent chunks.
+		// Parent chunks are stored for context retrieval but do not need vector embeddings.
+		// Prepend the document title to improve semantic alignment between
+		// question-style queries and statement-style chunk content.
+		indexInfoList := make([]*types.IndexInfo, 0, len(textChunks))
+		titlePrefix := ""
+		if t := strings.TrimSpace(knowledge.Title); t != "" {
+			titlePrefix = t + "\n"
 		}
-		span.AddEvent("aborted: knowledge is being deleted before indexing")
-		return
-	}
+		for _, chunk := range textChunks {
+			indexContent := titlePrefix + chunk.Content
+			indexInfoList = append(indexInfoList, &types.IndexInfo{
+				Content:         indexContent,
+				SourceID:        chunk.ID,
+				SourceType:      types.ChunkSourceType,
+				ChunkID:         chunk.ID,
+				KnowledgeID:     knowledge.ID,
+				KnowledgeBaseID: knowledge.KnowledgeBaseID,
+				IsEnabled:       true,
+			})
+		}
 
-	span.AddEvent("batch index")
-	err = retrieveEngine.BatchIndex(ctx, embeddingModel, indexInfoList)
-	if err != nil {
-		knowledge.ParseStatus = types.ParseStatusFailed
-		knowledge.ErrorMessage = err.Error()
-		knowledge.UpdatedAt = time.Now()
-		s.repo.UpdateKnowledge(ctx, knowledge)
-
-		// delete failed chunks
-		if err := s.chunkService.DeleteChunksByKnowledgeID(ctx, knowledge.ID); err != nil {
-			logger.Errorf(ctx, "Delete chunks failed: %v", err)
+		// Calculate storage size required for embeddings
+		span.AddEvent("estimate storage size")
+		totalStorageSize = retrieveEngine.EstimateStorageSize(ctx, embeddingModel, indexInfoList)
+		if tenantInfo.StorageQuota > 0 {
+			// Re-fetch tenant storage information
+			tenantInfo, err = s.tenantRepo.GetTenantByID(ctx, tenantInfo.ID)
+			if err != nil {
+				knowledge.ParseStatus = types.ParseStatusFailed
+				knowledge.ErrorMessage = err.Error()
+				knowledge.UpdatedAt = time.Now()
+				s.repo.UpdateKnowledge(ctx, knowledge)
+				span.RecordError(err)
+				return
+			}
+			// Check if there's enough storage quota available
+			if tenantInfo.StorageUsed+totalStorageSize > tenantInfo.StorageQuota {
+				knowledge.ParseStatus = types.ParseStatusFailed
+				knowledge.ErrorMessage = "存储空间不足"
+				knowledge.UpdatedAt = time.Now()
+				s.repo.UpdateKnowledge(ctx, knowledge)
+				span.RecordError(errors.New("storage quota exceeded"))
+				return
+			}
 		}
 
-		// delete index
-		if err := retrieveEngine.DeleteByKnowledgeIDList(
-			ctx, []string{knowledge.ID}, embeddingModel.GetDimensions(), kb.Type,
-		); err != nil {
-			logger.Errorf(ctx, "Delete index failed: %v", err)
+		// Check again before batch indexing (this is a heavy operation)
+		if s.isKnowledgeDeleting(ctx, knowledge.TenantID, knowledge.ID) {
+			logger.Infof(ctx, "Knowledge is being deleted, cleaning up and aborting before indexing: %s", knowledge.ID)
+			// Clean up the chunks we just created
+			if err := s.chunkService.DeleteChunksByKnowledgeID(ctx, knowledge.ID); err != nil {
+				logger.Warnf(ctx, "Failed to cleanup chunks after deletion detected: %v", err)
+			}
+			span.AddEvent("aborted: knowledge is being deleted before indexing")
+			return
 		}
-		span.RecordError(err)
-		return
-	}
-	logger.GetLogger(ctx).Infof("processChunks batch index successfully, with %d index", len(indexInfoList))
 
-	// Final check before marking as completed - if deleted during processing, don't update status
-	if s.isKnowledgeDeleting(ctx, knowledge.TenantID, knowledge.ID) {
-		logger.Infof(ctx, "Knowledge was deleted during processing, skipping completion update: %s", knowledge.ID)
-		// Clean up the data we just created since the knowledge is being deleted
-		if err := s.chunkService.DeleteChunksByKnowledgeID(ctx, knowledge.ID); err != nil {
-			logger.Warnf(ctx, "Failed to cleanup chunks after deletion detected: %v", err)
+		span.AddEvent("batch index")
+		err = retrieveEngine.BatchIndex(ctx, embeddingModel, indexInfoList)
+		if err != nil {
+			knowledge.ParseStatus = types.ParseStatusFailed
+			knowledge.ErrorMessage = err.Error()
+			knowledge.UpdatedAt = time.Now()
+			s.repo.UpdateKnowledge(ctx, knowledge)
+
+			// delete failed chunks
+			if err := s.chunkService.DeleteChunksByKnowledgeID(ctx, knowledge.ID); err != nil {
+				logger.Errorf(ctx, "Delete chunks failed: %v", err)
+			}
+
+			// delete index
+			if err := retrieveEngine.DeleteByKnowledgeIDList(
+				ctx, []string{knowledge.ID}, embeddingModel.GetDimensions(), kb.Type,
+			); err != nil {
+				logger.Errorf(ctx, "Delete index failed: %v", err)
+			}
+			span.RecordError(err)
+			return
 		}
-		if err := retrieveEngine.DeleteByKnowledgeIDList(ctx, []string{knowledge.ID}, embeddingModel.GetDimensions(), kb.Type); err != nil {
-			logger.Warnf(ctx, "Failed to cleanup index after deletion detected: %v", err)
+		logger.GetLogger(ctx).Infof("processChunks batch index successfully, with %d index", len(indexInfoList))
+
+		// Final check before marking as completed - if deleted during processing, don't update status
+		if s.isKnowledgeDeleting(ctx, knowledge.TenantID, knowledge.ID) {
+			logger.Infof(ctx, "Knowledge was deleted during processing, skipping completion update: %s", knowledge.ID)
+			// Clean up the data we just created since the knowledge is being deleted
+			if err := s.chunkService.DeleteChunksByKnowledgeID(ctx, knowledge.ID); err != nil {
+				logger.Warnf(ctx, "Failed to cleanup chunks after deletion detected: %v", err)
+			}
+			if err := retrieveEngine.DeleteByKnowledgeIDList(ctx, []string{knowledge.ID}, embeddingModel.GetDimensions(), kb.Type); err != nil {
+				logger.Warnf(ctx, "Failed to cleanup index after deletion detected: %v", err)
+			}
+			span.AddEvent("aborted: knowledge was deleted during processing")
+			return
 		}
-		span.AddEvent("aborted: knowledge was deleted during processing")
-		return
+	} else {
+		logger.Infof(ctx, "Vector/keyword indexing disabled for KB %s, skipping BatchIndex", kb.ID)
 	}
 
 	// Check if this document has extracted images that will be processed asynchronously
@@ -2338,8 +2351,9 @@ func (s *knowledgeService) ProcessSummaryGeneration(ctx context.Context, t *asyn
 		return fmt.Errorf("failed to update knowledge: %w", err)
 	}
 
-	// Create summary chunk and index it
-	if strings.TrimSpace(summary) != "" {
+	// Create summary chunk and index it — only when RAG indexing is enabled.
+	// Wiki-only KBs don't need summary chunks in the vector index.
+	if strings.TrimSpace(summary) != "" && kb.NeedsEmbeddingModel() {
 		// Get max chunk index
 		maxChunkIndex := 0
 		for _, chunk := range chunks {
@@ -2928,6 +2942,34 @@ func (s *knowledgeService) enqueueManualProcessing(ctx context.Context,
 	}
 	logger.Infof(ctx, "Enqueued manual process task: knowledge_id=%s, asynq_id=%s", knowledge.ID, info.ID)
 	return nil
+}
+
+// RebuildKnowledgeBaseIndex re-processes all documents in a knowledge base by enqueuing
+// reparse tasks. Used when the indexing strategy changes (e.g., enabling wiki on an
+// existing KB with documents) and all documents need to be re-indexed.
+func (s *knowledgeService) RebuildKnowledgeBaseIndex(ctx context.Context, kbID string) (int, error) {
+	logger.Infof(ctx, "Start rebuilding index for knowledge base: %s", kbID)
+
+	knowledgeList, err := s.ListKnowledgeByKnowledgeBaseID(ctx, kbID)
+	if err != nil {
+		return 0, fmt.Errorf("list knowledge for KB %s: %w", kbID, err)
+	}
+
+	count := 0
+	for _, k := range knowledgeList {
+		// Skip knowledge that is being deleted or has failed status
+		if k.ParseStatus == types.ParseStatusDeleting {
+			continue
+		}
+		if _, err := s.ReparseKnowledge(ctx, k.ID); err != nil {
+			logger.Warnf(ctx, "Failed to enqueue reparse for knowledge %s: %v", k.ID, err)
+			continue
+		}
+		count++
+	}
+
+	logger.Infof(ctx, "Rebuild index: enqueued %d/%d documents for KB %s", count, len(knowledgeList), kbID)
+	return count, nil
 }
 
 // ReparseKnowledge deletes existing document content and re-parses the knowledge asynchronously.

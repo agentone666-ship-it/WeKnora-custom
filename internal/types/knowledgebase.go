@@ -82,6 +82,9 @@ type KnowledgeBase struct {
 	QuestionGenerationConfig *QuestionGenerationConfig `yaml:"question_generation_config" json:"question_generation_config" gorm:"column:question_generation_config;type:json"`
 	// WikiConfig stores wiki-specific configuration (only for wiki type knowledge bases)
 	WikiConfig *WikiConfig `yaml:"wiki_config"             json:"wiki_config"             gorm:"column:wiki_config;type:json"`
+	// IndexingStrategy controls which indexing pipelines are active for this knowledge base.
+	// Pipelines: vector search, keyword search, wiki generation, knowledge graph extraction.
+	IndexingStrategy IndexingStrategy `yaml:"indexing_strategy"       json:"indexing_strategy"       gorm:"column:indexing_strategy;type:json"`
 	// Whether this knowledge base is pinned to the top of the list
 	IsPinned bool `yaml:"is_pinned"               json:"is_pinned"               gorm:"default:false"`
 	// Time when the knowledge base was pinned (nil if not pinned)
@@ -114,6 +117,9 @@ type KnowledgeBaseConfig struct {
 	FAQConfig *FAQConfig `yaml:"faq_config"              json:"faq_config"`
 	// Wiki configuration (only for wiki-enabled knowledge bases)
 	WikiConfig *WikiConfig `yaml:"wiki_config"             json:"wiki_config"`
+	// IndexingStrategy controls which indexing pipelines are active.
+	// nil means "no change" when updating (preserves existing strategy).
+	IndexingStrategy *IndexingStrategy `yaml:"indexing_strategy"       json:"indexing_strategy"`
 }
 
 // ParserEngineRule maps a set of file types to a specific parser engine.
@@ -508,12 +514,59 @@ func (kb *KnowledgeBase) EnsureDefaults() {
 			kb.FAQConfig.QuestionIndexMode = FAQQuestionIndexModeCombined
 		}
 	}
+
+	// Ensure IndexingStrategy has defaults.
+	// For existing rows where indexing_strategy is NULL, GORM Scan() returns
+	// DefaultIndexingStrategy() (vector+keyword=true). This block handles the
+	// case where a fresh struct was created in-memory without touching DB.
+	if kb.IndexingStrategy.IsZero() {
+		kb.IndexingStrategy = DefaultIndexingStrategy()
+	}
+	// Sync legacy WikiConfig.Enabled → IndexingStrategy.WikiEnabled
+	if kb.WikiConfig != nil && kb.WikiConfig.Enabled && !kb.IndexingStrategy.WikiEnabled {
+		kb.IndexingStrategy.WikiEnabled = true
+	}
+	// Sync legacy ExtractConfig.Enabled → IndexingStrategy.GraphEnabled
+	if kb.ExtractConfig != nil && kb.ExtractConfig.Enabled && !kb.IndexingStrategy.GraphEnabled {
+		kb.IndexingStrategy.GraphEnabled = true
+	}
 }
 
 // IsWikiEnabled checks if the wiki feature is enabled for this knowledge base.
-// Wiki is an add-on to document-type KBs, not a separate KB type.
+// Wiki requires both IndexingStrategy.WikiEnabled and WikiConfig with Enabled=true.
 func (kb *KnowledgeBase) IsWikiEnabled() bool {
-	return kb != nil && kb.WikiConfig != nil && kb.WikiConfig.Enabled
+	if kb == nil {
+		return false
+	}
+	// Primary: check IndexingStrategy (canonical source after migration)
+	if kb.IndexingStrategy.WikiEnabled {
+		return kb.WikiConfig != nil && kb.WikiConfig.Enabled
+	}
+	// Legacy fallback: direct WikiConfig check
+	return kb.WikiConfig != nil && kb.WikiConfig.Enabled
+}
+
+// IsVectorEnabled checks if vector (semantic) search is enabled.
+func (kb *KnowledgeBase) IsVectorEnabled() bool {
+	return kb != nil && kb.IndexingStrategy.VectorEnabled
+}
+
+// IsKeywordEnabled checks if keyword (BM25) search is enabled.
+func (kb *KnowledgeBase) IsKeywordEnabled() bool {
+	return kb != nil && kb.IndexingStrategy.KeywordEnabled
+}
+
+// IsGraphEnabled checks if knowledge graph extraction is enabled.
+// Requires both the IndexingStrategy flag and a valid ExtractConfig.
+func (kb *KnowledgeBase) IsGraphEnabled() bool {
+	return kb != nil && kb.IndexingStrategy.GraphEnabled &&
+		kb.ExtractConfig != nil && kb.ExtractConfig.Enabled
+}
+
+// NeedsEmbeddingModel returns true if any enabled pipeline requires an embedding model.
+// Currently only vector and keyword search need embeddings.
+func (kb *KnowledgeBase) NeedsEmbeddingModel() bool {
+	return kb != nil && kb.IndexingStrategy.NeedsEmbedding()
 }
 
 // IsMultimodalEnabled 判断多模态是否启用（兼容新老版本配置）

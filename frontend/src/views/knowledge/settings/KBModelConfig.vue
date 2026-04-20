@@ -25,15 +25,15 @@
         </div>
       </div>
 
-      <!-- Embedding 嵌入模型 -->
-      <div class="setting-row">
+      <!-- Embedding 嵌入模型 (仅 RAG 检索启用时必填) -->
+      <div v-if="ragEnabled !== false" class="setting-row">
         <div class="setting-info">
-          <label>{{ $t('knowledgeEditor.models.embeddingLabel') }} <span class="required">*</span></label>
+          <label>{{ $t('knowledgeEditor.models.embeddingLabel') }} <span v-if="ragEnabled" class="required">*</span></label>
           <p class="desc">{{ $t('knowledgeEditor.models.embeddingDesc') }}</p>
-          <t-alert 
-            v-if="hasFiles" 
-            theme="warning" 
-            :message="$t('knowledgeEditor.models.embeddingLocked')" 
+          <t-alert
+            v-if="hasFiles"
+            theme="warning"
+            :message="$t('knowledgeEditor.models.embeddingLocked')"
             style="margin-top: 8px;"
           />
         </div>
@@ -47,6 +47,24 @@
             @update:selected-model-id="handleEmbeddingChange"
             @add-model="handleAddModel('embedding')"
             :placeholder="$t('knowledgeEditor.models.embeddingPlaceholder')"
+          />
+        </div>
+      </div>
+
+      <!-- Wiki 合成模型 (仅当 Wiki 启用时显示) -->
+      <div v-if="wikiEnabled" class="setting-row">
+        <div class="setting-info">
+          <label>{{ $t('knowledgeEditor.wiki.synthesisModelLabel') }}</label>
+          <p class="desc">{{ $t('knowledgeEditor.wiki.synthesisModelTip') }}</p>
+        </div>
+        <div class="setting-control">
+          <ModelSelector
+            model-type="KnowledgeQA"
+            :selected-model-id="config.wikiSynthesisModelId"
+            :all-models="allModels"
+            @update:selected-model-id="handleWikiModelChange"
+            @add-model="handleAddModel('knowledgeqa')"
+            :placeholder="$t('knowledgeEditor.wiki.synthesisModelPlaceholder')"
           />
         </div>
       </div>
@@ -65,11 +83,14 @@ interface ModelConfig {
   llmModelId?: string
   embeddingModelId?: string
   vllmModelId?: string
+  wikiSynthesisModelId?: string
 }
 
 interface Props {
   config: ModelConfig
   hasFiles: boolean
+  wikiEnabled?: boolean
+  ragEnabled?: boolean
   allModels?: any[]
 }
 
@@ -99,6 +120,14 @@ const handleEmbeddingChange = (modelId: string) => {
   emit('update:config', {
     ...props.config,
     embeddingModelId: modelId
+  })
+}
+
+// 处理Wiki合成模型变化
+const handleWikiModelChange = (modelId: string) => {
+  emit('update:config', {
+    ...props.config,
+    wikiSynthesisModelId: modelId
   })
 }
 

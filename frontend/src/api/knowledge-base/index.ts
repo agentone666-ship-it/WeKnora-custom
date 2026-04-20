@@ -8,9 +8,9 @@ export function listKnowledgeBases(params?: { agent_id?: string }) {
   return get(qs ? `/api/v1/knowledge-bases?${qs}` : '/api/v1/knowledge-bases');
 }
 
-export function createKnowledgeBase(data: { 
-  name: string; 
-  description?: string; 
+export function createKnowledgeBase(data: {
+  name: string;
+  description?: string;
   type?: 'document' | 'faq';
   chunking_config?: any;
   embedding_model_id?: string;
@@ -35,6 +35,12 @@ export function createKnowledgeBase(data: {
     wiki_language?: string;
     max_pages_per_ingest?: number;
   };
+  indexing_strategy?: {
+    vector_enabled: boolean;
+    keyword_enabled: boolean;
+    wiki_enabled: boolean;
+    graph_enabled: boolean;
+  };
 }) {
   return post(`/api/v1/knowledge-bases`, data);
 }
@@ -46,9 +52,9 @@ export function getKnowledgeBaseById(id: string, options?: { agent_id?: string }
   return get(qs ? `/api/v1/knowledge-bases/${id}?${qs}` : `/api/v1/knowledge-bases/${id}`);
 }
 
-export function updateKnowledgeBase(id: string, data: { 
-  name: string; 
-  description?: string; 
+export function updateKnowledgeBase(id: string, data: {
+  name: string;
+  description?: string;
   config?: {
     chunking_config?: any;
     image_processing_config?: any;
@@ -60,9 +66,19 @@ export function updateKnowledgeBase(id: string, data: {
       wiki_language?: string;
       max_pages_per_ingest?: number;
     };
+    indexing_strategy?: {
+      vector_enabled: boolean;
+      keyword_enabled: boolean;
+      wiki_enabled: boolean;
+      graph_enabled: boolean;
+    };
   }
 }) {
   return put(`/api/v1/knowledge-bases/${id}` , data);
+}
+
+export function rebuildKBIndex(kbId: string) {
+  return post(`/api/v1/knowledge-bases/${kbId}/rebuild-index`, {});
 }
 
 export function deleteKnowledgeBase(id: string) {

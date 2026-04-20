@@ -487,6 +487,51 @@ func (h *KnowledgeBaseHandler) UpdateKnowledgeBase(c *gin.Context) {
 	})
 }
 
+// RebuildIndex godoc
+// @Summary      重建索引
+// @Description  当索引策略变更后，对知识库中已有文档重新处理（重新分块、向量化、Wiki生成等）
+// @Tags         知识库
+// @Accept       json
+// @Produce      json
+// @Param        id  path      string  true  "知识库ID"
+// @Success      200  {object}  map[string]interface{}  "重建结果"
+// @Failure      400  {object}  errors.AppError         "请求参数错误"
+// @Security     Bearer
+// @Security     ApiKeyAuth
+// @Router       /knowledge-bases/{id}/rebuild-index [post]
+func (h *KnowledgeBaseHandler) RebuildIndex(c *gin.Context) {
+	ctx := c.Request.Context()
+	logger.Info(ctx, "Start rebuilding knowledge base index")
+
+	// Validate and get the knowledge base
+	_, id, _, permission, err := h.validateAndGetKnowledgeBase(c)
+	if err != nil {
+		c.Error(err)
+		return
+	}
+
+	// Only admin/editor can rebuild index
+	if permission != types.OrgRoleAdmin && permission != types.OrgRoleEditor {
+		c.Error(apperrors.NewForbiddenError("No permission to rebuild index"))
+		return
+	}
+
+	count, err := h.knowledgeService.RebuildKnowledgeBaseIndex(ctx, id)
+	if err != nil {
+		logger.ErrorWithFields(ctx, err, nil)
+		c.Error(apperrors.NewInternalServerError(err.Error()))
+		return
+	}
+
+	logger.Infof(ctx, "Rebuild index enqueued for KB %s: %d documents", id, count)
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data": gin.H{
+			"document_count": count,
+		},
+	})
+}
+
 // DeleteKnowledgeBase godoc
 // @Summary      删除知识库
 // @Description  删除指定的知识库及其所有内容

@@ -1,0 +1,439 @@
+═══════════════════════════════════════════════════════════════════════════════
+WEKNORA KNOWLEDGE BASE DATA MODEL & DOCUMENT PROCESSING PIPELINE - COMPLETE ANALYSIS
+═══════════════════════════════════════════════════════════════════════════════
+
+PART 1: KNOWLEDGEBASE TYPE DEFINITION
+══════════════════════════════════════
+
+📁 File: internal/types/knowledgebase.go (Lines 40-98)
+
+📊 KnowledgeBase Struct - ALL FIELDS:
+
+CORE FIELDS:
+  • ID                string          - UUID primary key
+  • Name              string          - KB name (unique within tenant)
+  • Type              string          - "document", "faq", or "wiki"
+  • IsTemporary       bool            - Ephemeral flag (hidden from UI)
+  • Description       string          - KB description
+  • TenantID          uint64          - Tenant ownership
+
+CHUNKING & PROCESSING:
+  • ChunkingConfig    ChunkingConfig  - Document splitting strategy
+  • ImageProcessingConfig ImageProcessingConfig - Image model config
+  • EmbeddingModelID  string          - Model for vectorization (CRITICAL)
+  • SummaryModelID    string          - Model for summaries
+
+MULTIMODAL & KNOWLEDGE EXTRACTION:
+  • VLMConfig         VLMConfig       - Vision-Language Model settings
+  • ASRConfig         ASRConfig       - Speech recognition config
+  • ExtractConfig     *ExtractConfig  - Knowledge graph extraction
+
+STORAGE CONFIGURATION:
+  • StorageProviderConfig *StorageProviderConfig - Provider selection (new)
+  • StorageConfig     StorageConfig   - Legacy COS config (deprecated)
+
+TYPE-SPECIFIC CONFIGURATIONS:
+  • FAQConfig         *FAQConfig      - FAQ indexing strategy
+  • QuestionGenerationConfig *QuestionGenerationConfig - Auto Q&A generation
+  • WikiConfig        *WikiConfig     - Wiki feature settings (KEY!)
+
+PINNING & TIMESTAMPS:
+  • IsPinned          bool
+  • PinnedAt          *time.Time
+  • CreatedAt         time.Time
+  • UpdatedAt         time.Time
+  • DeletedAt         gorm.DeletedAt
+
+COMPUTED FIELDS (NOT in database):
+  • KnowledgeCount    int64           - Calculated on query
+  • ChunkCount        int64           - Calculated on query
+  • IsProcessing      bool            - FAQ import status
+  • ProcessingCount   int64           - Items being processed
+  • ShareCount        int64           - Org shares count
+
+───────────────────────────────────────────────────────────────────────────────
+
+PART 2: CHUNKING CONFIGURATION
+═══════════════════════════════
+
+📁 File: internal/types/knowledgebase.go (Lines 118-141)
+
+type ChunkingConfig struct {
+    ChunkSize          int      - Chunk size (default: 512)
+    ChunkOverlap       int      - Overlap between chunks (default: 50)
+    Separators         []string - Split points (default: ["\n\n", "\n", "。"])
+    
+    PARENT-CHILD STRATEGY:
+    EnableParentChild  bool     - Two-level chunking strategy
+    ParentChunkSize    int      - Large chunks for context (default: 4096)
+    ChildChunkSize     int      - Small chunks for embeddings (default: 384)
+    
+    LEGACY:
+    EnableMultimodal   bool     - Deprecated (use VLMConfig)
+    ParserEngineRules  []ParserEngineRule - Custom parser per file type
+}
+
+💡 PARENT-CHILD STRATEGY INSIGHT:
+   - Parent chunks: LARGE, provide context, NOT indexed
+   - Child chunks: SMALL, used for vector matching, indexed
+   - Retrieval: match on child, return parent content
+
+───────────────────────────────────────────────────────────────────────────────
+
+PART 3: WIKI CONFIGURATION
+═══════════════════════════
+
+📁 File: internal/types/wiki_page.go (Lines 91-103)
+
+type WikiConfig struct {
+    Enabled              bool   - Feature flag (on/off)
+    AutoIngest           bool   - Auto-generate on doc upload
+    SynthesisModelID     string - LLM for wiki generation
+    MaxPagesPerIngest    int    - Rate limit per batch (0=unlimited)
+}
+
+🔑 CRITICAL INSIGHT - Wiki is NOT a separate KB type:
+   - Wiki is an ADD-ON feature for document-type KBs
+   - Enabled via WikiConfig on existing KnowledgeBase
+   - Check: func (kb *KnowledgeBase) IsWikiEnabled() bool {
+       return kb != nil && kb.WikiConfig != nil && kb.WikiConfig.Enabled
+   }
+
+───────────────────────────────────────────────────────────────────────────────
+
+PART 4: FAQ & QUESTION GENERATION CONFIGS
+═══════════════════════════════════════════
+
+FAQ Configuration (Lines 451-472):
+  FAQIndexMode:
+    • "question_only"      - Index questions only
+    • "question_answer"    - Index Q&A together
+  
+  QuestionIndexMode:
+    • "combined"           - Q+similar questions together
+    • "separate"           - Q+similar questions separately
+
+Question Generation Config (Lines 353-377):
+  Enabled       bool - Turn on auto Q&A generation
+  QuestionCount int  - Questions per chunk (default: 3, max: 10)
+
+───────────────────────────────────────────────────────────────────────────────
+
+PART 5: DOCUMENT PROCESSING PIPELINE
+═════════════════════════════════════
+
+📁 File: internal/application/service/knowledge.go (Lines 1680-2074)
+
+Function: processChunks(ctx, kb, knowledge, chunks, opts)
+
+PROCESSING STEPS:
+┌─────────────────────────────────────────────────────────────────────┐
+│ 1. DELETION CHECK (Lines 1701-1705)                                 │
+│    - Verify knowledge is not being deleted                          │
+└─────────────────────────────────────────────────────────────────────┘
+│ 2. GET EMBEDDING MODEL (Lines 1708-1714)                            │
+│    - Fetch model from KB.EmbeddingModelID                           │
+│    - This model determines vectorization behavior                   │
+└─────────────────────────────────────────────────────────────────────┘
+│ 3. CLEANUP OLD DATA (Lines 1716-1744)                               │
+│    - Delete existing chunks                                         │
+│    - Remove old index data                                          │
+│    - Remove knowledge graph data                                    │
+└─────────────────────────────────────────────────────────────────────┘
+│ 4. CREATE PARENT CHUNKS (Lines 1810-1839)                           │
+│    - If EnableParentChild: create large context chunks              │
+│    - Parent chunks stored but NOT indexed                           │
+│    - Wire up parent↔child links                                     │
+└─────────────────────────────────────────────────────────────────────┘
+│ 5. CREATE TEXT & IMAGE CHUNKS (Lines 1843-1906)                     │
+│    - Text chunks from content                                       │
+│    - Image OCR chunks from extracted text                           │
+│    - Image Caption chunks from AI descriptions                      │
+│    - Link child chunks to parents                                   │
+└─────────────────────────────────────────────────────────────────────┘
+│ 6. BUILD INDEX INFORMATION (Lines 1908-1928)                        │
+│    - Create IndexInfo only for vectorizable chunks                  │
+│    - Parent chunks excluded from indexing                           │
+│    - Prepend document title for semantic alignment                  │
+│    - Result: indexInfoList (ready for embedding)                    │
+└─────────────────────────────────────────────────────────────────────┘
+│ 7. ESTIMATE STORAGE (Lines 1932-1955)                               │
+│    - Calculate embedding storage required                           │
+│    - Check tenant quota availability                                │
+└─────────────────────────────────────────────────────────────────────┘
+│ 8. SAVE CHUNKS TO DB (Lines 1964-1973)                              │
+│    - Persist all chunks (including parents)                         │
+└─────────────────────────────────────────────────────────────────────┘
+│ 9. *** BATCH INDEX *** (Lines 1986-2007)                            │
+│    - Call: retrieveEngine.BatchIndex(ctx, embeddingModel, indexInfoList)
+│    - THIS IS WHERE VECTOR VS KEYWORD INDEXING IS DECIDED            │
+│    - VectorStore implementation determines strategy                 │
+│    - If error: cleanup and mark as failed                           │
+└─────────────────────────────────────────────────────────────────────┘
+│ 10. ENQUEUE POST-PROCESSING (Lines 2044-2066)                       │
+│     - If multimodal: enqueue image processing tasks                 │
+│     - Else: enqueue post-process task immediately                   │
+└─────────────────────────────────────────────────────────────────────┘
+
+ProcessChunksOptions:
+  struct {
+    EnableQuestionGeneration bool
+    QuestionCount            int
+    EnableMultimodel         bool
+    StoredImages             []docparser.StoredImage
+    ParentChunks             []types.ParsedParentChunk
+    Metadata                 map[string]string
+  }
+
+───────────────────────────────────────────────────────────────────────────────
+
+PART 6: POST-PROCESSING HANDLER - WIKI TRIGGER
+═══════════════════════════════════════════════
+
+📁 File: internal/application/service/knowledge_post_process.go (Lines 42-128)
+
+KnowledgePostProcessService.Handle() orchestrates:
+
+1. Fetch knowledge + chunks
+2. Filter text-like chunks (ChunkTypeText, ImageOCR, ImageCaption)
+3. Update ParseStatus → "completed"
+4. Enqueue Summary Generation
+5. Enqueue Question Generation (if KB.QuestionGenerationConfig.Enabled)
+6. Enqueue Graph RAG Extraction (if KB.ExtractConfig.Enabled)
+
+🔴 WIKI INGEST TRIGGER CONDITION (Lines 122-126):
+
+┌─────────────────────────────────────────────────────────────┐
+│ if kb.IsWikiEnabled()                                        │
+│    && kb.WikiConfig.AutoIngest                               │
+│    && len(textChunks) > 0 {                                  │
+│                                                              │
+│   EnqueueWikiIngest(ctx, s.taskEnqueuer, s.redisClient,     │
+│       payload.TenantID,                                     │
+│       payload.KnowledgeBaseID,                              │
+│       payload.KnowledgeID)                                  │
+│ }                                                            │
+└─────────────────────────────────────────────────────────────┘
+
+TRIGGER REQUIREMENTS (ALL THREE MUST BE TRUE):
+  1. kb.IsWikiEnabled()      → WikiConfig != nil && WikiConfig.Enabled
+  2. kb.WikiConfig.AutoIngest → User enabled auto wiki generation
+  3. len(textChunks) > 0     → Document has processable text
+
+TIMING: After Summary + Question + Graph RAG tasks enqueued
+
+───────────────────────────────────────────────────────────────────────────────
+
+PART 7: KNOWLEDGE BASE API / DTO TYPES
+═══════════════════════════════════════
+
+📁 Handler: internal/handler/knowledgebase.go (Lines 114-147)
+   Uses: types.KnowledgeBase directly from request body
+
+📁 Client: client/knowledgebase.go (Lines 15-96)
+   Mirrors: types.KnowledgeBase with supporting DTOs
+
+Request/Response: 
+{
+  "id": "uuid",
+  "name": "My Knowledge Base",
+  "type": "document",           /* or "faq" */
+  "description": "...",
+  "embedding_model_id": "gpt-embedding-3-large",
+  "summary_model_id": "gpt-4-turbo",
+  "chunking_config": {
+    "chunk_size": 512,
+    "chunk_overlap": 50,
+    "separators": ["\n\n", "\n", "。"],
+    "enable_parent_child": true,
+    "parent_chunk_size": 4096,
+    "child_chunk_size": 384
+  },
+  "vlm_config": {
+    "enabled": true,
+    "model_id": "gpt-4-vision"
+  },
+  "wiki_config": {
+    "enabled": true,
+    "auto_ingest": true,
+    "synthesis_model_id": "gpt-4-turbo",
+    "max_pages_per_ingest": 10
+  },
+  "question_generation_config": {
+    "enabled": true,
+    "question_count": 3
+  },
+  "faq_config": {
+    "index_mode": "question_answer",
+    "question_index_mode": "combined"
+  }
+}
+
+───────────────────────────────────────────────────────────────────────────────
+
+PART 8: CHUNK TYPES & INDEXING BEHAVIOR
+════════════════════════════════════════
+
+📁 File: internal/types/chunk.go (Lines 11-39)
+
+CHUNKS THAT ARE INDEXED (vectorized):
+  ✓ ChunkTypeText         = "text"           - Primary content chunks
+  ✓ ChunkTypeImageOCR     = "image_ocr"      - OCR from images
+  ✓ ChunkTypeImageCaption = "image_caption"  - Image descriptions
+
+CHUNKS THAT ARE NOT INDEXED (stored only):
+  ✗ ChunkTypeParentText   = "parent_text"    - Context (parent-child)
+  ✗ ChunkTypeSummary      = "summary"        - Generated summaries
+  ✗ ChunkTypeEntity       = "entity"         - Knowledge graph nodes
+  ✗ ChunkTypeRelationship = "relationship"   - Knowledge graph edges
+  ✗ ChunkTypeFAQ          = "faq"            - FAQ entries
+  ✗ ChunkTypeWikiPage     = "wiki_page"      - Wiki pages
+
+───────────────────────────────────────────────────────────────────────────────
+
+PART 9: KNOWLEDGE ENTITY MODEL
+═══════════════════════════════
+
+📁 File: internal/types/knowledge.go (Lines 69-127)
+
+Knowledge entity represents a single document/knowledge item:
+
+  • ID                  - UUID of knowledge item
+  • KnowledgeBaseID     - Parent KB
+  • TenantID            - Tenant ownership
+  • Type                - "manual" (Markdown) or "faq"
+  • Title, Description
+  • Source              - URL, file path, or "manual"
+  • Channel             - Ingestion channel (web, api, wechat, etc.)
+  
+  STATUS FIELDS:
+  • ParseStatus         - pending|processing|completed|failed|deleting
+  • SummaryStatus       - none|pending|processing|completed|failed
+  • EnableStatus        - enabled|disabled
+  
+  FILE INFO:
+  • FileName, FileType, FileSize, FileHash, FilePath
+  • StorageSize         - Space used for embeddings
+  
+  • Metadata            - JSON metadata
+  • LastFAQImportResult - FAQ import status
+
+───────────────────────────────────────────────────────────────────────────────
+
+PART 10: COMPLETE DATA FLOW DIAGRAM
+═════════════════════════════════════
+
+DOCUMENT UPLOAD → INDEXING → POST-PROCESSING → WIKI INGEST
+
+┌──────────────────────────┐
+│   Document Upload (API)   │
+└────────────┬─────────────┘
+             ↓
+┌──────────────────────────┐
+│  Document Parsing        │
+│  - Select ParserEngine   │
+│  - Extract Content       │
+│  - Split to chunks       │
+└────────────┬─────────────┘
+             ↓
+┌──────────────────────────────────────────────────────┐
+│  processChunks() in knowledge.go:1681                │
+│                                                       │
+│  1. Get Embedding Model                              │
+│  2. Clean old chunks/indexes                         │
+│  3. Create Chunk objects:                            │
+│     ├─ Parent chunks (context, no index)             │
+│     ├─ Text chunks (indexed)                         │
+│     └─ Image chunks: OCR + Caption (indexed)         │
+│  4. Build IndexInfo (for vectorizable chunks only)   │
+│  5. Call retrieveEngine.BatchIndex()                 │
+│     └─> Vector/Keyword indexing decision made here   │
+│  6. Enqueue image multimodal tasks (if needed)       │
+│  7. Enqueue post-process task                        │
+└────────────┬─────────────────────────────────────────┘
+             ↓
+┌──────────────────────────────────────────────────────┐
+│  KnowledgePostProcessService.Handle()                │
+│  (knowledge_post_process.go:42)                      │
+│                                                       │
+│  1. Update Knowledge status → "completed"            │
+│  2. Enqueue Summary Generation Task                  │
+│  3. Enqueue Question Generation (if enabled)         │
+│  4. Enqueue Graph RAG Extraction (if enabled)        │
+│  5. *** WIKI INGEST DECISION ***                     │
+│     if IsWikiEnabled() && AutoIngest && hasText:     │
+│        └─> EnqueueWikiIngest()                       │
+└────────────┬─────────────────────────────────────────┘
+             ↓
+    [System Ready for Query]
+
+═══════════════════════════════════════════════════════════════════════════════
+
+QUICK REFERENCE TABLE
+═════════════════════
+
+Component                    Configuration        Default         Purpose
+─────────────────────────────────────────────────────────────────────────────────
+Document Chunking           ChunkSize            512 chars        Split documents
+                           ChunkOverlap         50 chars         Overlap between chunks
+                           Separators           [\n\n,\n,。]     Split points
+
+Parent-Child Strategy       EnableParentChild    false            Context retrieval
+                           ParentChunkSize     4096 chars       Large context chunks
+                           ChildChunkSize      384 chars        Small embedding chunks
+
+Vectorization              EmbeddingModelID     (required)       Which model vectorizes
+
+Multimodal                 VLMConfig.Enabled    false            Image understanding
+                           ImageProcessingConfig (optional)      Image model selection
+
+Auto Q&A Generation        QuestionGenerationConfig.Enabled     false      Auto Q&A
+                           QuestionCount       3 (default)      Q's per chunk
+
+FAQ Indexing               FAQConfig            (optional)       FAQ-specific strategy
+
+Knowledge Graph            ExtractConfig.Enabled               false      Entity extraction
+
+Wiki Feature               WikiConfig.Enabled    false            Wiki on/off
+                           WikiConfig.AutoIngest false            Auto wiki generation
+                           SynthesisModelID    (inherited)      Wiki generation model
+                           MaxPagesPerIngest   0 (unlimited)    Rate limiting
+
+═══════════════════════════════════════════════════════════════════════════════
+
+KEY FILES REFERENCE
+═══════════════════
+
+1. KnowledgeBase Definition
+   📄 internal/types/knowledgebase.go (Lines 40-98)
+
+2. WikiConfig Definition
+   📄 internal/types/wiki_page.go (Lines 91-103)
+
+3. Document Processing Pipeline
+   📄 internal/application/service/knowledge.go (Lines 1680-2074)
+   - processChunks() function
+   - ProcessChunksOptions struct
+   - Batch indexing logic
+
+4. Post-Processing & Wiki Trigger
+   📄 internal/application/service/knowledge_post_process.go (Lines 42-128)
+   - KnowledgePostProcessService.Handle()
+   - Wiki ingest trigger condition (Lines 122-126)
+
+5. API Handler
+   📄 internal/handler/knowledgebase.go (Lines 114-147)
+   - CreateKnowledgeBase endpoint
+
+6. Client API Types
+   📄 client/knowledgebase.go (Lines 15-96)
+
+7. Chunk Types
+   📄 internal/types/chunk.go (Lines 11-39)
+
+8. Knowledge Entity
+   📄 internal/types/knowledge.go (Lines 69-127)
+
+═══════════════════════════════════════════════════════════════════════════════
+END OF REPORT
+═══════════════════════════════════════════════════════════════════════════════
