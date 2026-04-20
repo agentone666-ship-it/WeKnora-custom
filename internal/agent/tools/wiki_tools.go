@@ -138,8 +138,7 @@ func (t *wikiReadPageTool) Execute(ctx context.Context, args json.RawMessage) (*
 		return fmt.Sprintf(`<wiki_page>
 <metadata>
 <knowledge_base_id>%s</knowledge_base_id>
-<title>%s</title>
-<slug>%s</slug>
+<link>[[%s|%s]]</link>
 <type>%s</type>
 <aliases>%s</aliases>
 </metadata>
@@ -158,7 +157,7 @@ func (t *wikiReadPageTool) Execute(ctx context.Context, args json.RawMessage) (*
 </content>
 </wiki_page>`,
 			kbID,
-			page.Title, page.Slug, page.PageType,
+			page.Slug, page.Title, page.PageType,
 			strings.Join(page.Aliases, ", "),
 			strings.Join(outLinksDesc, ", "),
 			strings.Join(inLinksDesc, ", "),
@@ -361,8 +360,8 @@ func (t *wikiSearchTool) Execute(ctx context.Context, args json.RawMessage) (*ty
 				summary = "(summary omitted, already seen in previous search)"
 			}
 			fmt.Fprintf(&sb,
-				"<page>\n<knowledge_base_id>%s</knowledge_base_id>\n<title>%s</title>\n<slug>%s</slug>\n<link>[[%s|%s]]</link>\n<type>%s</type>%s\n<summary>%s</summary>%s\n</page>\n",
-				h.kbID, p.Title, p.Slug, p.Slug, p.Title, p.PageType, aliasesTag, summary, snippetTag,
+				"<page>\n<knowledge_base_id>%s</knowledge_base_id>\n<link>[[%s|%s]]</link>\n<type>%s</type>%s\n<summary>%s</summary>%s\n</page>\n",
+				h.kbID, p.Slug, p.Title, p.PageType, aliasesTag, summary, snippetTag,
 			)
 		}
 		sb.WriteString("</search_results>")
