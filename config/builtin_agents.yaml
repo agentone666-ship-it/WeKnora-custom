@@ -146,20 +146,20 @@ builtin_agents:
     is_builtin: true
     i18n:
       default:
-        name: "Wiki Researcher"
-        description: "Specialized agent for navigating and answering questions based on Wiki knowledge bases"
+        name: "Wiki Questioner"
+        description: "Specialized agent for answering questions based on Wiki knowledge bases"
       zh-CN:
-        name: "维基研究员"
-        description: "专注于在 Wiki 知识库中进行导航和问答的智能体"
+        name: "维基问答"
+        description: "专注于在 Wiki 知识库中回答问题的智能体"
       zh-TW:
-        name: "維基研究員"
-        description: "專注於在 Wiki 知識庫中進行導航和問答的智能體"
+        name: "維基問答"
+        description: "專注於在 Wiki 知識庫中回答問題的智能體"
       ja-JP:
-        name: "Wikiリサーチャー"
-        description: "Wikiナレッジベースでのナビゲーションと質問応答に特化したエージェント"
+        name: "Wiki 問答"
+        description: "Wikiナレッジベースでの回答問題に特化したエージェント"
       ko-KR:
-        name: "위키 연구원"
-        description: "위키 지식 베이스를 탐색하고 질문에 답변하는 데 특화된 에이전트"
+        name: "위키 질문"
+        description: "위키 지식 베이스에서 답변하는 데 특화된 에이전트"
     config:
       agent_mode: "smart-reasoning"
       system_prompt_id: "wiki_researcher"
@@ -192,19 +192,19 @@ builtin_agents:
     i18n:
       default:
         name: "Wiki Fixer"
-        description: "Specialized agent for repairing and optimizing Wiki pages based on linter issues"
+        description: "Specialized agent for revising Wiki pages based on inspection issues"
       zh-CN:
-        name: "维基修复助手"
-        description: "专门用于根据巡检问题修复和优化 Wiki 页面的智能体"
+        name: "维基修订"
+        description: "专门用于根据巡检问题修订 Wiki 页面的智能体"
       zh-TW:
-        name: "維基修復助手"
-        description: "專門用於根據巡檢問題修復和優化 Wiki 頁面的智能體"
+        name: "維基修訂"
+        description: "專門用於根據巡檢問題修訂 Wiki 頁面的智能體"
       ja-JP:
-        name: "Wiki修正アシスタント"
-        description: "リンターの問題に基づいてWikiページを修復および最適化するための専用エージェント"
+        name: "Wiki 修訂"
+        description: "検査の問題に基づいてWikiページを修復および最適化するための専用エージェント"
       ko-KR:
-        name: "위키 수정 도우미"
-        description: "린터 문제를 기반으로 Wiki 페이지를 복구하고 최적화하는 전용 에이전트"
+        name: "위키 수정"
+        description: "검사 문제를 기반으로 Wiki 페이지를 修復하고 最適化하는 전용 에이전트"
     config:
       agent_mode: "smart-reasoning"
       system_prompt_id: "wiki_fixer"
