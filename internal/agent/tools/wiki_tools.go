@@ -75,6 +75,7 @@ func (t *wikiReadPageTool) Execute(ctx context.Context, args json.RawMessage) (*
 
 	var outputs []string
 	var errs []string
+	foundKBs := make(map[string]string)
 
 	formatLinks := func(slugs []string, kbID string) []string {
 		var descs []string
@@ -106,6 +107,7 @@ func (t *wikiReadPageTool) Execute(ctx context.Context, args json.RawMessage) (*
 		for _, kbID := range kbIDs {
 			page, err := t.wikiService.GetPageBySlug(ctx, kbID, slug)
 			if err == nil && page != nil {
+				foundKBs[slug] = kbID
 				t.mu.Lock()
 				t.seenLinks[slug] = true
 				t.mu.Unlock()
@@ -180,7 +182,13 @@ func (t *wikiReadPageTool) Execute(ctx context.Context, args json.RawMessage) (*
 		finalOutput += fmt.Sprintf("\n\n<errors>\n%s\n</errors>", strings.Join(errs, "\n"))
 	}
 
-	return &types.ToolResult{Success: true, Output: finalOutput}, nil
+	return &types.ToolResult{
+		Success: true, 
+		Output: finalOutput,
+		Data: map[string]interface{}{
+			"found_kbs": foundKBs,
+		},
+	}, nil
 }
 
 // ---- wiki_search ----
@@ -251,6 +259,7 @@ func (t *wikiSearchTool) Execute(ctx context.Context, args json.RawMessage) (*ty
 	}
 
 	var allOutputs []string
+	foundKBs := make(map[string]string)
 
 	for _, query := range queriesToRun {
 		var allPages []*types.WikiPage
@@ -258,6 +267,9 @@ func (t *wikiSearchTool) Execute(ctx context.Context, args json.RawMessage) (*ty
 			pages, err := t.wikiService.SearchPages(ctx, kbID, query, params.Limit)
 			if err == nil {
 				allPages = append(allPages, pages...)
+				for _, p := range pages {
+					foundKBs[p.Slug] = kbID
+				}
 			}
 		}
 
@@ -286,16 +298,22 @@ func (t *wikiSearchTool) Execute(ctx context.Context, args json.RawMessage) (*ty
 			}
 
 			if seen {
-				fmt.Fprintf(&sb, "<page>\n<title>%s</title>\n<slug>%s</slug>\n<type>%s</type>%s\n<summary>(summary omitted, already seen in previous search)</summary>%s\n</page>\n", p.Title, p.Slug, p.PageType, aliasesTag, snippetTag)
+				fmt.Fprintf(&sb, "<page>\n<title>%s</title>\n<slug>%s</slug>\n<link>[[%s|%s]]</link>\n<type>%s</type>%s\n<summary>(summary omitted, already seen in previous search)</summary>%s\n</page>\n", p.Title, p.Slug, p.Slug, p.Title, p.PageType, aliasesTag, snippetTag)
 			} else {
-				fmt.Fprintf(&sb, "<page>\n<title>%s</title>\n<slug>%s</slug>\n<type>%s</type>%s\n<summary>%s</summary>%s\n</page>\n", p.Title, p.Slug, p.PageType, aliasesTag, p.Summary, snippetTag)
+				fmt.Fprintf(&sb, "<page>\n<title>%s</title>\n<slug>%s</slug>\n<link>[[%s|%s]]</link>\n<type>%s</type>%s\n<summary>%s</summary>%s\n</page>\n", p.Title, p.Slug, p.Slug, p.Title, p.PageType, aliasesTag, p.Summary, snippetTag)
 			}
 		}
 		sb.WriteString("</search_results>")
 		allOutputs = append(allOutputs, sb.String())
 	}
 
-	return &types.ToolResult{Success: true, Output: strings.Join(allOutputs, "\n\n")}, nil
+	return &types.ToolResult{
+		Success: true, 
+		Output: strings.Join(allOutputs, "\n\n"),
+		Data: map[string]interface{}{
+			"found_kbs": foundKBs,
+		},
+	}, nil
 }
 
 // --- Helper ---

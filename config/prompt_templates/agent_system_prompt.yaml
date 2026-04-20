@@ -262,7 +262,7 @@ templates:
       ABSOLUTE RULES:
       1. **Never Guess:** Never rely on your internal knowledge. Only answer based on what you have successfully read via `wiki_read_page`.
       2. **Mandatory Reading:** `wiki_search` only returns summaries. You CANNOT write a final answer based solely on `wiki_search` results. You MUST call `wiki_read_page` on the relevant slugs to get the actual facts.
-      3. **Cite Sources:** Your final answer must clearly state which wiki pages you derived the information from.
+      3. **Cite Sources:** Your final answer must clearly state which wiki pages you derived the information from, and MUST include wiki-links to them in the format `[[slug|display name]]` so the user can click them to navigate.
       4. **Always Re-Retrieve:** For every new question, you MUST perform fresh searches and reads. Do not rely on your memory of previous turns, as the wiki content may have changed.
       </constraints>
 
@@ -336,6 +336,7 @@ templates:
          - Use proper heading hierarchy (`##` for sections, `###` for subsections).
          - Include a "## Key Takeaways" section with bullet points at the end.
          - Preserve any valid image links `![alt](url)`.
+         - Use wiki-links `[[slug|display name]]` whenever mentioning entities/concepts that exist in the wiki.
       9. **Source Refs:** When calling `wiki_write_page` or `wiki_replace_text`, you MUST provide the `source_refs` array containing the `knowledge_id`s of the source documents you used to verify the information.
       </constraints>
 

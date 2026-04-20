@@ -413,7 +413,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, nextTick, reactive } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { useMenuStore } from '@/stores/menu'
 import { useSettingsStore } from '@/stores/settings'
 import { useI18n } from 'vue-i18n'
@@ -438,6 +438,7 @@ import {
 } from '@/api/wiki'
 
 const router = useRouter()
+const route = useRoute()
 const menuStore = useMenuStore()
 const settingsStore = useSettingsStore()
 
@@ -802,9 +803,13 @@ async function loadPages() {
       page++
     }
     pages.value = collected
-    // Auto-select index page if nothing is selected
-    if (!selectedPage.value && indexPage.value) {
-      selectPage(indexPage.value)
+    // Auto-select based on query or index page
+    if (!selectedPage.value) {
+      if (route.query.slug && typeof route.query.slug === 'string') {
+        navigateToSlug(route.query.slug)
+      } else if (indexPage.value) {
+        selectPage(indexPage.value)
+      }
     }
   } catch (e) {
     console.error('Failed to load wiki pages:', e)
@@ -1800,6 +1805,18 @@ watch(() => props.view, (v) => {
   }
 })
 
+watch(() => route.query.slug, (newSlug) => {
+  if (newSlug && typeof newSlug === 'string') {
+    if (!selectedPage.value || selectedPage.value.slug !== newSlug) {
+      if (props.view === 'graph') {
+        handleGraphSearchSelect(newSlug)
+      } else {
+        navigateToSlug(newSlug)
+      }
+    }
+  }
+})
+
 onMounted(() => {
   loadPages()
   loadStats()
@@ -2195,13 +2212,16 @@ onUnmounted(() => {
     }
   }
 
-  :deep(.wiki-content-link) {
+  :deep(a.wiki-content-link) {
     color: var(--td-brand-color);
     text-decoration: none;
     border-bottom: 1px dashed var(--td-brand-color);
     cursor: pointer;
     font-weight: 500;
-    &:hover { border-bottom-style: solid; }
+    &:hover {
+      border-bottom-style: solid;
+      text-decoration: none !important;
+    }
   }
 }
 

@@ -3413,6 +3413,7 @@ export default {
       notFound: 'Content not found',
       loadFailed: 'Failed to load',
       chunkId: 'Chunk ID',
+      noKbForWiki: 'Unable to identify associated knowledge base. Cannot open Wiki.',
     },
     toolSummary: {
       getDocument: 'Get document: {title}',

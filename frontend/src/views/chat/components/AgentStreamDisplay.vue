@@ -339,7 +339,7 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue';
-import { useRouter } from 'vue-router';
+import { useRouter, useRoute } from 'vue-router';
 import { marked } from 'marked';
 import markedKatex from 'marked-katex-extension';
 import 'katex/dist/katex.min.css';
@@ -349,6 +349,8 @@ import picturePreview from '@/components/picture-preview.vue';
 import { getChunkByIdOnly } from '@/api/knowledge-base';
 import { MessagePlugin } from 'tdesign-vue-next';
 import { useUIStore } from '@/stores/ui';
+import { useSettingsStore } from '@/stores/settings';
+import { useAuthStore } from '@/stores/auth';
 import { useI18n } from 'vue-i18n';
 import i18n from '@/i18n';
 import { hydrateProtectedFileImages } from '@/utils/security';
@@ -365,7 +367,10 @@ import {
 } from '@/utils/mermaidShared';
 
 const router = useRouter();
+const route = useRoute();
 const uiStore = useUIStore();
+const settingsStore = useSettingsStore();
+const authStore = useAuthStore();
 const { t } = useI18n();
 
 ensureMermaidInitialized();
@@ -1202,6 +1207,33 @@ const onHoverOut = (e: Event) => {
   scheduleFloatClose();
 };
 
+const getKbIdForWiki = (slug: string): string => {
+  if (route.params.kbId) return route.params.kbId as string;
+
+  // Try to extract from agent event stream (retrieval pipeline)
+  if (props.session?.agentEventStream) {
+    // Search backwards for the most recent wiki tool call that found this slug
+    for (let i = props.session.agentEventStream.length - 1; i >= 0; i--) {
+      const event = props.session.agentEventStream[i];
+      if (event.type === 'tool_call' && event.tool_data?.found_kbs) {
+        if (event.tool_data.found_kbs[slug]) {
+          return event.tool_data.found_kbs[slug];
+        }
+      }
+    }
+  }
+
+  // Fallbacks
+  const selectedKbs = settingsStore.getSelectedKnowledgeBases();
+  if (selectedKbs && selectedKbs.length > 0) return selectedKbs[0];
+
+  if (authStore.knowledgeBases && authStore.knowledgeBases.length > 0) {
+    return authStore.knowledgeBases[0].id;
+  }
+
+  return '';
+};
+
 const onRootClick = (e: Event) => {
   const target = e.target as HTMLElement;
   if (!target) return;
@@ -1245,6 +1277,28 @@ const onRootClick = (e: Event) => {
     return;
   }
   
+  // Handle wiki link clicks -> navigate to KB wiki browser page
+  const wikiEl = target.closest?.('.citation-wiki') as HTMLElement | null;
+  if (wikiEl && wikiEl.getAttribute('data-slug')) {
+    e.preventDefault();
+    e.stopPropagation();
+    const slug = wikiEl.getAttribute('data-slug');
+    
+    // Determine the relevant KB ID
+    const kbId = getKbIdForWiki(slug);
+    
+    if (kbId && slug) {
+      try {
+        router.push(`/platform/knowledge-bases/${kbId}?tab=wiki&slug=${encodeURIComponent(slug)}`);
+      } catch (error) {
+        console.error('Failed to navigate to wiki page:', error);
+      }
+    } else {
+      MessagePlugin.warning(t('agentStream.citation.noKbForWiki'));
+    }
+    return;
+  }
+  
   // Handle generic a clicks (especially in Wails desktop)
   const aEl = target.closest?.('a') as HTMLAnchorElement | null;
   // @ts-ignore
@@ -1284,6 +1338,28 @@ const onRootKeydown = (e: KeyboardEvent) => {
         } catch (error) {
           console.error('Failed to navigate to knowledge base:', error);
         }
+      }
+    }
+    return;
+  }
+
+  // Handle wiki citation keyboard -> navigate to KB wiki browser
+  const wikiEl = target.closest?.('.citation-wiki') as HTMLElement | null;
+  if (wikiEl) {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      const slug = wikiEl.getAttribute('data-slug');
+      
+      const kbId = getKbIdForWiki(slug || '');
+      
+      if (kbId && slug) {
+        try {
+          router.push(`/platform/knowledge-bases/${kbId}?tab=wiki&slug=${encodeURIComponent(slug)}`);
+        } catch (error) {
+          console.error('Failed to navigate to wiki page:', error);
+        }
+      } else {
+        MessagePlugin.warning(t('agentStream.citation.noKbForWiki'));
       }
     }
     return;
@@ -1406,6 +1482,28 @@ const preprocessMarkdown = (contentStr: string): string => {
         const displayDoc = escapeHtml(truncateMiddle(doc));
         return `<span class="citation citation-kb" data-kb-id="${safeKbId}" data-chunk-id="${safeChunkId}" data-doc="${safeDoc}" role="button" tabindex="0"><span class="citation-icon kb"></span><span class="citation-text">${displayDoc}</span><span class="citation-tip"><span class="t-popup__content"><span class="tip-loading">${t('agentStream.citation.loading')}</span></span></span></span>`;
       }
+    )
+    .replace(
+      /\[\[([^\]]+)\]\]/g,
+      (match, inner: string) => {
+        const pipeIdx = inner.indexOf('|');
+        const slug = pipeIdx > 0 ? inner.substring(0, pipeIdx).trim() : inner.trim();
+        let display = slug;
+        if (pipeIdx > 0) {
+          display = inner.substring(pipeIdx + 1).trim();
+        } else {
+          // Fallback: strip type prefix like "summary/" or "concept/"
+          const parts = slug.split('/');
+          display = parts.length > 1 ? parts.slice(1).join('/') : slug;
+        }
+        
+        // Ensure it's a valid wiki slug format, containing at least one slash
+        if (!slug.includes('/')) return match;
+        
+        const safeSlug = escapeHtml(slug);
+        const safeDisplay = escapeHtml(display);
+        return `<a href="#" class="wiki-content-link citation-wiki" data-slug="${safeSlug}">${safeDisplay}</a>`;
+      }
     );
 };
 
@@ -1432,8 +1530,19 @@ const getTokens = (content: any) => {
     return `\x00IMG${idx}\x00`;
   });
 
-  let sanitized = sanitizeForDisplay(preservedWithImages);
+  // Preserve wiki links [[slug|name]]
+  const wikiPlaceholders: string[] = [];
+  const preservedWithWiki = preservedWithImages.replace(/\[\[([^\]]+)\]\]/g, (match) => {
+    const idx = wikiPlaceholders.length;
+    wikiPlaceholders.push(match);
+    return `\x00WIKI${idx}\x00`;
+  });
 
+  let sanitized = sanitizeForDisplay(preservedWithWiki);
+
+  // Restore preserved wiki links
+  sanitized = sanitized.replace(/\x00WIKI(\d+)\x00/g, (_, idx) => wikiPlaceholders[Number(idx)]);
+  
   // Restore preserved images
   sanitized = sanitized.replace(/\x00IMG(\d+)\x00/g, (_, idx) => imagePlaceholders[Number(idx)]);
   
@@ -1933,6 +2042,18 @@ const handleAddToKnowledge = (answerEvent: any) => {
   gap: 0;
   margin-bottom: 10px;
   position: relative;
+}
+
+:deep(a.wiki-content-link) {
+  color: var(--td-brand-color);
+  text-decoration: none;
+  border-bottom: 1px dashed var(--td-brand-color);
+  cursor: pointer;
+  font-weight: 500;
+  &:hover {
+    border-bottom-style: solid;
+    text-decoration: none !important;
+  }
 }
 
 // Streaming steps container

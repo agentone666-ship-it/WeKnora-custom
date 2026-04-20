@@ -3411,6 +3411,7 @@ export default {
       notFound: "未找到内容",
       loadFailed: "加载失败",
       chunkId: "片段ID",
+      noKbForWiki: "无法识别关联的知识库，无法打开 Wiki",
     },
     toolSummary: {
       getDocument: "获取文档：{title}",
