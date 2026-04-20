@@ -81,13 +81,44 @@ func extractSourceKnowledgeIDs(page *types.WikiPage) []string {
 	return ids
 }
 
-// pageIntersectsKnowledgeIDs reports whether the page's SourceRefs contain at
-// least one knowledge ID in allowed. An empty allowed set means "no filter".
+// isStructuralPage reports whether a page is a wiki-level structural/meta
+// page (index, log) rather than a content page tied to specific source
+// documents. Structural pages are never filtered by knowledge_ids scope —
+// they describe wiki topology (TOC, operation log) and must remain reachable
+// even when the user has pinned specific documents.
+func isStructuralPage(page *types.WikiPage) bool {
+	if page == nil {
+		return false
+	}
+	switch page.PageType {
+	case types.WikiPageTypeIndex, types.WikiPageTypeLog:
+		return true
+	}
+	return false
+}
+
+// pageIntersectsKnowledgeIDs reports whether the page should pass the
+// knowledge-ID scope filter.
+//
+//   - Empty allowed set = "no filter" → always true.
+//   - Structural pages (index/log) are always surfaced so the model can still
+//     navigate wiki topology under a pinned-doc scope.
+//   - Pages with no SourceRefs at all are conservatively allowed through: the
+//     filter is meant to narrow document-derived content, not hide metadata
+//     pages that happen to have empty refs.
+//   - Otherwise, at least one of the page's SourceRefs must be in allowed.
 func pageIntersectsKnowledgeIDs(page *types.WikiPage, allowed map[string]bool) bool {
 	if len(allowed) == 0 {
 		return true
 	}
-	for _, kid := range extractSourceKnowledgeIDs(page) {
+	if isStructuralPage(page) {
+		return true
+	}
+	ids := extractSourceKnowledgeIDs(page)
+	if len(ids) == 0 {
+		return true
+	}
+	for _, kid := range ids {
 		if allowed[kid] {
 			return true
 		}
