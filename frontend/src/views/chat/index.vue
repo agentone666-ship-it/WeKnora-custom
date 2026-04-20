@@ -1,5 +1,5 @@
 <template>
-    <div class="chat" :class="{ 'is-embedded': embeddedMode }">
+    <div class="chat" :class="{ 'is-embedded': embeddedMode, 'is-sidebar-collapsed': uiStore.sidebarCollapsed }">
         <div ref="scrollContainer" class="chat_scroll_box" @scroll="handleScroll">
             <div class="msg_list" :class="{ 'is-embedded': embeddedMode }">
                 <!-- 消息列表骨架屏 -->
@@ -1225,6 +1225,10 @@ onBeforeRouteUpdate((to, from, next) => {
     align-items: center;
     max-width: calc(100vw - 260px);
     min-width: 400px;
+
+    &.is-sidebar-collapsed {
+        max-width: calc(100vw - 60px);
+    }
 
     &.is-embedded {
         max-width: 100%;

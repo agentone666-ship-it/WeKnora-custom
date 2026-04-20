@@ -27,7 +27,8 @@ func NewWikiReadPageTool(wikiService interfaces.WikiPageService, kbIDs []string)
 		BaseTool: NewBaseTool(
 			ToolWikiReadPage,
 			`Read one or more wiki pages by their slugs. Returns the full markdown content, metadata, and links.
-Use this to read specific wiki pages when you know their slug (e.g. "entity/acme-corp", "concept/rag").`,
+Use this to read specific wiki pages when you know their slug (e.g. "entity/acme-corp", "concept/rag").
+When the same slug exists in multiple knowledge bases, all matching pages are returned (each tagged with its knowledge_base_id). Pass "knowledge_base_id" to limit to a specific KB.`,
 			json.RawMessage(`{
   "type": "object",
   "properties": {
@@ -38,7 +39,7 @@ Use this to read specific wiki pages when you know their slug (e.g. "entity/acme
     },
     "knowledge_base_id": {
       "type": "string",
-      "description": "Optional: specific knowledge base ID. If omitted, searches all wiki KBs."
+      "description": "Optional: specific knowledge base ID. If omitted, reads the slug from every wiki KB in scope (all matches returned)."
     }
   },
   "required": ["slugs"]
@@ -48,6 +49,12 @@ Use this to read specific wiki pages when you know their slug (e.g. "entity/acme
 		kbIDs:       kbIDs,
 		seenLinks:   make(map[string]bool),
 	}
+}
+
+// seenLinkKey builds a dedupe key scoped to a knowledge base so that identical
+// slugs from different KBs are not collapsed into a single "already seen" entry.
+func seenLinkKey(kbID, slug string) string {
+	return kbID + "\x00" + slug
 }
 
 func (t *wikiReadPageTool) Execute(ctx context.Context, args json.RawMessage) (*types.ToolResult, error) {
@@ -75,18 +82,21 @@ func (t *wikiReadPageTool) Execute(ctx context.Context, args json.RawMessage) (*
 
 	var outputs []string
 	var errs []string
-	foundKBs := make(map[string]string)
+	// Per-slug list of KB IDs where the slug was found. A slug may exist in
+	// multiple KBs when the agent has several wiki KBs in scope.
+	foundKBs := make(map[string][]string)
 
 	formatLinks := func(slugs []string, kbID string) []string {
 		var descs []string
 		for _, s := range slugs {
+			key := seenLinkKey(kbID, s)
 			t.mu.Lock()
-			seen := t.seenLinks[s]
-			t.seenLinks[s] = true
+			seen := t.seenLinks[key]
+			t.seenLinks[key] = true
 			t.mu.Unlock()
 
 			if seen {
-				// We already injected the summary for this link in this session
+				// We already injected the summary for this link in this session (within the same KB)
 				descs = append(descs, fmt.Sprintf("[[%s]] (summary omitted, already seen)", s))
 			} else {
 				if linkPage, err := t.wikiService.GetPageBySlug(ctx, kbID, s); err == nil && linkPage != nil {
@@ -102,40 +112,32 @@ func (t *wikiReadPageTool) Execute(ctx context.Context, args json.RawMessage) (*
 		return descs
 	}
 
-	for _, slug := range slugsToFetch {
-		found := false
-		for _, kbID := range kbIDs {
-			page, err := t.wikiService.GetPageBySlug(ctx, kbID, slug)
-			if err == nil && page != nil {
-				foundKBs[slug] = kbID
-				t.mu.Lock()
-				t.seenLinks[slug] = true
-				t.mu.Unlock()
+	renderPage := func(page *types.WikiPage, kbID string) string {
+		outLinksDesc := formatLinks(page.OutLinks, kbID)
+		inLinksDesc := formatLinks(page.InLinks, kbID)
 
-				outLinksDesc := formatLinks(page.OutLinks, kbID)
-				inLinksDesc := formatLinks(page.InLinks, kbID)
-
-				// Render source refs
-				var sourcesDesc []string
-				if len(page.SourceRefs) > 0 {
-					for _, ref := range page.SourceRefs {
-						// SourceRefs might be "knowledgeID" or "knowledgeID|Title"
-						kid := ref
-						title := ""
-						if pipeIdx := strings.Index(ref, "|"); pipeIdx > 0 {
-							kid = ref[:pipeIdx]
-							title = ref[pipeIdx+1:]
-						}
-						if title != "" {
-							sourcesDesc = append(sourcesDesc, fmt.Sprintf(`<source knowledge_id="%s">%s</source>`, kid, title))
-						} else {
-							sourcesDesc = append(sourcesDesc, fmt.Sprintf(`<source knowledge_id="%s"/>`, kid))
-						}
-					}
+		// Render source refs
+		var sourcesDesc []string
+		if len(page.SourceRefs) > 0 {
+			for _, ref := range page.SourceRefs {
+				// SourceRefs might be "knowledgeID" or "knowledgeID|Title"
+				kid := ref
+				title := ""
+				if pipeIdx := strings.Index(ref, "|"); pipeIdx > 0 {
+					kid = ref[:pipeIdx]
+					title = ref[pipeIdx+1:]
 				}
+				if title != "" {
+					sourcesDesc = append(sourcesDesc, fmt.Sprintf(`<source knowledge_id="%s">%s</source>`, kid, title))
+				} else {
+					sourcesDesc = append(sourcesDesc, fmt.Sprintf(`<source knowledge_id="%s"/>`, kid))
+				}
+			}
+		}
 
-				output := fmt.Sprintf(`<wiki_page>
+		return fmt.Sprintf(`<wiki_page>
 <metadata>
+<knowledge_base_id>%s</knowledge_base_id>
 <title>%s</title>
 <slug>%s</slug>
 <type>%s</type>
@@ -155,21 +157,51 @@ func (t *wikiReadPageTool) Execute(ctx context.Context, args json.RawMessage) (*
 %s
 </content>
 </wiki_page>`,
-					page.Title, page.Slug, page.PageType,
-					strings.Join(page.Aliases, ", "),
-					strings.Join(outLinksDesc, ", "),
-					strings.Join(inLinksDesc, ", "),
-					strings.Join(sourcesDesc, "\n"),
-					page.Summary,
-					page.Content,
-				)
-				outputs = append(outputs, output)
-				found = true
-				break
-			}
+			kbID,
+			page.Title, page.Slug, page.PageType,
+			strings.Join(page.Aliases, ", "),
+			strings.Join(outLinksDesc, ", "),
+			strings.Join(inLinksDesc, ", "),
+			strings.Join(sourcesDesc, "\n"),
+			page.Summary,
+			page.Content,
+		)
+	}
+
+	for _, slug := range slugsToFetch {
+		var hits []struct {
+			page *types.WikiPage
+			kbID string
 		}
-		if !found {
+		for _, kbID := range kbIDs {
+			page, err := t.wikiService.GetPageBySlug(ctx, kbID, slug)
+			if err != nil || page == nil {
+				continue
+			}
+			actualKBID := kbID
+			if page.KnowledgeBaseID != "" {
+				actualKBID = page.KnowledgeBaseID
+			}
+			hits = append(hits, struct {
+				page *types.WikiPage
+				kbID string
+			}{page, actualKBID})
+			foundKBs[slug] = append(foundKBs[slug], actualKBID)
+			t.mu.Lock()
+			t.seenLinks[seenLinkKey(actualKBID, slug)] = true
+			t.mu.Unlock()
+		}
+
+		if len(hits) == 0 {
 			errs = append(errs, fmt.Sprintf("Wiki page '%s' not found", slug))
+			continue
+		}
+
+		// When the same slug exists in multiple KBs (and the caller did not
+		// specify a knowledge_base_id), emit all pages so the model can pick
+		// the right one or compare them explicitly.
+		for _, h := range hits {
+			outputs = append(outputs, renderPage(h.page, h.kbID))
 		}
 	}
 
@@ -182,11 +214,21 @@ func (t *wikiReadPageTool) Execute(ctx context.Context, args json.RawMessage) (*
 		finalOutput += fmt.Sprintf("\n\n<errors>\n%s\n</errors>", strings.Join(errs, "\n"))
 	}
 
+	// Surface ambiguous slugs so the caller (and logs) can see when a slug
+	// resolved to more than one KB.
+	ambiguous := make(map[string][]string)
+	for slug, kbs := range foundKBs {
+		if len(kbs) > 1 {
+			ambiguous[slug] = kbs
+		}
+	}
+
 	return &types.ToolResult{
-		Success: true, 
-		Output: finalOutput,
+		Success: true,
+		Output:  finalOutput,
 		Data: map[string]interface{}{
-			"found_kbs": foundKBs,
+			"found_kbs":       foundKBs,
+			"ambiguous_slugs": ambiguous,
 		},
 	}, nil
 }
@@ -259,31 +301,48 @@ func (t *wikiSearchTool) Execute(ctx context.Context, args json.RawMessage) (*ty
 	}
 
 	var allOutputs []string
-	foundKBs := make(map[string]string)
+	// Per-slug list of KB IDs that produced a match. Multiple KBs may share a
+	// slug when the agent has several wiki KBs in scope, so we keep the full list.
+	foundKBs := make(map[string][]string)
+
+	type searchHit struct {
+		page *types.WikiPage
+		kbID string
+	}
 
 	for _, query := range queriesToRun {
-		var allPages []*types.WikiPage
+		var allHits []searchHit
 		for _, kbID := range t.kbIDs {
 			pages, err := t.wikiService.SearchPages(ctx, kbID, query, params.Limit)
-			if err == nil {
-				allPages = append(allPages, pages...)
-				for _, p := range pages {
-					foundKBs[p.Slug] = kbID
+			if err != nil {
+				continue
+			}
+			for _, p := range pages {
+				if p == nil {
+					continue
 				}
+				actualKBID := kbID
+				if p.KnowledgeBaseID != "" {
+					actualKBID = p.KnowledgeBaseID
+				}
+				allHits = append(allHits, searchHit{page: p, kbID: actualKBID})
+				foundKBs[p.Slug] = append(foundKBs[p.Slug], actualKBID)
 			}
 		}
 
-		if len(allPages) == 0 {
+		if len(allHits) == 0 {
 			allOutputs = append(allOutputs, fmt.Sprintf("<search_results count=\"0\" query=\"%s\" />", query))
 			continue
 		}
 
 		var sb strings.Builder
-		sb.WriteString(fmt.Sprintf("<search_results count=\"%d\" query=\"%s\">\n", len(allPages), query))
-		for _, p := range allPages {
+		fmt.Fprintf(&sb, "<search_results count=\"%d\" query=\"%s\">\n", len(allHits), query)
+		for _, h := range allHits {
+			p := h.page
+			key := seenLinkKey(h.kbID, p.Slug)
 			t.mu.Lock()
-			seen := t.seenSlugs[p.Slug]
-			t.seenSlugs[p.Slug] = true
+			seen := t.seenSlugs[key]
+			t.seenSlugs[key] = true
 			t.mu.Unlock()
 
 			snippet := extractSnippet(p.Content, query)
@@ -297,19 +356,22 @@ func (t *wikiSearchTool) Execute(ctx context.Context, args json.RawMessage) (*ty
 				aliasesTag = fmt.Sprintf("\n<aliases>%s</aliases>", strings.Join(p.Aliases, ", "))
 			}
 
+			summary := p.Summary
 			if seen {
-				fmt.Fprintf(&sb, "<page>\n<title>%s</title>\n<slug>%s</slug>\n<link>[[%s|%s]]</link>\n<type>%s</type>%s\n<summary>(summary omitted, already seen in previous search)</summary>%s\n</page>\n", p.Title, p.Slug, p.Slug, p.Title, p.PageType, aliasesTag, snippetTag)
-			} else {
-				fmt.Fprintf(&sb, "<page>\n<title>%s</title>\n<slug>%s</slug>\n<link>[[%s|%s]]</link>\n<type>%s</type>%s\n<summary>%s</summary>%s\n</page>\n", p.Title, p.Slug, p.Slug, p.Title, p.PageType, aliasesTag, p.Summary, snippetTag)
+				summary = "(summary omitted, already seen in previous search)"
 			}
+			fmt.Fprintf(&sb,
+				"<page>\n<knowledge_base_id>%s</knowledge_base_id>\n<title>%s</title>\n<slug>%s</slug>\n<link>[[%s|%s]]</link>\n<type>%s</type>%s\n<summary>%s</summary>%s\n</page>\n",
+				h.kbID, p.Title, p.Slug, p.Slug, p.Title, p.PageType, aliasesTag, summary, snippetTag,
+			)
 		}
 		sb.WriteString("</search_results>")
 		allOutputs = append(allOutputs, sb.String())
 	}
 
 	return &types.ToolResult{
-		Success: true, 
-		Output: strings.Join(allOutputs, "\n\n"),
+		Success: true,
+		Output:  strings.Join(allOutputs, "\n\n"),
 		Data: map[string]interface{}{
 			"found_kbs": foundKBs,
 		},
