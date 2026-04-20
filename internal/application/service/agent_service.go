@@ -377,6 +377,7 @@ func (s *agentService) registerTools(
 
 	var hasVectorKB, hasWikiKB bool
 	var wikiKBIDs []string
+	var wikiScopes []tools.WikiScope
 	for _, target := range config.SearchTargets {
 		kb, err := s.knowledgeBaseService.GetKnowledgeBaseByIDOnly(ctx, target.KnowledgeBaseID)
 		if err != nil {
@@ -388,6 +389,14 @@ func (s *agentService) registerTools(
 		if kb.IsWikiEnabled() {
 			hasWikiKB = true
 			wikiKBIDs = append(wikiKBIDs, kb.ID)
+			// When the user @mentioned specific documents, carry the document
+			// whitelist into the wiki scope so wiki_search / wiki_read_page
+			// only surface pages whose SourceRefs intersect the pinned docs.
+			scope := tools.WikiScope{KnowledgeBaseID: kb.ID}
+			if target.Type == types.SearchTargetTypeKnowledge && len(target.KnowledgeIDs) > 0 {
+				scope.KnowledgeIDs = append([]string(nil), target.KnowledgeIDs...)
+			}
+			wikiScopes = append(wikiScopes, scope)
 		}
 	}
 
@@ -505,9 +514,9 @@ func (s *agentService) registerTools(
 
 		// Wiki tools — only registered when wiki KBs are detected
 		case tools.ToolWikiReadPage:
-			toolToRegister = tools.NewWikiReadPageTool(s.wikiPageService, wikiKBIDs)
+			toolToRegister = tools.NewWikiReadPageTool(s.wikiPageService, wikiScopes)
 		case tools.ToolWikiSearch:
-			toolToRegister = tools.NewWikiSearchTool(s.wikiPageService, wikiKBIDs)
+			toolToRegister = tools.NewWikiSearchTool(s.wikiPageService, wikiScopes)
 		case tools.ToolWikiReadSourceDoc:
 			toolToRegister = tools.NewWikiReadSourceDocTool(s.knowledgeService, s.chunkService)
 		case tools.ToolWikiFlagIssue:

@@ -14,15 +14,96 @@ import (
 
 // ---- wiki_read_page ----
 
+// WikiScope describes the effective retrieval scope for a single wiki
+// knowledge base within an agent session.
+//
+//   - KnowledgeBaseID: the wiki KB to search.
+//   - KnowledgeIDs: OPTIONAL whitelist of source knowledge (document) IDs.
+//     When non-empty, a wiki page is only surfaced if its SourceRefs
+//     intersect this set. Used to honour user-level @mentions that pin the
+//     search to specific documents inside a KB.
+type WikiScope struct {
+	KnowledgeBaseID string
+	KnowledgeIDs    []string
+}
+
+// NewWikiScopesFromKBIDs is a convenience constructor for callers that only
+// carry plain KB IDs and don't need per-document filtering (e.g. legacy tests).
+func NewWikiScopesFromKBIDs(kbIDs []string) []WikiScope {
+	scopes := make([]WikiScope, 0, len(kbIDs))
+	for _, id := range kbIDs {
+		if id == "" {
+			continue
+		}
+		scopes = append(scopes, WikiScope{KnowledgeBaseID: id})
+	}
+	return scopes
+}
+
+// scopeKnowledgeFilter returns the server-enforced knowledge-ID whitelist for
+// a KB, derived purely from the agent scope (never from tool arguments).
+// The model does not see this filter; it is applied silently by Execute.
+//
+// Returns (filterSet, hasFilter). When hasFilter is false, no filtering is
+// applied to pages from this KB.
+func scopeKnowledgeFilter(scope WikiScope) (map[string]bool, bool) {
+	if len(scope.KnowledgeIDs) == 0 {
+		return nil, false
+	}
+	set := make(map[string]bool, len(scope.KnowledgeIDs))
+	for _, id := range scope.KnowledgeIDs {
+		if id != "" {
+			set[id] = true
+		}
+	}
+	if len(set) == 0 {
+		return nil, false
+	}
+	return set, true
+}
+
+// extractSourceKnowledgeIDs parses SourceRefs ("uuid" or "uuid|title") and
+// returns the bare knowledge IDs.
+func extractSourceKnowledgeIDs(page *types.WikiPage) []string {
+	if page == nil || len(page.SourceRefs) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(page.SourceRefs))
+	for _, ref := range page.SourceRefs {
+		kid := ref
+		if pipeIdx := strings.Index(ref, "|"); pipeIdx > 0 {
+			kid = ref[:pipeIdx]
+		}
+		if kid != "" {
+			ids = append(ids, kid)
+		}
+	}
+	return ids
+}
+
+// pageIntersectsKnowledgeIDs reports whether the page's SourceRefs contain at
+// least one knowledge ID in allowed. An empty allowed set means "no filter".
+func pageIntersectsKnowledgeIDs(page *types.WikiPage, allowed map[string]bool) bool {
+	if len(allowed) == 0 {
+		return true
+	}
+	for _, kid := range extractSourceKnowledgeIDs(page) {
+		if allowed[kid] {
+			return true
+		}
+	}
+	return false
+}
+
 type wikiReadPageTool struct {
 	BaseTool
 	wikiService interfaces.WikiPageService
-	kbIDs       []string
+	scopes      []WikiScope
 	seenLinks   map[string]bool
 	mu          sync.Mutex
 }
 
-func NewWikiReadPageTool(wikiService interfaces.WikiPageService, kbIDs []string) types.Tool {
+func NewWikiReadPageTool(wikiService interfaces.WikiPageService, scopes []WikiScope) types.Tool {
 	return &wikiReadPageTool{
 		BaseTool: NewBaseTool(
 			ToolWikiReadPage,
@@ -46,7 +127,7 @@ When the same slug exists in multiple knowledge bases, all matching pages are re
 }`),
 		),
 		wikiService: wikiService,
-		kbIDs:       kbIDs,
+		scopes:      scopes,
 		seenLinks:   make(map[string]bool),
 	}
 }
@@ -75,9 +156,25 @@ func (t *wikiReadPageTool) Execute(ctx context.Context, args json.RawMessage) (*
 		return &types.ToolResult{Success: false, Error: "Missing 'slugs' parameter"}, nil
 	}
 
-	kbIDs := t.kbIDs
+	// Build effective scope list. If the caller pinned a knowledge_base_id,
+	// limit to that KB while preserving any scope-level knowledge_ids filter
+	// (the filter itself is never exposed as a tool argument — it comes from
+	// the server-side scope so the model doesn't have to reason about it).
+	effectiveScopes := t.scopes
 	if params.KnowledgeBaseID != "" {
-		kbIDs = []string{params.KnowledgeBaseID}
+		filtered := make([]WikiScope, 0, 1)
+		for _, sc := range t.scopes {
+			if sc.KnowledgeBaseID == params.KnowledgeBaseID {
+				filtered = append(filtered, sc)
+				break
+			}
+		}
+		if len(filtered) == 0 {
+			// Not in the agent's scope list — still allow direct addressing
+			// but without any pin (scopes were the source of the pin).
+			filtered = append(filtered, WikiScope{KnowledgeBaseID: params.KnowledgeBaseID})
+		}
+		effectiveScopes = filtered
 	}
 
 	var outputs []string
@@ -167,12 +264,19 @@ func (t *wikiReadPageTool) Execute(ctx context.Context, args json.RawMessage) (*
 		)
 	}
 
+	// Track slugs that were found in the raw lookup but filtered out by a
+	// knowledge_ids whitelist, so we can surface a clearer error.
+	filteredOut := make(map[string][]string) // slug -> list of KB IDs where filtered
 	for _, slug := range slugsToFetch {
 		var hits []struct {
 			page *types.WikiPage
 			kbID string
 		}
-		for _, kbID := range kbIDs {
+		for _, sc := range effectiveScopes {
+			kbID := sc.KnowledgeBaseID
+			if kbID == "" {
+				continue
+			}
 			page, err := t.wikiService.GetPageBySlug(ctx, kbID, slug)
 			if err != nil || page == nil {
 				continue
@@ -181,6 +285,16 @@ func (t *wikiReadPageTool) Execute(ctx context.Context, args json.RawMessage) (*
 			if page.KnowledgeBaseID != "" {
 				actualKBID = page.KnowledgeBaseID
 			}
+
+			// Apply server-enforced knowledge-ID scope (silent; never exposed
+			// to the model as a tool argument).
+			if allowed, has := scopeKnowledgeFilter(sc); has {
+				if !pageIntersectsKnowledgeIDs(page, allowed) {
+					filteredOut[slug] = append(filteredOut[slug], actualKBID)
+					continue
+				}
+			}
+
 			hits = append(hits, struct {
 				page *types.WikiPage
 				kbID string
@@ -192,7 +306,14 @@ func (t *wikiReadPageTool) Execute(ctx context.Context, args json.RawMessage) (*
 		}
 
 		if len(hits) == 0 {
-			errs = append(errs, fmt.Sprintf("Wiki page '%s' not found", slug))
+			if kbs := filteredOut[slug]; len(kbs) > 0 {
+				errs = append(errs, fmt.Sprintf(
+					"Wiki page '%s' exists in %v but none of its source documents are within the scope pinned by the user",
+					slug, kbs,
+				))
+			} else {
+				errs = append(errs, fmt.Sprintf("Wiki page '%s' not found", slug))
+			}
 			continue
 		}
 
@@ -237,18 +358,18 @@ func (t *wikiReadPageTool) Execute(ctx context.Context, args json.RawMessage) (*
 type wikiSearchTool struct {
 	BaseTool
 	wikiService interfaces.WikiPageService
-	kbIDs       []string
+	scopes      []WikiScope
 	seenSlugs   map[string]bool
 	mu          sync.Mutex
 }
 
-func NewWikiSearchTool(wikiService interfaces.WikiPageService, kbIDs []string) types.Tool {
+func NewWikiSearchTool(wikiService interfaces.WikiPageService, scopes []WikiScope) types.Tool {
 	return &wikiSearchTool{
 		BaseTool: NewBaseTool(
 			ToolWikiSearch,
 			`Search wiki pages using PostgreSQL POSIX regular expressions (~* operator, case-insensitive).
 STRONGLY PREFER using regex to search for multiple concepts at once rather than simple plain text queries.
-Returns matching pages with titles, slugs, and summaries.
+Returns matching pages with titles, slugs, and summaries (each tagged with its knowledge_base_id).
 Examples:
 - Alternation (RECOMMENDED): "stardust|skyvault" (matches either word)
 - Multiple terms (RECOMMENDED): "psionic.*engine" (matches both words in order)
@@ -266,22 +387,27 @@ Use this to find relevant wiki pages when you don't know the exact slug.`,
     "limit": {
       "type": "integer",
       "description": "Max results to return per query (default 10)"
+    },
+    "knowledge_base_id": {
+      "type": "string",
+      "description": "Optional: restrict search to a single knowledge base ID in scope."
     }
   },
   "required": ["queries"]
 }`),
 		),
 		wikiService: wikiService,
-		kbIDs:       kbIDs,
+		scopes:      scopes,
 		seenSlugs:   make(map[string]bool),
 	}
 }
 
 func (t *wikiSearchTool) Execute(ctx context.Context, args json.RawMessage) (*types.ToolResult, error) {
 	var params struct {
-		Query   any `json:"query"`
-		Queries any `json:"queries"`
-		Limit   int `json:"limit"`
+		Query           any    `json:"query"`
+		Queries         any    `json:"queries"`
+		Limit           int    `json:"limit"`
+		KnowledgeBaseID string `json:"knowledge_base_id"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
 		return &types.ToolResult{Success: false, Error: "Invalid parameters: " + err.Error()}, nil
@@ -299,6 +425,22 @@ func (t *wikiSearchTool) Execute(ctx context.Context, args json.RawMessage) (*ty
 		params.Limit = 10
 	}
 
+	// Restrict scopes by knowledge_base_id arg if provided.
+	effectiveScopes := t.scopes
+	if params.KnowledgeBaseID != "" {
+		filtered := make([]WikiScope, 0, 1)
+		for _, sc := range t.scopes {
+			if sc.KnowledgeBaseID == params.KnowledgeBaseID {
+				filtered = append(filtered, sc)
+				break
+			}
+		}
+		if len(filtered) == 0 {
+			filtered = append(filtered, WikiScope{KnowledgeBaseID: params.KnowledgeBaseID})
+		}
+		effectiveScopes = filtered
+	}
+
 	var allOutputs []string
 	// Per-slug list of KB IDs that produced a match. Multiple KBs may share a
 	// slug when the agent has several wiki KBs in scope, so we keep the full list.
@@ -311,13 +453,24 @@ func (t *wikiSearchTool) Execute(ctx context.Context, args json.RawMessage) (*ty
 
 	for _, query := range queriesToRun {
 		var allHits []searchHit
-		for _, kbID := range t.kbIDs {
+		filteredCount := 0
+		for _, sc := range effectiveScopes {
+			kbID := sc.KnowledgeBaseID
+			if kbID == "" {
+				continue
+			}
+			allowed, hasFilter := scopeKnowledgeFilter(sc)
+
 			pages, err := t.wikiService.SearchPages(ctx, kbID, query, params.Limit)
 			if err != nil {
 				continue
 			}
 			for _, p := range pages {
 				if p == nil {
+					continue
+				}
+				if hasFilter && !pageIntersectsKnowledgeIDs(p, allowed) {
+					filteredCount++
 					continue
 				}
 				actualKBID := kbID
@@ -328,6 +481,7 @@ func (t *wikiSearchTool) Execute(ctx context.Context, args json.RawMessage) (*ty
 				foundKBs[p.Slug] = append(foundKBs[p.Slug], actualKBID)
 			}
 		}
+		_ = filteredCount // reserved for future debug surface
 
 		if len(allHits) == 0 {
 			allOutputs = append(allOutputs, fmt.Sprintf("<search_results count=\"0\" query=\"%s\" />", query))
