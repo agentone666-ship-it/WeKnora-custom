@@ -67,7 +67,7 @@ builtin_agents:
         description: "ReAct 추론 프레임워크, 다단계 사고 및 도구 호출 지원"
     config:
       agent_mode: "smart-reasoning"
-      agent_type: "custom"
+      agent_type: "rag-qa"
       system_prompt: ""
       temperature: 0.7
       max_completion_tokens: 2048
