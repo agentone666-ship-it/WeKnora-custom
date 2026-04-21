@@ -78,7 +78,13 @@ type KnowledgeBaseInfo struct {
 	Type        string // Knowledge base type: "document" or "faq"
 	Description string
 	DocCount    int
-	RecentDocs  []RecentDocInfo // Recently added documents (up to 10)
+	// Capabilities lists the retrieval surfaces this KB exposes. Any subset of
+	// {"wiki", "chunks"}. "chunks" is present when the KB has vector and/or
+	// keyword (BM25) indexing enabled. This is the *deterministic* source of
+	// truth the agent should consult before picking a retrieval strategy —
+	// significantly more reliable than running probing searches.
+	Capabilities []string
+	RecentDocs   []RecentDocInfo // Recently added documents (up to 10)
 }
 
 // PlaceholderDefinition defines a placeholder exposed to UI/configuration
@@ -118,8 +124,12 @@ func formatKnowledgeBaseList(kbInfos []*KnowledgeBaseInfo) string {
 		if kbType == "" {
 			kbType = "document"
 		}
-		b.WriteString(fmt.Sprintf("<knowledge_base id=\"%s\" name=\"%s\" type=\"%s\" doc_count=\"%d\">\n",
-			kb.ID, kb.Name, kbType, kb.DocCount))
+		capsAttr := ""
+		if len(kb.Capabilities) > 0 {
+			capsAttr = fmt.Sprintf(" capabilities=\"%s\"", strings.Join(kb.Capabilities, ","))
+		}
+		b.WriteString(fmt.Sprintf("<knowledge_base id=\"%s\" name=\"%s\" type=\"%s\" doc_count=\"%d\"%s>\n",
+			kb.ID, kb.Name, kbType, kb.DocCount, capsAttr))
 		if kb.Description != "" {
 			b.WriteString(fmt.Sprintf("<description>%s</description>\n", kb.Description))
 		}

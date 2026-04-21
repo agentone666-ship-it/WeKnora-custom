@@ -117,7 +117,10 @@ type searchResultWithMeta struct {
 	KnowledgeBaseType string // Type of the knowledge base (document, faq, etc.)
 }
 
-// KnowledgeSearchTool searches knowledge bases with flexible query modes
+// KnowledgeSearchTool searches knowledge bases with flexible query modes.
+// seenChunks lets repeated calls in the same session surface previously-
+// returned chunks in a compact form (mirroring wiki_search's de-duping UX)
+// so the LLM doesn't burn tokens re-reading identical content.
 type KnowledgeSearchTool struct {
 	BaseTool
 	knowledgeBaseService interfaces.KnowledgeBaseService
@@ -127,6 +130,9 @@ type KnowledgeSearchTool struct {
 	rerankModel          rerank.Reranker
 	chatModel            chat.Chat      // Optional chat model for LLM-based reranking
 	config               *config.Config // Global config for fallback values
+
+	seenMu     sync.Mutex
+	seenChunks map[string]bool
 }
 
 // NewKnowledgeSearchTool creates a new knowledge search tool
@@ -148,6 +154,7 @@ func NewKnowledgeSearchTool(
 		rerankModel:          rerankModel,
 		chatModel:            chatModel,
 		config:               cfg,
+		seenChunks:           make(map[string]bool),
 	}
 }
 
@@ -1086,9 +1093,15 @@ func (t *KnowledgeSearchTool) formatOutput(
 		kbCounts[r.KnowledgeID]++
 	}
 
-	// Format individual results as XML
+	// Format individual results as XML. Tag names are kept in sync with
+	// wiki_search (`<search_results>`, per-entry element, `<query>`) so that
+	// agents and downstream consumers see a single consistent shape across
+	// all retrieval tools.
 	var ob strings.Builder
 	ob.WriteString(fmt.Sprintf("<search_results count=\"%d\">\n", len(results)))
+	for _, q := range queries {
+		ob.WriteString(fmt.Sprintf("<query>%s</query>\n", xmlEscape(q)))
+	}
 
 	formattedResults := make([]map[string]interface{}, 0, len(results))
 
@@ -1136,45 +1149,81 @@ func (t *KnowledgeSearchTool) formatOutput(
 			}
 		}
 
-		ob.WriteString(fmt.Sprintf("<result id=\"%d\" chunk_id=\"%s\" chunk_index=\"%d\" knowledge_id=\"%s\" source=\"%s\">\n",
-			i+1, result.ID, result.ChunkIndex, result.KnowledgeID, result.KnowledgeTitle))
-		ob.WriteString(fmt.Sprintf("<content>%s</content>\n", result.Content))
+		t.seenMu.Lock()
+		seen := t.seenChunks[result.ID]
+		t.seenChunks[result.ID] = true
+		t.seenMu.Unlock()
 
-		if result.ImageInfo != "" {
-			var imageInfos []types.ImageInfo
-			if err := json.Unmarshal([]byte(result.ImageInfo), &imageInfos); err == nil && len(imageInfos) > 0 {
-				for _, img := range imageInfos {
-					ob.WriteString(fmt.Sprintf("<image url=\"%s\">\n", img.URL))
-					if img.Caption != "" {
-						ob.WriteString(fmt.Sprintf("<image_caption>%s</image_caption>\n", img.Caption))
+		if seen {
+			// Compact rendering for chunks we already returned in a previous
+			// knowledge_search call during this session. The model has the
+			// content in context already, so re-emitting it only burns tokens.
+			ob.WriteString(fmt.Sprintf(
+				"<chunk rank=\"%d\" chunk_id=\"%s\" chunk_index=\"%d\" knowledge_id=\"%s\" knowledge_base_id=\"%s\" knowledge_title=\"%s\" score=\"%.3f\" source_query=\"%s\" already_seen=\"true\">\n",
+				i+1,
+				xmlEscape(result.ID),
+				result.ChunkIndex,
+				xmlEscape(result.KnowledgeID),
+				xmlEscape(result.KnowledgeBaseID),
+				xmlEscape(result.KnowledgeTitle),
+				result.Score,
+				xmlEscape(result.SourceQuery),
+			))
+			ob.WriteString("<note>(content omitted, already returned in a previous knowledge_search call this session)</note>\n")
+			ob.WriteString("</chunk>\n")
+		} else {
+			ob.WriteString(fmt.Sprintf(
+				"<chunk rank=\"%d\" chunk_id=\"%s\" chunk_index=\"%d\" knowledge_id=\"%s\" knowledge_base_id=\"%s\" knowledge_title=\"%s\" score=\"%.3f\" source_query=\"%s\">\n",
+				i+1,
+				xmlEscape(result.ID),
+				result.ChunkIndex,
+				xmlEscape(result.KnowledgeID),
+				xmlEscape(result.KnowledgeBaseID),
+				xmlEscape(result.KnowledgeTitle),
+				result.Score,
+				xmlEscape(result.SourceQuery),
+			))
+			if snippet := extractSnippetForQueries(result.Content, queries); snippet != "" {
+				ob.WriteString(fmt.Sprintf("<match_snippet>%s</match_snippet>\n", xmlEscape(snippet)))
+			}
+			ob.WriteString(fmt.Sprintf("<content>%s</content>\n", result.Content))
+
+			if result.ImageInfo != "" {
+				var imageInfos []types.ImageInfo
+				if err := json.Unmarshal([]byte(result.ImageInfo), &imageInfos); err == nil && len(imageInfos) > 0 {
+					for _, img := range imageInfos {
+						ob.WriteString(fmt.Sprintf("<image url=\"%s\">\n", xmlEscape(img.URL)))
+						if img.Caption != "" {
+							ob.WriteString(fmt.Sprintf("<image_caption>%s</image_caption>\n", xmlEscape(img.Caption)))
+						}
+						if img.OCRText != "" {
+							ob.WriteString(fmt.Sprintf("<image_ocr>%s</image_ocr>\n", xmlEscape(img.OCRText)))
+						}
+						ob.WriteString("</image>\n")
 					}
-					if img.OCRText != "" {
-						ob.WriteString(fmt.Sprintf("<image_ocr>%s</image_ocr>\n", img.OCRText))
+				}
+			}
+
+			if faqMeta != nil {
+				ob.WriteString("<faq>\n")
+				if faqMeta.StandardQuestion != "" {
+					ob.WriteString(fmt.Sprintf("<question>%s</question>\n", xmlEscape(faqMeta.StandardQuestion)))
+				}
+				if len(faqMeta.SimilarQuestions) > 0 {
+					for _, sq := range faqMeta.SimilarQuestions {
+						ob.WriteString(fmt.Sprintf("<similar_question>%s</similar_question>\n", xmlEscape(sq)))
 					}
-					ob.WriteString("</image>\n")
 				}
+				if len(faqMeta.Answers) > 0 {
+					for _, ans := range faqMeta.Answers {
+						ob.WriteString(fmt.Sprintf("<answer>%s</answer>\n", xmlEscape(ans)))
+					}
+				}
+				ob.WriteString("</faq>\n")
 			}
-		}
 
-		if faqMeta != nil {
-			ob.WriteString("<faq>\n")
-			if faqMeta.StandardQuestion != "" {
-				ob.WriteString(fmt.Sprintf("<question>%s</question>\n", faqMeta.StandardQuestion))
-			}
-			if len(faqMeta.SimilarQuestions) > 0 {
-				for _, sq := range faqMeta.SimilarQuestions {
-					ob.WriteString(fmt.Sprintf("<similar_question>%s</similar_question>\n", sq))
-				}
-			}
-			if len(faqMeta.Answers) > 0 {
-				for _, ans := range faqMeta.Answers {
-					ob.WriteString(fmt.Sprintf("<answer>%s</answer>\n", ans))
-				}
-			}
-			ob.WriteString("</faq>\n")
+			ob.WriteString("</chunk>\n")
 		}
-
-		ob.WriteString("</result>\n")
 
 		formattedResults = append(formattedResults, map[string]interface{}{
 			"result_index":        i + 1,
@@ -1238,7 +1287,7 @@ func (t *KnowledgeSearchTool) formatOutput(
 			remaining := totalChunks - int64(retrievedCount)
 			percentage := float64(retrievedCount) / float64(totalChunks) * 100
 			ob.WriteString(fmt.Sprintf("<document_stat knowledge_id=\"%s\" title=\"%s\" total_chunks=\"%d\" retrieved=\"%d\" remaining=\"%d\" coverage=\"%.1f%%\" />\n",
-				knowledgeID, title, totalChunks, retrievedCount, remaining, percentage))
+				xmlEscape(knowledgeID), xmlEscape(title), totalChunks, retrievedCount, remaining, percentage))
 		}
 	}
 	ob.WriteString("</retrieval_statistics>\n")
@@ -1436,6 +1485,89 @@ func (t *KnowledgeSearchTool) applyMMR(
 // tokenizeSimple tokenizes text into a set of words (simple whitespace-based)
 func (t *KnowledgeSearchTool) tokenizeSimple(text string) map[string]struct{} {
 	return searchutil.TokenizeSimple(text)
+}
+
+// extractSnippetForQueries tries to produce a short contextual snippet around
+// the first occurrence of any token extracted from the provided queries.
+// When no token matches (common for fully paraphrased semantic queries) it
+// falls back to the leading 160 runes of content so callers always get
+// something to scan. The snippet is single-lined and bounded in length to
+// keep the rendered XML compact.
+func extractSnippetForQueries(content string, queries []string) string {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return ""
+	}
+
+	tokens := make([]string, 0, 8)
+	seen := make(map[string]struct{})
+	for _, q := range queries {
+		for _, tok := range strings.FieldsFunc(q, func(r rune) bool {
+			// Split on whitespace and common punctuation; keep CJK as whole tokens.
+			switch r {
+			case ' ', '\t', '\n', '\r', ',', '.', ';', ':', '?', '!',
+				'(', ')', '[', ']', '{', '}', '"', '\'':
+				return true
+			}
+			return false
+		}) {
+			tok = strings.ToLower(strings.TrimSpace(tok))
+			// Skip trivially-short stopwords. Three rune floor covers most
+			// English function words without chopping CJK bigrams.
+			if len([]rune(tok)) < 2 {
+				continue
+			}
+			if _, ok := seen[tok]; ok {
+				continue
+			}
+			seen[tok] = struct{}{}
+			tokens = append(tokens, tok)
+		}
+	}
+
+	lowered := strings.ToLower(content)
+	earliest := -1
+	earliestEnd := -1
+	for _, tok := range tokens {
+		idx := strings.Index(lowered, tok)
+		if idx < 0 {
+			continue
+		}
+		end := idx + len(tok)
+		if earliest < 0 || idx < earliest {
+			earliest = idx
+			earliestEnd = end
+		}
+	}
+
+	const contextRunes = 60
+	if earliest < 0 {
+		runes := []rune(content)
+		if len(runes) > contextRunes*2 {
+			return strings.TrimSpace(string(runes[:contextRunes*2])) + " ..."
+		}
+		return content
+	}
+
+	matchStr := content[earliest:earliestEnd]
+	before := content[:earliest]
+	after := content[earliestEnd:]
+
+	beforeRunes := []rune(before)
+	if len(beforeRunes) > contextRunes {
+		beforeRunes = beforeRunes[len(beforeRunes)-contextRunes:]
+	}
+	afterRunes := []rune(after)
+	if len(afterRunes) > contextRunes {
+		afterRunes = afterRunes[:contextRunes]
+	}
+
+	snippet := string(beforeRunes) + matchStr + string(afterRunes)
+	snippet = strings.ReplaceAll(snippet, "\n", " ")
+	for strings.Contains(snippet, "  ") {
+		snippet = strings.ReplaceAll(snippet, "  ", " ")
+	}
+	return "... " + strings.TrimSpace(snippet) + " ..."
 }
 
 // jaccard calculates Jaccard similarity between two token sets

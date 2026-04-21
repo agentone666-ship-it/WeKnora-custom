@@ -35,7 +35,7 @@ If neither query nor range is provided, it returns the beginning of the document
     },
     "query": {
       "type": "string",
-      "description": "Optional: A regex query to filter the document chunks. Use this to find specific quotes or details efficiently."
+      "description": "Optional: A regex query to filter the document chunks. Use this to find specific quotes or details efficiently. Remember to double-escape backslashes for JSON: write \"C\\\\+\\\\+\" (NOT \"C\\+\\+\") and \"\\\\d+\" (NOT \"\\d+\")."
     },
     "start_chunk_index": {
       "type": "integer",

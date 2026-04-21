@@ -439,6 +439,7 @@ Examples:
 - Multiple terms (RECOMMENDED): "psionic.*engine" (matches both words in order)
 - Prefix matching: "^entity/.*" (finds all entities)
 - Plain text: "engine" (matches anywhere in title/content/slug/summary)
+IMPORTANT — JSON escaping: every backslash in a regex MUST be written as \\ inside the JSON tool arguments (e.g. to search for literal "C++" write "C\\+\\+", NOT "C\+\+"; for "\d+" write "\\d+"). Plain "\+" / "\d" etc. are invalid JSON escapes and will fail to parse.
 Use this to find relevant wiki pages when you don't know the exact slug.`,
 			json.RawMessage(`{
   "type": "object",
