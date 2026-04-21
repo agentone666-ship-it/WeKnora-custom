@@ -111,6 +111,13 @@ type WikiPageRepository interface {
 	// ListAll retrieves all wiki pages in a knowledge base (for link rebuilding, graph generation).
 	ListAll(ctx context.Context, kbID string) ([]*types.WikiPage, error)
 
+	// ListRecentForSuggestions returns recent user-visible wiki pages under the given
+	// knowledge bases, used to produce fallback suggested questions for Wiki-only KBs
+	// that do not have AI-generated document questions or recommended FAQ entries.
+	// Excludes index/log pages and archived pages. Returns up to `limit` rows sorted
+	// by updated_at descending.
+	ListRecentForSuggestions(ctx context.Context, tenantID uint64, kbIDs []string, limit int) ([]*types.WikiPage, error)
+
 	// Delete soft-deletes a wiki page by knowledge base ID and slug.
 	Delete(ctx context.Context, kbID string, slug string) error
 

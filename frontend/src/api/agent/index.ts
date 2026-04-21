@@ -222,7 +222,7 @@ export function toggleIMChannel(id: string) {
 // 推荐问题
 export interface SuggestedQuestion {
   question: string;
-  source: 'faq' | 'document' | 'agent_config';
+  source: 'faq' | 'document' | 'agent_config' | 'wiki';
   knowledge_base_id?: string;
 }
 

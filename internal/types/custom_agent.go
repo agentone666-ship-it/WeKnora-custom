@@ -290,9 +290,9 @@ func (a *CustomAgent) IsAgentMode() bool {
 type SuggestedQuestion struct {
 	// 问题文本
 	Question string `json:"question"`
-	// 来源类型: "faq", "document", "agent_config"
+	// 来源类型: "agent_config", "faq", "document", "wiki"
 	Source string `json:"source"`
-	// 来源知识库ID（仅 faq/document 来源时有值）
+	// 来源知识库ID（仅 faq/document/wiki 来源时有值）
 	KnowledgeBaseID string `json:"knowledge_base_id,omitempty"`
 }
 

@@ -229,6 +229,34 @@ func (r *wikiPageRepository) ListAll(ctx context.Context, kbID string) ([]*types
 	return pages, nil
 }
 
+// ListRecentForSuggestions returns recent user-visible wiki pages across the given
+// knowledge bases, used as a fallback source for agent suggested questions when
+// the KB has no FAQ entries or AI-generated document questions (typical for
+// Wiki-only KBs). Excludes index/log pages and archived pages.
+func (r *wikiPageRepository) ListRecentForSuggestions(
+	ctx context.Context,
+	tenantID uint64,
+	kbIDs []string,
+	limit int,
+) ([]*types.WikiPage, error) {
+	if len(kbIDs) == 0 || limit <= 0 {
+		return nil, nil
+	}
+	var pages []*types.WikiPage
+	if err := r.db.WithContext(ctx).
+		Where("tenant_id = ?", tenantID).
+		Where("knowledge_base_id IN ?", kbIDs).
+		Where("page_type NOT IN ?", []string{types.WikiPageTypeIndex, types.WikiPageTypeLog}).
+		Where("status = ?", types.WikiPageStatusPublished).
+		Where("title <> ''").
+		Order("updated_at DESC").
+		Limit(limit).
+		Find(&pages).Error; err != nil {
+		return nil, err
+	}
+	return pages, nil
+}
+
 // Delete soft-deletes a wiki page by knowledge base ID and slug
 func (r *wikiPageRepository) Delete(ctx context.Context, kbID string, slug string) error {
 	result := r.db.WithContext(ctx).
