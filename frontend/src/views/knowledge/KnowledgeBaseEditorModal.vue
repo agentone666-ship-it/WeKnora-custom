@@ -57,25 +57,27 @@
                       <div v-if="!isFAQ" class="form-item">
                         <label class="form-label required">{{ $t('knowledgeEditor.indexing.title') }}</label>
                         <p class="form-tip">{{ $t('knowledgeEditor.indexing.description') }}</p>
-                        <div class="indexing-checks">
+                        <div class="indexing-checks" :class="{ 'is-locked': isIndexingLocked }">
                           <div
                             class="indexing-check-item"
-                            :class="{ 'is-checked': formData.indexingStrategy.vectorEnabled }"
+                            :class="{ 'is-checked': formData.indexingStrategy.vectorEnabled, 'is-disabled': isIndexingLocked }"
                             @click="toggleVectorIndexing"
                           >
                             <t-checkbox
                               :checked="formData.indexingStrategy.vectorEnabled"
+                              :disabled="isIndexingLocked"
                               class="indexing-check-box"
                             >{{ $t('knowledgeEditor.indexing.searchTitle') }}</t-checkbox>
                             <p class="indexing-check-desc">{{ $t('knowledgeEditor.indexing.searchDesc') }}</p>
                           </div>
                           <div
                             class="indexing-check-item"
-                            :class="{ 'is-checked': formData.indexingStrategy.wikiEnabled }"
-                            @click="formData.indexingStrategy.wikiEnabled = !formData.indexingStrategy.wikiEnabled"
+                            :class="{ 'is-checked': formData.indexingStrategy.wikiEnabled, 'is-disabled': isIndexingLocked }"
+                            @click="toggleWikiIndexing"
                           >
                             <t-checkbox
                               :checked="formData.indexingStrategy.wikiEnabled"
+                              :disabled="isIndexingLocked"
                               class="indexing-check-box"
                             >
                               <span class="indexing-check-title">
@@ -86,6 +88,9 @@
                             <p class="indexing-check-desc">{{ $t('knowledgeEditor.indexing.wikiDesc') }}</p>
                           </div>
                         </div>
+                        <p v-if="isIndexingLocked" class="form-tip locked-tip">
+                          {{ $t('knowledgeEditor.indexing.lockedTip') }}
+                        </p>
                       </div>
 
                       <div class="form-item">
@@ -601,11 +606,20 @@ const handleModelConfigUpdate = (config: any) => {
   }
 }
 
+const isIndexingLocked = computed(() => props.mode === 'edit' && hasFiles.value)
+
 const toggleVectorIndexing = () => {
   if (!formData.value) return
+  if (isIndexingLocked.value) return
   const next = !formData.value.indexingStrategy.vectorEnabled
   formData.value.indexingStrategy.vectorEnabled = next
   formData.value.indexingStrategy.keywordEnabled = next
+}
+
+const toggleWikiIndexing = () => {
+  if (!formData.value) return
+  if (isIndexingLocked.value) return
+  formData.value.indexingStrategy.wikiEnabled = !formData.value.indexingStrategy.wikiEnabled
 }
 
 const handleChunkingConfigUpdate = (config: any) => {
@@ -1292,10 +1306,28 @@ watch(
     background: var(--td-brand-color-light);
   }
 
+  &.is-disabled {
+    cursor: not-allowed;
+    opacity: 0.7;
+
+    &:hover {
+      border-color: var(--td-component-stroke);
+    }
+
+    &.is-checked:hover {
+      border-color: var(--td-brand-color);
+    }
+  }
+
   :deep(.t-checkbox__label) {
     font-weight: 500;
     color: var(--td-text-color-primary);
   }
+}
+
+.locked-tip {
+  color: var(--td-warning-color);
+  margin-top: 8px;
 }
 
 // 禁用内部 checkbox 自身的点击事件，统一由卡片处理

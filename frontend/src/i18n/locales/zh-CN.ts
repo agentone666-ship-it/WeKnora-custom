@@ -2152,6 +2152,7 @@ export default {
       atLeastOne: "至少需要开启一种索引策略",
       embeddingRequired: "RAG 检索需要配置 Embedding 模型",
       wikiModelRequired: "Wiki 知识库需要配置合成模型",
+      lockedTip: "知识库已有内容，索引策略暂不支持调整。如需变更，请先清空知识库。",
       rebuildConfirmTitle: "重建索引",
       rebuildConfirmBody: "索引策略已变更，是否对已有的 {count} 篇文档重新处理？这可能需要一些时间。",
       rebuildSuccess: "已提交重建任务，共 {count} 篇文档",

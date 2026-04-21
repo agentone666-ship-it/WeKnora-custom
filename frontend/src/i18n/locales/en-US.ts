@@ -1627,6 +1627,7 @@ export default {
       atLeastOne: 'At least one indexing strategy must be enabled',
       embeddingRequired: 'RAG search requires an Embedding model',
       wikiModelRequired: 'Wiki requires a synthesis model to be configured',
+      lockedTip: 'The indexing strategy cannot be changed once the knowledge base contains content. Please clear the knowledge base first.',
       rebuildConfirmTitle: 'Rebuild Index',
       rebuildConfirmBody: 'Indexing strategy has changed. Re-process {count} existing documents? This may take some time.',
       rebuildSuccess: 'Rebuild task submitted for {count} documents',
