@@ -42,7 +42,27 @@ const (
 	// Prevents unbounded execution time. Remaining docs stay in the pending list
 	// and are picked up by the follow-up task.
 	wikiMaxDocsPerBatch = 5
+
+	// wikiDeletedKeyPrefix is the Redis key prefix for "recently deleted
+	// knowledge" tombstones. Key: wiki:deleted:{kbID}:{knowledgeID}. Written
+	// by cleanupWikiOnKnowledgeDelete so that any wiki_ingest task still in
+	// flight (or queued) for this knowledge can fast-path skip without
+	// hitting the DB. TTL > wikiIngestDelay so it's guaranteed to outlast
+	// any in-flight ingest.
+	wikiDeletedKeyPrefix = "wiki:deleted:"
+
+	// wikiDeletedTTL bounds how long we remember a deletion. Must comfortably
+	// exceed the longest plausible ingest run (LLM extraction + reduce).
+	wikiDeletedTTL = 1 * time.Hour
 )
+
+// WikiDeletedTombstoneKey returns the Redis key used to mark a knowledge as
+// recently deleted, so wiki_ingest tasks in flight can short-circuit. Exposed
+// so knowledgeService.cleanupWikiOnKnowledgeDelete can write the same key
+// without duplicating the format string.
+func WikiDeletedTombstoneKey(kbID, knowledgeID string) string {
+	return wikiDeletedKeyPrefix + kbID + ":" + knowledgeID
+}
 
 // WikiIngestPayload is the asynq task payload for wiki ingest batch trigger.
 // The actual document IDs are stored in a Redis list (wiki:pending:{kbID}).
@@ -864,6 +884,68 @@ func (s *wikiIngestService) generateWithTemplate(ctx context.Context, chatModel 
 }
 
 // --- Helpers ---
+
+// isKnowledgeGone returns true if the given knowledge has been deleted or is
+// in the middle of being deleted. It first consults the Redis tombstone
+// (written by cleanupWikiOnKnowledgeDelete) as a fast path, then falls back
+// to the DB. A nil result from GetKnowledgeByIDOnly also counts as gone: the
+// repo layer uses GORM First() which filters soft-deleted rows, so a
+// soft-deleted knowledge surfaces as "not found" here — exactly what we want.
+func (s *wikiIngestService) isKnowledgeGone(ctx context.Context, kbID, knowledgeID string) bool {
+	if knowledgeID == "" {
+		return true
+	}
+	if s.redisClient != nil {
+		if exists, err := s.redisClient.Exists(ctx, WikiDeletedTombstoneKey(kbID, knowledgeID)).Result(); err == nil && exists > 0 {
+			return true
+		}
+	}
+	kn, err := s.knowledgeSvc.GetKnowledgeByIDOnly(ctx, knowledgeID)
+	if err != nil || kn == nil {
+		return true
+	}
+	return kn.ParseStatus == types.ParseStatusDeleting
+}
+
+// filterLiveUpdates drops additions/summaries whose source knowledge has been
+// deleted since the Map phase finished. Retract updates are preserved so
+// pages still get cleaned up. Caches per-knowledge results to avoid DB
+// hammering when a single reduce slug carries many updates for the same doc.
+func (s *wikiIngestService) filterLiveUpdates(ctx context.Context, kbID string, updates []SlugUpdate) []SlugUpdate {
+	if len(updates) == 0 {
+		return updates
+	}
+	goneCache := make(map[string]bool)
+	isGone := func(kid string) bool {
+		if kid == "" {
+			return false
+		}
+		if v, ok := goneCache[kid]; ok {
+			return v
+		}
+		v := s.isKnowledgeGone(ctx, kbID, kid)
+		goneCache[kid] = v
+		return v
+	}
+	filtered := make([]SlugUpdate, 0, len(updates))
+	dropped := 0
+	for _, u := range updates {
+		switch u.Type {
+		case "retract", "retractStale":
+			filtered = append(filtered, u)
+		default:
+			if isGone(u.KnowledgeID) {
+				dropped++
+				continue
+			}
+			filtered = append(filtered, u)
+		}
+	}
+	if dropped > 0 {
+		logger.Infof(ctx, "wiki ingest: reduce dropped %d updates for deleted knowledge(s)", dropped)
+	}
+	return filtered
+}
 
 // reconstructContent rebuilds document text from chunks.
 //

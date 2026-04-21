@@ -355,6 +355,13 @@ func (s *wikiPageService) ListAllPages(ctx context.Context, kbID string) ([]*typ
 	return s.repo.ListAll(ctx, kbID)
 }
 
+// ListPagesBySourceRef exposes the repository's source-ref lookup so higher
+// layers (delete flow, retract reconciliation) can re-query the current wiki
+// state without depending on a stale caller-captured slug list.
+func (s *wikiPageService) ListPagesBySourceRef(ctx context.Context, kbID string, knowledgeID string) ([]*types.WikiPage, error) {
+	return s.repo.ListBySourceRef(ctx, kbID, knowledgeID)
+}
+
 // SearchPages performs full-text search over wiki pages
 func (s *wikiPageService) SearchPages(ctx context.Context, kbID string, query string, limit int) ([]*types.WikiPage, error) {
 	return s.repo.Search(ctx, kbID, query, limit)

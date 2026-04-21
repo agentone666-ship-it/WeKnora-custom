@@ -222,13 +222,54 @@ func (s *wikiIngestService) ProcessWikiIngest(ctx context.Context, t *asynq.Task
 		op := op
 		eg.Go(func() error {
 			if op.Op == WikiOpRetract {
+				// Resolve the authoritative page set at run-time. The caller
+				// (knowledgeService.cleanupWikiOnKnowledgeDelete) captures
+				// PageSlugs from a DB snapshot taken *before* this task fires,
+				// but there is a window where:
+				//   - cleanup ran before ingest → snapshot is empty, but a
+				//     concurrent ingest may have already created pages by now
+				//   - a previous ingest batch created new pages after cleanup
+				//     captured its snapshot
+				// Re-querying ListPagesBySourceRef here unions the caller's
+				// slugs with whatever currently references the knowledge, so
+				// no page is left un-retracted. It also lets us support
+				// callers that deliberately enqueue retract with empty
+				// PageSlugs as "figure it out yourself" — see
+				// cleanupWikiOnKnowledgeDelete's comment (3).
+				slugSet := make(map[string]struct{}, len(op.PageSlugs))
+				for _, slug := range op.PageSlugs {
+					if slug == "" {
+						continue
+					}
+					slugSet[slug] = struct{}{}
+				}
+				if op.KnowledgeID != "" {
+					livePages, err := s.wikiService.ListPagesBySourceRef(mapCtx, payload.KnowledgeBaseID, op.KnowledgeID)
+					if err != nil {
+						logger.Warnf(mapCtx, "wiki ingest: retract lookup failed for %s: %v", op.KnowledgeID, err)
+					} else {
+						for _, p := range livePages {
+							if p == nil || p.Slug == "" {
+								continue
+							}
+							// Index/log pages never carry real source_refs;
+							// if they somehow surface here, skip — the
+							// reduce stage would be a no-op anyway.
+							if p.PageType == types.WikiPageTypeIndex || p.PageType == types.WikiPageTypeLog {
+								continue
+							}
+							slugSet[p.Slug] = struct{}{}
+						}
+					}
+				}
+
 				mapMu.Lock()
 				retractOps++
 				retractHandled++
-				docPreview = append(docPreview, fmt.Sprintf("retract[%s]: %s", previewText(op.KnowledgeID, 24), previewText(op.DocTitle, 48)))
+				docPreview = append(docPreview, fmt.Sprintf("retract[%s]: %s (%d slugs)", previewText(op.KnowledgeID, 24), previewText(op.DocTitle, 48), len(slugSet)))
 				fmt.Fprintf(&retractChangeDesc, "<document_removed>\n<title>%s</title>\n<summary>%s</summary>\n</document_removed>\n\n", op.DocTitle, op.DocSummary)
 
-				for _, slug := range op.PageSlugs {
+				for slug := range slugSet {
 					slugUpdates[slug] = append(slugUpdates[slug], SlugUpdate{
 						Slug:              slug,
 						Type:              "retract",
@@ -371,6 +412,16 @@ func (s *wikiIngestService) mapOneDocument(
 	docStartedAt := time.Now()
 	knowledgeID := op.KnowledgeID
 	lang := op.Language
+
+	// Guard against the ingest/delete race: if the user deleted the doc while
+	// this task was queued (wikiIngestDelay = 30s) or while an earlier stage
+	// was in flight, we must NOT proceed to LLM extraction — doing so would
+	// create wiki pages whose source_refs point at a ghost knowledge ID,
+	// permanently unreachable via wiki_read_source_doc.
+	if s.isKnowledgeGone(ctx, payload.KnowledgeBaseID, knowledgeID) {
+		logger.Infof(ctx, "wiki ingest: knowledge %s has been deleted, skip map", knowledgeID)
+		return nil, nil, nil
+	}
 
 	chunks, err := s.chunkRepo.ListChunksByKnowledgeID(ctx, payload.TenantID, knowledgeID)
 	if err != nil {
@@ -603,6 +654,17 @@ func (s *wikiIngestService) reduceSlugUpdates(
 	tenantID uint64,
 	batchCtx *WikiBatchContext,
 ) (bool, string, error) {
+	// Final safety net for the ingest/delete race: between Map (which already
+	// checks isKnowledgeGone) and Reduce there is a long LLM call where the
+	// source document may be deleted. Drop any addition/summary updates whose
+	// knowledge no longer exists so we don't resurrect a ghost source_ref.
+	// Retract updates are kept — they actively remove refs, which is what we
+	// want when the doc is gone.
+	updates = s.filterLiveUpdates(ctx, kbID, updates)
+	if len(updates) == 0 {
+		return false, "", nil
+	}
+
 	page, err := s.wikiService.GetPageBySlug(ctx, kbID, slug)
 	exists := (err == nil && page != nil)
 

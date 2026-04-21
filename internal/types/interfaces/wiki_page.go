@@ -63,6 +63,12 @@ type WikiPageService interface {
 	// Used for index rebuild, graph generation, cross-link injection, etc.
 	ListAllPages(ctx context.Context, kbID string) ([]*types.WikiPage, error)
 
+	// ListPagesBySourceRef retrieves all wiki pages whose source_refs reference
+	// the given knowledge ID. Used by delete/ingest reconciliation paths that
+	// need to find pages touched by a specific document at read time (rather
+	// than relying on a caller-provided stale snapshot).
+	ListPagesBySourceRef(ctx context.Context, kbID string, knowledgeID string) ([]*types.WikiPage, error)
+
 	// SearchPages performs full-text search over wiki pages.
 	SearchPages(ctx context.Context, kbID string, query string, limit int) ([]*types.WikiPage, error)
 
