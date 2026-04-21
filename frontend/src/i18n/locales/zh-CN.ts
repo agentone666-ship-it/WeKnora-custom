@@ -1337,12 +1337,6 @@ export default {
       retrieveKBOnlyWhenMentioned: "仅在 {'@'} 提及时检索",
       retrieveKBOnlyWhenMentionedDesc: "关闭：自动检索已配置的知识库，开启：仅当用户 {'@'} 提及时才检索",
       retrievalSectionTitle: "检索策略",
-      retrievalPreference: "检索偏好",
-      retrievalPreferenceDesc: "控制智能体使用哪些检索工具来访问知识库",
-      retrievalPreferenceAuto: "自动（根据知识库能力）",
-      retrievalPreferenceVectorOnly: "仅 RAG",
-      retrievalPreferenceWikiOnly: "仅 Wiki",
-      retrievalPreferenceHybrid: "混合（RAG + Wiki）",
       rerankModel: "ReRank 模型",
       rerankModelDesc: "用于对知识库检索结果进行重排序，提高回答准确性",
       rerankModelPlaceholder: "请选择 ReRank 模型",
@@ -3623,9 +3617,6 @@ export default {
       groupData: "数据分析",
       writeWarning: "会修改 Wiki 内容",
       dangerTag: "可写",
-      // 预设
-      presetLabel: "检索策略预设",
-      presetDesc: "切换预设会一次性调整下方勾选（对应的 RAG/Wiki 工具）",
       // 顶部状态栏
       statusNoKb: "当前未关联任何知识库",
       statusKb: "作用域内：{rag} 个 RAG 知识库 · {wiki} 个 Wiki 知识库",
@@ -3636,6 +3627,19 @@ export default {
       effectiveLabel: "最终启用的工具",
       effectiveDesc: "根据当前配置计算，这是智能体保存后实际能调用的工具集合",
       effectiveEmpty: "当前没有可用工具，智能体将退化为纯模型问答",
+    },
+    agentType: {
+      label: "智能体类型",
+      desc: "选择一个预设会自动填充系统提示词、工具列表和推荐的知识库范围。",
+      defaultNamePattern: "我的{label}",
+      kbMismatch: {
+        ragQa: "未启用 RAG 检索",
+        wikiQa: "未启用 Wiki",
+        hybridRagWiki: "未启用任何检索能力",
+        dataAnalysis: "需启用 RAG（不支持 FAQ）",
+        generic: "不适用于当前类型",
+      },
+      kbIncompatibleWarn: "已选的 {count} 个知识库不适用于当前类型，请手动调整",
     },
     mcp: {
       label: "MCP 服务",

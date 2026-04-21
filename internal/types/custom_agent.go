@@ -36,6 +36,27 @@ const (
 	AgentModeSmartReasoning = "smart-reasoning"
 )
 
+// AgentType constants for Smart-Reasoning agent presets.
+// These presets bundle a recommended system prompt template,
+// tool allowlist, KB compatibility hint, and other defaults so users
+// don't have to configure everything from scratch.
+// AgentTypeCustom means the user wants full control and we won't
+// auto-fill anything based on the preset.
+const (
+	// AgentTypeRAGQA prefers vector/keyword chunk retrieval on document KBs.
+	AgentTypeRAGQA = "rag-qa"
+	// AgentTypeWikiQA prefers wiki-page navigation on wiki-enabled KBs.
+	AgentTypeWikiQA = "wiki-qa"
+	// AgentTypeHybridRAGWiki orchestrates Wiki + RAG on KBs where both are enabled.
+	AgentTypeHybridRAGWiki = "hybrid-rag-wiki"
+	// AgentTypeDataAnalysis runs SQL / statistics over tabular files (CSV, Excel)
+	// uploaded into the KB. Retrieval semantics (vector/wiki/…) are largely
+	// irrelevant — this type is about data_schema + data_analysis tools.
+	AgentTypeDataAnalysis = "data-analysis"
+	// AgentTypeCustom is the "no preset" option; user-configured end to end.
+	AgentTypeCustom = "custom"
+)
+
 // CustomAgent represents a configurable AI agent (similar to GPTs)
 type CustomAgent struct {
 	// Unique identifier of the agent (composite primary key with TenantID)
@@ -69,6 +90,12 @@ type CustomAgentConfig struct {
 	// ===== Basic Settings =====
 	// Agent mode: "quick-answer" for RAG mode, "smart-reasoning" for ReAct agent mode
 	AgentMode string `yaml:"agent_mode" json:"agent_mode"`
+	// AgentType is a preset category under smart-reasoning mode that pre-fills
+	// system prompt, allowed tools and recommended KB compatibility.
+	// Valid values: "rag-qa", "wiki-qa", "hybrid-rag-wiki", "custom".
+	// Empty / unknown values are treated as "custom" (no preset applied).
+	// Ignored for quick-answer mode.
+	AgentType string `yaml:"agent_type" json:"agent_type,omitempty"`
 	// System prompt for the agent (unified prompt, uses web_search_status placeholder for dynamic behavior)
 	SystemPrompt string `yaml:"system_prompt" json:"system_prompt"`
 	// SystemPromptID references a template ID in prompt_templates/ YAML files.
@@ -118,13 +145,6 @@ type CustomAgentConfig struct {
 	// When true, knowledge base retrieval only happens if user explicitly mentions KB/files with @
 	// When false, knowledge base retrieval happens according to KBSelectionMode
 	RetrieveKBOnlyWhenMentioned bool `yaml:"retrieve_kb_only_when_mentioned" json:"retrieve_kb_only_when_mentioned"`
-
-	// RetrievalPreference controls which retrieval tools the agent uses:
-	//   "auto"        - auto-detect from KB capabilities (default, preserves existing behavior)
-	//   "vector_only" - only use vector/keyword search tools, no wiki tools
-	//   "wiki_only"   - only use wiki tools, no vector/keyword search tools
-	//   "hybrid"      - use both vector/keyword search AND wiki tools
-	RetrievalPreference string `yaml:"retrieval_preference" json:"retrieval_preference"`
 
 	// Whether to retain retrieval history across turns
 	RetainRetrievalHistory bool `yaml:"retain_retrieval_history" json:"retain_retrieval_history"`
@@ -268,9 +288,6 @@ func (a *CustomAgent) EnsureDefaults() {
 	// Advanced settings defaults
 	if a.Config.FallbackStrategy == "" {
 		a.Config.FallbackStrategy = "model"
-	}
-	if a.Config.RetrievalPreference == "" {
-		a.Config.RetrievalPreference = "auto"
 	}
 	if a.Config.MaxCompletionTokens == 0 {
 		a.Config.MaxCompletionTokens = 2048

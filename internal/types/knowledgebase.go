@@ -532,6 +532,53 @@ func (kb *KnowledgeBase) EnsureDefaults() {
 	}
 }
 
+// KBCapabilities describes the functional features a knowledge base exposes.
+// It is computed from the KB's configuration (IndexingStrategy, Type, WikiConfig, …)
+// and surfaced in the JSON representation of a KnowledgeBase so that the frontend
+// can filter / enable / disable KB options based on what the selected agent type needs.
+type KBCapabilities struct {
+	// Vector means semantic (embedding) search is indexed.
+	Vector bool `json:"vector"`
+	// Keyword means BM25 / sparse keyword search is indexed.
+	Keyword bool `json:"keyword"`
+	// Wiki means the wiki feature is enabled and authored pages exist / will be generated.
+	Wiki bool `json:"wiki"`
+	// Graph means knowledge-graph extraction is enabled.
+	Graph bool `json:"graph"`
+	// FAQ means the KB is a FAQ-type KB (Q/A pairs).
+	FAQ bool `json:"faq"`
+}
+
+// Capabilities returns the computed capability flags for this KB.
+// Safe to call on a nil KB (returns zero value).
+func (kb *KnowledgeBase) Capabilities() KBCapabilities {
+	if kb == nil {
+		return KBCapabilities{}
+	}
+	return KBCapabilities{
+		Vector:  kb.IsVectorEnabled(),
+		Keyword: kb.IsKeywordEnabled(),
+		Wiki:    kb.IsWikiEnabled(),
+		Graph:   kb.IsGraphEnabled(),
+		FAQ:     kb.Type == KnowledgeBaseTypeFAQ,
+	}
+}
+
+// MarshalJSON augments the default JSON encoding of KnowledgeBase with a computed
+// `capabilities` field so clients (agent editor) can filter KBs by feature.
+// It preserves all existing fields verbatim.
+func (kb *KnowledgeBase) MarshalJSON() ([]byte, error) {
+	type alias KnowledgeBase
+	aux := struct {
+		*alias
+		Capabilities KBCapabilities `json:"capabilities"`
+	}{
+		alias:        (*alias)(kb),
+		Capabilities: kb.Capabilities(),
+	}
+	return json.Marshal(aux)
+}
+
 // IsWikiEnabled checks if the wiki feature is enabled for this knowledge base.
 // Wiki requires both IndexingStrategy.WikiEnabled and WikiConfig with Enabled=true.
 func (kb *KnowledgeBase) IsWikiEnabled() bool {

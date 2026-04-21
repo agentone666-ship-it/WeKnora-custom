@@ -472,12 +472,6 @@ export default {
       retrieveKBOnlyWhenMentioned: 'Retrieve Only When Mentioned',
       retrieveKBOnlyWhenMentionedDesc: "Off: auto-retrieve configured KBs; On: retrieve only when user {'@'} mentions",
       retrievalSectionTitle: 'Retrieval Strategy',
-      retrievalPreference: 'Retrieval Preference',
-      retrievalPreferenceDesc: 'Controls which retrieval tools the agent uses to access knowledge bases',
-      retrievalPreferenceAuto: 'Auto (based on KB capabilities)',
-      retrievalPreferenceVectorOnly: 'RAG Only',
-      retrievalPreferenceWikiOnly: 'Wiki Only',
-      retrievalPreferenceHybrid: 'Hybrid (RAG + Wiki)',
       rerankModel: 'ReRank Model',
       rerankModelDesc: 'Used to rerank knowledge base retrieval results for better accuracy',
       rerankModelPlaceholder: 'Select ReRank Model',
@@ -3571,9 +3565,6 @@ export default {
       groupData: 'Data Analysis',
       writeWarning: 'Mutates Wiki content',
       dangerTag: 'Write',
-      // Preset
-      presetLabel: 'Retrieval Preset',
-      presetDesc: 'Switching the preset will update the checkboxes below (RAG / Wiki tools) in one click',
       // Status bar
       statusNoKb: 'No knowledge base is linked',
       statusKb: 'In scope: {rag} RAG KBs · {wiki} Wiki KBs',
@@ -3638,6 +3629,19 @@ export default {
       wechatHint: 'Requires iOS WeChat 8.0.70+, direct messages only',
       wechatQRExpired: 'QR code expired, please try again',
       wechatBinding: 'Binding...',
+    },
+    agentType: {
+      label: 'Agent Type',
+      desc: 'Picking a preset auto-fills the system prompt, tool list and recommended KB scope.',
+      defaultNamePattern: 'My {label}',
+      kbMismatch: {
+        ragQa: 'RAG retrieval not enabled',
+        wikiQa: 'Wiki not enabled',
+        hybridRagWiki: 'No retrieval surface enabled',
+        dataAnalysis: 'Requires RAG (FAQ not supported)',
+        generic: 'Not compatible with current type',
+      },
+      kbIncompatibleWarn: '{count} selected KB(s) are not compatible with this type, please adjust manually.',
     },
     mcp: {
       label: 'MCP Services',

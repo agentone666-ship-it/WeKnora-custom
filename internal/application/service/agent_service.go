@@ -341,18 +341,16 @@ func (s *agentService) registerTools(
 	sessionID string,
 ) error {
 	// Source of truth policy:
-	//   - `config.AllowedTools` is the explicit, user-editable whitelist.
-	//   - We no longer silently *inject* tools the user didn't pick (esp. wiki tools).
+	//   - `config.AllowedTools` is the explicit, user-editable whitelist —
+	//     populated by the agent-type preset on create and freely editable
+	//     afterwards.
+	//   - We never silently *inject* tools the user didn't pick.
 	//   - We still *filter out* tools whose capability prerequisites are missing
 	//     (no KB in scope, no Wiki-capable KB, etc.) so the LLM can't call tools
 	//     that would error at runtime.
-	//   - Legacy agents without AllowedTools fall back to DefaultAllowedTools(),
-	//     and for them we preserve the historical "auto-append wiki tools when
-	//     a wiki KB is in scope" behavior for backward compatibility.
-	hasExplicitAllowedTools := len(config.AllowedTools) > 0
-
+	//   - Legacy agents without AllowedTools fall back to DefaultAllowedTools().
 	var allowedTools []string
-	if hasExplicitAllowedTools {
+	if len(config.AllowedTools) > 0 {
 		allowedTools = make([]string, len(config.AllowedTools))
 		copy(allowedTools, config.AllowedTools)
 		logger.Infof(ctx, "Using custom allowed tools from config: %v", allowedTools)
@@ -433,31 +431,12 @@ func (s *agentService) registerTools(
 		allowedTools = append(allowedTools, tools.ToolWebFetch)
 	}
 
-	retrievalPref := config.RetrievalPreference
-	if retrievalPref == "" {
-		retrievalPref = "auto"
-	}
-
-	// Default wiki read-only set used for backward-compat auto-injection below.
-	// Edit/issue wiki tools are intentionally excluded — they must be explicitly
-	// opted in via AllowedTools because they can mutate data.
-	defaultWikiReadTools := []string{
-		tools.ToolWikiReadPage,
-		tools.ToolWikiSearch,
-		tools.ToolWikiReadSourceDoc,
-		tools.ToolWikiFlagIssue,
-	}
-
-	// ---- Apply retrieval preference ----
-	// Preference is now a *filter*, never an injector (for explicit lists).
-	// For legacy agents without explicit AllowedTools, we still auto-append
-	// wiki read tools so existing integrations keep working.
+	// Tool capability sets — used by the hard safety nets below to drop tools
+	// whose runtime prerequisite (a matching KB surface) is missing.
 	//
 	// NOTE: ragToolSet must stay in sync with frontend `knowledgeBaseTools`
 	// in AgentEditorModal.vue. These are *all* tools that retrieve/inspect
-	// content from RAG-style knowledge bases; wiki_only must strip the whole
-	// set, otherwise the agent can still reach RAG data via graph/db/doc
-	// info tools despite the user asking for Wiki only.
+	// content from RAG-style knowledge bases.
 	ragToolSet := map[string]bool{
 		tools.ToolKnowledgeSearch:     true,
 		tools.ToolGrepChunks:          true,
@@ -477,47 +456,6 @@ func (s *agentService) registerTools(
 		tools.ToolWikiDeletePage:    true,
 		tools.ToolWikiReadIssue:     true,
 		tools.ToolWikiUpdateIssue:   true,
-	}
-
-	switch retrievalPref {
-	case "vector_only":
-		filtered := make([]string, 0, len(allowedTools))
-		dropped := make([]string, 0)
-		for _, t := range allowedTools {
-			if allWikiToolSet[t] {
-				dropped = append(dropped, t)
-				continue
-			}
-			filtered = append(filtered, t)
-		}
-		allowedTools = filtered
-		logger.Infof(ctx, "Retrieval preference: vector_only, wiki tools filtered out: %v", dropped)
-	case "wiki_only":
-		filtered := make([]string, 0, len(allowedTools))
-		dropped := make([]string, 0)
-		for _, t := range allowedTools {
-			if ragToolSet[t] {
-				dropped = append(dropped, t)
-				continue
-			}
-			filtered = append(filtered, t)
-		}
-		allowedTools = filtered
-		// Only legacy agents get auto-append here; explicit lists are authoritative.
-		if !hasExplicitAllowedTools && hasWikiKB {
-			allowedTools = append(allowedTools, defaultWikiReadTools...)
-		}
-		logger.Infof(ctx, "Retrieval preference: wiki_only, RAG tools filtered out: %v", dropped)
-	case "hybrid":
-		if !hasExplicitAllowedTools && hasWikiKB {
-			allowedTools = append(allowedTools, defaultWikiReadTools...)
-			logger.Infof(ctx, "Retrieval preference: hybrid (legacy), wiki read tools auto-added")
-		}
-	default: // "auto"
-		if !hasExplicitAllowedTools && hasWikiKB {
-			allowedTools = append(allowedTools, defaultWikiReadTools...)
-			logger.Infof(ctx, "Retrieval preference: auto (legacy), wiki read tools auto-added")
-		}
 	}
 
 	// Hard safety nets: drop tools whose runtime prerequisite is missing.

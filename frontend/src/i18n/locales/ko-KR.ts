@@ -3622,9 +3622,6 @@ export default {
       groupData: '데이터 분석',
       writeWarning: 'Wiki 내용을 변경합니다',
       dangerTag: '쓰기',
-      // 프리셋
-      presetLabel: '검색 전략 프리셋',
-      presetDesc: '프리셋 전환 시 아래 체크박스(RAG/Wiki 도구)가 일괄 조정됩니다',
       // 상태바
       statusNoKb: '연결된 지식베이스가 없습니다',
       statusKb: '범위 내: RAG 지식베이스 {rag}개 · Wiki 지식베이스 {wiki}개',
@@ -3635,6 +3632,19 @@ export default {
       effectiveLabel: '최종 활성 도구',
       effectiveDesc: '현재 설정 기준 저장 시 에이전트가 실제 호출할 수 있는 도구 집합',
       effectiveEmpty: '사용 가능한 도구가 없어 일반 모델 대화로 동작합니다',
+    },
+    agentType: {
+      label: '에이전트 유형',
+      desc: '프리셋을 선택하면 시스템 프롬프트, 도구 목록, 권장 지식 베이스 범위가 자동으로 채워집니다.',
+      defaultNamePattern: '나의 {label}',
+      kbMismatch: {
+        ragQa: 'RAG 검색 비활성화',
+        wikiQa: 'Wiki 비활성화',
+        hybridRagWiki: '활성화된 검색 수단 없음',
+        dataAnalysis: 'RAG 필요 (FAQ 미지원)',
+        generic: '현재 유형과 호환 안 됨',
+      },
+      kbIncompatibleWarn: '선택된 {count}개의 지식 베이스가 현재 유형과 호환되지 않습니다. 수동으로 조정해 주세요.',
     },
     mcp: {
       label: 'MCP 서비스',

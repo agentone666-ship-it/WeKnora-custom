@@ -64,6 +64,36 @@
                       </div>
                     </div>
 
+                    <!-- 智能体类型（仅智能推理模式下显示） -->
+                    <div v-if="isAgentMode && agentTypePresets.length > 0" class="setting-row setting-row--emphasize">
+                      <div class="setting-info">
+                        <label>{{ $t('agentEditor.agentType.label') }}</label>
+                        <p class="desc">{{ $t('agentEditor.agentType.desc') }}</p>
+                        <p
+                          v-if="activeAgentTypePreset"
+                          class="desc agent-type-preset-desc"
+                        >{{ agentTypePresetDescription(activeAgentTypePreset) }}</p>
+                      </div>
+                      <div class="setting-control">
+                        <t-select
+                          :value="agentType"
+                          @change="onAgentTypeChange"
+                          :disabled="isBuiltinAgent"
+                          :placeholder="$t('agentEditor.agentType.label')"
+                          :options="agentTypeSelectOptions"
+                          :popup-props="{ overlayClassName: 'agent-type-popup' }"
+                          class="agent-type-select"
+                        >
+                          <template #option="{ option }">
+                            <div class="agent-type-option">
+                              <span class="agent-type-option-label">{{ option.label }}</span>
+                              <span v-if="option.desc" class="agent-type-option-desc">{{ option.desc }}</span>
+                            </div>
+                          </template>
+                        </t-select>
+                      </div>
+                    </div>
+
                     <!-- 名称 -->
                     <div class="setting-row">
                       <div class="setting-info">
@@ -142,7 +172,7 @@
                             position="corner"
                             :hasKnowledgeBase="hasKnowledgeBase"
                             @select="handleSystemPromptTemplateSelect"
-                            @reset-default="handleSystemPromptTemplateSelect"
+                            @reset-default="handleAgentSystemPromptResetDefault"
                           />
                         </div>
                         <!-- 普通模式：单个提示词 -->
@@ -627,23 +657,6 @@
                         <span>{{ $t('agentEditor.tools.statusInactive', { count: inactiveToolCount }) }}</span>
                       </div>
                     </div>
-                    <div class="tools-overview-row tools-overview-row--preset">
-                      <div class="tools-preset-label">
-                        <span class="tools-preset-title">{{ $t('agentEditor.tools.presetLabel') }}</span>
-                        <span class="tools-preset-hint">{{ $t('agentEditor.tools.presetDesc') }}</span>
-                      </div>
-                      <t-radio-group
-                        :value="formData.config.retrieval_preference"
-                        @change="onRetrievalPresetChange"
-                        size="small"
-                        variant="default-filled"
-                      >
-                        <t-radio-button value="auto">{{ $t('agent.editor.retrievalPreferenceAuto') }}</t-radio-button>
-                        <t-radio-button value="vector_only">{{ $t('agent.editor.retrievalPreferenceVectorOnly') }}</t-radio-button>
-                        <t-radio-button value="wiki_only">{{ $t('agent.editor.retrievalPreferenceWikiOnly') }}</t-radio-button>
-                        <t-radio-button value="hybrid">{{ $t('agent.editor.retrievalPreferenceHybrid') }}</t-radio-button>
-                      </t-radio-group>
-                    </div>
                   </div>
 
                   <div class="settings-group">
@@ -876,14 +889,15 @@
                           filterable
                           :min-collapsed-num="3"
                         >
-                          <t-option-group v-if="myKbOptions.length" :label="$t('agent.editor.myKnowledgeBases')">
+                          <t-option-group v-if="filteredMyKbOptions.length" :label="$t('agent.editor.myKnowledgeBases')">
                             <t-option
-                              v-for="kb in myKbOptions"
+                              v-for="kb in filteredMyKbOptions"
                               :key="kb.value"
                               :value="kb.value"
                               :label="kb.label"
+                              :disabled="kb.disabled"
                             >
-                              <div class="kb-option-item">
+                              <div class="kb-option-item" :title="kb.disabled ? kb.disabledReason : ''">
                                 <span class="kb-option-icon" :class="kb.type === 'faq' ? 'faq-icon' : 'doc-icon'">
                                   <t-icon :name="kb.type === 'faq' ? 'chat-bubble-help' : 'folder'" />
                                 </span>
@@ -891,17 +905,19 @@
                                 <span v-if="kb.ragEnabled" class="kb-option-tag tag-rag">RAG</span>
                                 <span v-if="kb.wikiEnabled" class="kb-option-tag tag-wiki">Wiki</span>
                                 <span class="kb-option-count">{{ kb.count || 0 }}</span>
+                                <span v-if="kb.disabled" class="kb-option-disabled-hint">{{ kb.disabledReason }}</span>
                               </div>
                             </t-option>
                           </t-option-group>
-                          <t-option-group v-if="sharedKbOptions.length" :label="$t('agent.editor.sharedKnowledgeBases')">
+                          <t-option-group v-if="filteredSharedKbOptions.length" :label="$t('agent.editor.sharedKnowledgeBases')">
                             <t-option
-                              v-for="kb in sharedKbOptions"
+                              v-for="kb in filteredSharedKbOptions"
                               :key="kb.value"
                               :value="kb.value"
                               :label="kb.label"
+                              :disabled="kb.disabled"
                             >
-                              <div class="kb-option-item">
+                              <div class="kb-option-item" :title="kb.disabled ? kb.disabledReason : ''">
                                 <span class="kb-option-icon" :class="kb.type === 'faq' ? 'faq-icon' : 'doc-icon'">
                                   <t-icon :name="kb.type === 'faq' ? 'chat-bubble-help' : 'folder'" />
                                 </span>
@@ -910,6 +926,7 @@
                                 <span v-if="kb.wikiEnabled" class="kb-option-tag tag-wiki">Wiki</span>
                                 <span v-if="kb.orgName" class="kb-option-org">{{ kb.orgName }}</span>
                                 <span class="kb-option-count">{{ kb.count || 0 }}</span>
+                                <span v-if="kb.disabled" class="kb-option-disabled-hint">{{ kb.disabledReason }}</span>
                               </div>
                             </t-option>
                           </t-option-group>
@@ -1116,25 +1133,6 @@
                   </div>
                   
                   <div class="settings-group">
-                    <!-- 检索偏好 -->
-                    <div class="setting-row">
-                      <div class="setting-info">
-                        <label>{{ $t('agent.editor.retrievalPreference') }}</label>
-                        <p class="desc">{{ $t('agent.editor.retrievalPreferenceDesc') }}</p>
-                      </div>
-                      <div class="setting-control">
-                        <t-select
-                          v-model="formData.config.retrieval_preference"
-                          style="width: 200px"
-                        >
-                          <t-option value="auto">{{ $t('agent.editor.retrievalPreferenceAuto') }}</t-option>
-                          <t-option value="vector_only">{{ $t('agent.editor.retrievalPreferenceVectorOnly') }}</t-option>
-                          <t-option value="wiki_only">{{ $t('agent.editor.retrievalPreferenceWikiOnly') }}</t-option>
-                          <t-option value="hybrid">{{ $t('agent.editor.retrievalPreferenceHybrid') }}</t-option>
-                        </t-select>
-                      </div>
-                    </div>
-
                     <!-- 查询扩展（仅普通模式） -->
                     <div v-if="!isAgentMode" class="setting-row">
                       <div class="setting-info">
@@ -1356,13 +1354,23 @@
 import { ref, computed, watch, nextTick } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { MessagePlugin } from 'tdesign-vue-next';
-import { createAgent, updateAgent, getPlaceholders, type CustomAgent, type PlaceholderDefinition } from '@/api/agent';
+import {
+  createAgent,
+  updateAgent,
+  getPlaceholders,
+  getAgentTypePresets,
+  type CustomAgent,
+  type PlaceholderDefinition,
+  type AgentTypePreset,
+  type AgentType,
+  type KBCapabilities,
+} from '@/api/agent';
 import { listModels, type ModelConfig } from '@/api/model';
 import { listKnowledgeBases } from '@/api/knowledge-base';
 import { listMCPServices, type MCPService } from '@/api/mcp-service';
 import { listSkills, type SkillInfo } from '@/api/skill';
 import { listWebSearchProviders, type WebSearchProviderEntity } from '@/api/web-search-provider';
-import { getAgentConfig, getConversationConfig, getStorageEngineStatus, type StorageEngineStatusItem, type PromptTemplate } from '@/api/system';
+import { getAgentConfig, getConversationConfig, getStorageEngineStatus, getPromptTemplates, type StorageEngineStatusItem, type PromptTemplate } from '@/api/system';
 import { useUIStore } from '@/stores/ui';
 import { useAuthStore } from '@/stores/auth';
 import { useOrganizationStore } from '@/stores/organization';
@@ -1376,7 +1384,7 @@ const uiStore = useUIStore();
 const authStore = useAuthStore();
 const orgStore = useOrganizationStore();
 
-const { t } = useI18n();
+const { t, locale: i18nLocale } = useI18n();
 
 const props = defineProps<{
   visible: boolean;
@@ -1393,7 +1401,12 @@ const emit = defineEmits<{
 const currentSection = ref(props.initialSection || 'basic');
 const saving = ref(false);
 const allModels = ref<ModelConfig[]>([]);
-const kbOptions = ref<{ label: string; value: string; type?: 'document' | 'faq'; count?: number; shared?: boolean; orgName?: string; ragEnabled?: boolean; wikiEnabled?: boolean }[]>([]);
+const kbOptions = ref<{ label: string; value: string; type?: 'document' | 'faq'; count?: number; shared?: boolean; orgName?: string; ragEnabled?: boolean; wikiEnabled?: boolean; capabilities?: KBCapabilities }[]>([]);
+
+// 智能体类型预设（仅 smart-reasoning 模式下展示）
+const agentTypePresets = ref<AgentTypePreset[]>([]);
+// Agent 系统提示词模板缓存（用于切换智能体类型时根据 system_prompt_id 解析出实际文本填入）
+const agentSystemPromptTemplates = ref<PromptTemplate[]>([]);
 const mcpOptions = ref<{ label: string; value: string }[]>([]);
 const webSearchProviderList = ref<WebSearchProviderEntity[]>([]);
 const skillOptions = ref<{ name: string; description: string }[]>([]);
@@ -1748,7 +1761,7 @@ const defaultFormData = {
   is_builtin: false,
   config: {
     // 基础设置
-    agent_mode: 'quick-answer' as 'quick-answer' | 'smart-reasoning',
+    agent_mode: 'smart-reasoning' as 'quick-answer' | 'smart-reasoning',
     system_prompt: '',
     context_template: '{{query}}',
     // 模型设置
@@ -1771,7 +1784,10 @@ const defaultFormData = {
     kb_selection_mode: 'none' as 'all' | 'selected' | 'none',
     knowledge_bases: [] as string[],
     retrieve_kb_only_when_mentioned: false,
-    retrieval_preference: 'auto' as 'auto' | 'vector_only' | 'wiki_only' | 'hybrid',
+    // 智能推理下的类型预设：新建 agent 时默认给 RAG 问答（最常用场景）。
+    // 编辑既有 agent 时会被 agent 自己保存的 agent_type 覆盖。
+    agent_type: 'rag-qa' as AgentType,
+    system_prompt_id: '' as string,
     // 图片上传/多模态设置
     image_upload_enabled: false,
     vlm_model_id: '',
@@ -1815,6 +1831,209 @@ const agentMode = computed({
 });
 
 const isAgentMode = computed(() => agentMode.value === 'smart-reasoning');
+
+// ============================================================================
+// 智能体类型预设（仅 smart-reasoning 模式下可见）
+// 选择类型后自动填充 system_prompt_id / allowed_tools 等；
+// 选择 "custom" 或没有匹配预设时不做任何覆盖。
+// ============================================================================
+
+const agentType = computed({
+  get: () => (formData.value.config.agent_type as AgentType) || 'custom',
+  set: (val: AgentType) => { formData.value.config.agent_type = val; },
+});
+
+// 当前激活的预设对象（用于 KB 过滤 / UI 徽章）
+const activeAgentTypePreset = computed<AgentTypePreset | null>(() => {
+  if (!isAgentMode.value) return null;
+  const id = agentType.value;
+  if (!id || id === 'custom') return null;
+  return agentTypePresets.value.find(p => p.id === id) || null;
+});
+
+// 根据当前 locale 挑选 i18n 标签
+const agentTypePresetLabel = (p: AgentTypePreset): string => {
+  const locale = i18nLocale.value || 'default';
+  return p.i18n?.[locale]?.label || p.i18n?.default?.label || p.id;
+};
+const agentTypePresetDescription = (p: AgentTypePreset): string => {
+  const locale = i18nLocale.value || 'default';
+  return p.i18n?.[locale]?.description || p.i18n?.default?.description || '';
+};
+
+// t-select 的 options 数据：label 给 TDesign 自己（用于选中态显示），desc 走自定义 option slot
+const agentTypeSelectOptions = computed(() => {
+  return agentTypePresets.value.map(p => ({
+    value: p.id,
+    label: agentTypePresetLabel(p),
+    desc: agentTypePresetDescription(p),
+  }));
+});
+
+// 为每个预设生成"我的 <label>"的默认名称，让用户可以一键保存
+// custom 类型默认名为空（让用户自己想）
+const getPresetDefaultName = (preset: AgentTypePreset | null): string => {
+  if (!preset || preset.id === 'custom') return '';
+  return t('agentEditor.agentType.defaultNamePattern', { label: agentTypePresetLabel(preset) });
+};
+const getPresetDefaultDescription = (preset: AgentTypePreset | null): string => {
+  if (!preset) return '';
+  return agentTypePresetDescription(preset);
+};
+
+// 判断当前名称/描述是否由系统自动填入（任一预设的默认值 或 空）
+// 用于在切换类型时只覆盖"未被用户手动编辑"的值，避免覆盖用户输入
+const isNameSystemGenerated = (name: string): boolean => {
+  if (!name) return true;
+  return agentTypePresets.value.some(p => getPresetDefaultName(p) === name);
+};
+const isDescriptionSystemGenerated = (desc: string): boolean => {
+  if (!desc) return true;
+  return agentTypePresets.value.some(p => getPresetDefaultDescription(p) === desc);
+};
+
+// 按预设 id 返回面向用户的不兼容原因文案。
+// 不要直接把 "vector / keyword / wiki" 这些底层 capability 名回传给用户 —
+// 用户不关心技术实现，只想知道"为什么我这个知识库不能用"。
+const presetKbMismatchKeyMap: Record<string, string> = {
+  'rag-qa':          'ragQa',
+  'wiki-qa':         'wikiQa',
+  'hybrid-rag-wiki': 'hybridRagWiki',
+  'data-analysis':   'dataAnalysis',
+};
+const presetKbMismatchReason = (preset: AgentTypePreset): string => {
+  const subKey = presetKbMismatchKeyMap[preset.id];
+  if (subKey) return t(`agentEditor.agentType.kbMismatch.${subKey}`);
+  return t('agentEditor.agentType.kbMismatch.generic');
+};
+
+// 评估单个 KB 是否满足给定预设的 kb_filter
+const kbSatisfiesPresetFilter = (kb: { capabilities?: KBCapabilities; ragEnabled?: boolean; wikiEnabled?: boolean; type?: string }, preset: AgentTypePreset | null): { ok: boolean; reason: string } => {
+  if (!preset || !preset.kb_filter) return { ok: true, reason: '' };
+  const caps = kb.capabilities || {
+    vector: !!kb.ragEnabled,
+    keyword: !!kb.ragEnabled,
+    wiki: !!kb.wikiEnabled,
+    graph: false,
+    faq: kb.type === 'faq',
+  };
+  const has = (name: string): boolean => {
+    switch (name) {
+      case 'vector': return !!caps.vector;
+      case 'keyword': return !!caps.keyword;
+      case 'wiki': return !!caps.wiki;
+      case 'graph': return !!caps.graph;
+      case 'faq': return !!caps.faq;
+      default: return false;
+    }
+  };
+  const f = preset.kb_filter;
+  const reason = presetKbMismatchReason(preset);
+  if (f.all_of && f.all_of.length > 0) {
+    for (const n of f.all_of) {
+      if (!has(n)) return { ok: false, reason };
+    }
+  }
+  if (f.any_of && f.any_of.length > 0) {
+    if (!f.any_of.some(n => has(n))) {
+      return { ok: false, reason };
+    }
+  }
+  if (f.none_of && f.none_of.length > 0) {
+    for (const n of f.none_of) {
+      if (has(n)) return { ok: false, reason };
+    }
+  }
+  return { ok: true, reason: '' };
+};
+
+// KB 过滤后的选项（用于"指定知识库"下拉）— 不满足的仍保留但标记 disabled + tooltip
+const filteredKbOptionsForPreset = computed(() => {
+  const preset = activeAgentTypePreset.value;
+  return kbOptions.value.map(kb => {
+    const { ok, reason } = kbSatisfiesPresetFilter(kb, preset);
+    return { ...kb, disabled: !ok, disabledReason: reason };
+  });
+});
+const filteredMyKbOptions = computed(() => filteredKbOptionsForPreset.value.filter(kb => !kb.shared));
+const filteredSharedKbOptions = computed(() => filteredKbOptionsForPreset.value.filter(kb => kb.shared));
+
+// 当前选中的 KB 中，有多少个在新预设下会被禁用（用于保存前提示）
+const incompatibleSelectedKbCount = computed(() => {
+  const preset = activeAgentTypePreset.value;
+  if (!preset || kbSelectionMode.value !== 'selected') return 0;
+  const selected = new Set(formData.value.config.knowledge_bases || []);
+  return filteredKbOptionsForPreset.value.filter(kb => selected.has(kb.value) && kb.disabled).length;
+});
+
+// 应用一个预设的 config 到 formData.config（仅覆盖预设里明确设置的字段，其他不动）
+const applyAgentTypePreset = (preset: AgentTypePreset | null) => {
+  if (!preset || !preset.config) return;
+  const c = preset.config;
+  const target = formData.value.config;
+  if (c.system_prompt_id !== undefined) {
+    target.system_prompt_id = c.system_prompt_id;
+    // 根据 system_prompt_id 从已加载的模板列表里查出正文并回填到用户可见的 textarea
+    const tmpl = agentSystemPromptTemplates.value.find(t => t.id === c.system_prompt_id);
+    if (tmpl && typeof tmpl.content === 'string') {
+      target.system_prompt = tmpl.content;
+    } else {
+      // 模板列表还没加载完 / 或预设引用了不存在的 id：清空让用户感知到变化
+      target.system_prompt = '';
+      if (c.system_prompt_id) {
+        console.warn(`[AgentType] system_prompt_id "${c.system_prompt_id}" not found in agent_system_prompt templates`);
+      }
+    }
+  }
+  if (typeof c.temperature === 'number') target.temperature = c.temperature;
+  if (typeof c.max_iterations === 'number') target.max_iterations = c.max_iterations;
+  if (Array.isArray(c.allowed_tools)) target.allowed_tools = [...c.allowed_tools];
+  if (typeof c.retain_retrieval_history === 'boolean') target.retain_retrieval_history = c.retain_retrieval_history;
+  if (typeof c.faq_priority_enabled === 'boolean') target.faq_priority_enabled = c.faq_priority_enabled;
+  if (typeof c.web_search_enabled === 'boolean') target.web_search_enabled = c.web_search_enabled;
+  // supported_file_types 采用"强同步"语义：只有 data-analysis 需要限定 csv/xlsx，
+  // 其余类型切过来时必须清空，否则会从上一个类型带过来残留。
+  if (Array.isArray(c.supported_file_types)) {
+    target.supported_file_types = [...c.supported_file_types];
+  } else {
+    target.supported_file_types = [];
+  }
+  // kb_selection_mode 同步到 formData 以及 UI 状态（两处都要改，否则单选按钮不更新）
+  if (c.kb_selection_mode) {
+    target.kb_selection_mode = c.kb_selection_mode;
+    kbSelectionMode.value = c.kb_selection_mode;
+  }
+};
+
+// 用户手动切换类型 → 应用预设
+const onAgentTypeChange = (val: AgentType) => {
+  // 切换前捕获"名称/描述是否可安全覆盖"
+  // 已编辑过的用户输入（不等于任何预设默认值）绝不覆盖
+  const canOverrideName = isNameSystemGenerated(formData.value.name);
+  const canOverrideDesc = isDescriptionSystemGenerated(formData.value.description);
+
+  agentType.value = val;
+  const preset = agentTypePresets.value.find(p => p.id === val) || null;
+  if (val !== 'custom') {
+    applyAgentTypePreset(preset);
+  }
+
+  // 用新预设的默认名/描述刷新自动填充字段
+  if (canOverrideName) {
+    formData.value.name = getPresetDefaultName(preset);
+  }
+  if (canOverrideDesc) {
+    formData.value.description = getPresetDefaultDescription(preset);
+  }
+
+  // 如果新预设与当前已选 KB 冲突，软提示（不强制移除）
+  if (incompatibleSelectedKbCount.value > 0) {
+    MessagePlugin.warning(
+      t('agentEditor.agentType.kbIncompatibleWarn', { count: incompatibleSelectedKbCount.value }),
+      4000,
+    );
+  }
+};
 
 // 思考模式计算属性（直接绑定 boolean）
 const thinkingEnabled = computed({
@@ -1943,6 +2162,25 @@ watch(() => props.visible, async (val) => {
       kbSelectionMode.value = 'none';
       mcpSelectionMode.value = 'none';
       skillsSelectionMode.value = 'none';
+
+      // 新建智能推理 agent 时，立即应用默认的 agent_type 预设
+      // （补齐 system_prompt / allowed_tools / kb_selection_mode 等），
+      // 否则用户在 modal 打开瞬间看到的"默认表单"和类型下拉显示的类型不一致。
+      if (newFormData.config.agent_mode === 'smart-reasoning') {
+        const defaultTypeId = newFormData.config.agent_type as AgentType;
+        const preset = agentTypePresets.value.find(p => p.id === defaultTypeId) || null;
+        if (defaultTypeId && defaultTypeId !== 'custom') {
+          applyAgentTypePreset(preset);
+        }
+        // 给新建表单补上"我的 XXX"默认名 + 预设描述，让用户可直接保存；
+        // 用户输入过的值不会被覆盖（此处是新建场景，字段必定为空）。
+        if (!formData.value.name) {
+          formData.value.name = getPresetDefaultName(preset);
+        }
+        if (!formData.value.description) {
+          formData.value.description = getPresetDefaultDescription(preset);
+        }
+      }
     }
   }
 });
@@ -2063,9 +2301,11 @@ watch(skillsSelectionMode, (mode) => {
 // 监听模式变化，自动调整配置
 watch(agentMode, (val, _oldVal) => {
   if (val === 'smart-reasoning') {
-    // 切换到 Agent 模式，根据知识库配置启用工具
+    // 切换到 Agent 模式，根据知识库配置启用工具。
+    // 注意：默认不注入 thinking / todo_write —— 它们用于显式反思或多步计划，
+    // 会显著增加 token 消耗，用户按需手动勾选。
     if (formData.value.config.allowed_tools.length === 0) {
-      const tools = ['thinking', 'todo_write'];
+      const tools: string[] = [];
       if (hasRagKnowledgeBase.value) {
         tools.push(
           'knowledge_search',
@@ -2154,43 +2394,6 @@ watch(hasWikiKnowledgeBase, (hasWiki, oldHasWiki) => {
   }
 });
 
-// 检索策略预设：一键改写 allowed_tools
-// auto        -> 按作用域内知识库能力自动补齐（RAG 库 → RAG 工具；Wiki 库 → Wiki 读取工具）
-// vector_only -> 只保留 RAG 工具，移除 Wiki 工具
-// wiki_only   -> 只保留 Wiki 读取工具，移除 RAG 工具
-// hybrid      -> 两者都补齐
-const onRetrievalPresetChange = (val: string) => {
-  formData.value.config.retrieval_preference = val as 'auto' | 'vector_only' | 'wiki_only' | 'hybrid';
-
-  if (!isAgentMode.value) return;
-
-  const current = new Set(formData.value.config.allowed_tools || []);
-
-  const addAll = (list: string[]) => list.forEach(t => current.add(t));
-  const removeAll = (list: string[]) => list.forEach(t => current.delete(t));
-
-  switch (val) {
-    case 'vector_only':
-      if (hasRagKnowledgeBase.value) addAll(knowledgeBaseTools);
-      removeAll(allWikiTools);
-      break;
-    case 'wiki_only':
-      removeAll(knowledgeBaseTools);
-      if (hasWikiKnowledgeBase.value) addAll(wikiReadTools);
-      break;
-    case 'hybrid':
-      if (hasRagKnowledgeBase.value) addAll(knowledgeBaseTools);
-      if (hasWikiKnowledgeBase.value) addAll(wikiReadTools);
-      break;
-    case 'auto':
-    default:
-      if (hasRagKnowledgeBase.value) addAll(knowledgeBaseTools);
-      if (hasWikiKnowledgeBase.value) addAll(wikiReadTools);
-      break;
-  }
-  formData.value.config.allowed_tools = Array.from(current);
-};
-
 // 监听运行模式变化，自动切换页面
 watch(isAgentMode, (isAgent) => {
   // 如果当前在高级设置页面但切换到了Agent模式，切换到基础设置
@@ -2239,14 +2442,16 @@ const loadDependencies = async () => {
     if (kbRes.data) {
       kbRes.data.forEach((kb: any) => {
         const strategy = kb.indexing_strategy;
+        const caps: KBCapabilities | undefined = kb.capabilities;
         myKbs.push({
           label: kb.name,
           value: kb.id,
           type: kb.type || 'document',
           count: kb.type === 'faq' ? (kb.chunk_count || 0) : (kb.knowledge_count || 0),
           shared: false,
-          ragEnabled: !strategy || strategy.vector_enabled || strategy.keyword_enabled,
-          wikiEnabled: strategy?.wiki_enabled || false,
+          ragEnabled: caps ? (caps.vector || caps.keyword) : (!strategy || strategy.vector_enabled || strategy.keyword_enabled),
+          wikiEnabled: caps ? caps.wiki : (strategy?.wiki_enabled || false),
+          capabilities: caps,
         });
       });
     }
@@ -2260,6 +2465,7 @@ const loadDependencies = async () => {
         sharedList.forEach((shared: any) => {
           const kb = shared.knowledge_base;
           if (!kb || myKbIds.has(kb.id)) return;
+          const caps: KBCapabilities | undefined = kb.capabilities;
           sharedKbs.push({
             label: kb.name,
             value: kb.id,
@@ -2267,8 +2473,9 @@ const loadDependencies = async () => {
             count: kb.type === 'faq' ? (kb.chunk_count || 0) : (kb.knowledge_count || 0),
             shared: true,
             orgName: shared.org_name,
-            ragEnabled: !kb.indexing_strategy || kb.indexing_strategy.vector_enabled || kb.indexing_strategy.keyword_enabled,
-            wikiEnabled: kb.indexing_strategy?.wiki_enabled || false,
+            ragEnabled: caps ? (caps.vector || caps.keyword) : (!kb.indexing_strategy || kb.indexing_strategy.vector_enabled || kb.indexing_strategy.keyword_enabled),
+            wikiEnabled: caps ? caps.wiki : (kb.indexing_strategy?.wiki_enabled || false),
+            capabilities: caps,
           });
         });
       }
@@ -2300,6 +2507,27 @@ const loadDependencies = async () => {
     } catch (e) {
       console.warn('Failed to load skills', e);
       skillsAvailable.value = false;
+    }
+
+    // 加载智能体类型预设（smart-reasoning 模式下的"类型"下拉）
+    try {
+      const presetsRes: any = await getAgentTypePresets();
+      if (presetsRes?.data && Array.isArray(presetsRes.data)) {
+        agentTypePresets.value = presetsRes.data as AgentTypePreset[];
+      }
+    } catch (e) {
+      console.warn('Failed to load agent type presets', e);
+    }
+
+    // 加载 Agent 系统提示词模板（供 applyAgentTypePreset 根据 system_prompt_id 回填正文）
+    try {
+      const tmplRes = await getPromptTemplates();
+      const cfg = tmplRes?.data;
+      if (cfg?.agent_system_prompt && Array.isArray(cfg.agent_system_prompt)) {
+        agentSystemPromptTemplates.value = cfg.agent_system_prompt;
+      }
+    } catch (e) {
+      console.warn('Failed to load prompt templates for agent type presets', e);
     }
 
     // 加载存储引擎可用状态（用于图片存储 provider 选择）
@@ -3116,6 +3344,30 @@ const handleSystemPromptTemplateSelect = (template: PromptTemplate) => {
   formData.value.config.system_prompt = template.content;
 };
 
+// Agent 系统提示词的"恢复默认"：
+// 当前选中了非 custom 的智能体类型时，"默认"应当是该类型预设绑定的提示词
+// （比如 Wiki 问答 → wiki_researcher），而不是 agent_system_prompt 模板表里
+// 全局 default: true 的那一条。只有当类型为 custom 或找不到预设绑定的模板时，
+// 才回退到 PromptTemplateSelector 传来的全局默认模板。
+const handleAgentSystemPromptResetDefault = (fallback: PromptTemplate) => {
+  const typeId = agentType.value;
+  if (typeId && typeId !== 'custom') {
+    const preset = agentTypePresets.value.find(p => p.id === typeId);
+    const presetPromptId = preset?.config?.system_prompt_id;
+    if (presetPromptId) {
+      const tmpl = agentSystemPromptTemplates.value.find(t => t.id === presetPromptId);
+      if (tmpl && typeof tmpl.content === 'string') {
+        formData.value.config.system_prompt = tmpl.content;
+        formData.value.config.system_prompt_id = tmpl.id;
+        return;
+      }
+    }
+  }
+  // Fallback：没有合适的类型预设，用 PromptTemplateSelector 找到的全局默认
+  formData.value.config.system_prompt = fallback.content;
+  formData.value.config.system_prompt_id = fallback.id;
+};
+
 const handleContextTemplateSelect = (template: PromptTemplate) => {
   formData.value.config.context_template = template.content;
 };
@@ -3445,6 +3697,28 @@ const handleSave = async () => {
       padding-right: 0;
     }
   }
+
+  // 强调行：用于"智能体类型"这类对用户影响最大、需要突出的关键配置。
+  // 视觉上只做极轻度强调 —— 左侧 3px 品牌色竖条 + label 加粗。
+  &.setting-row--emphasize {
+    position: relative;
+    padding-left: 14px;
+
+    &::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 22px;
+      bottom: 22px;
+      width: 3px;
+      border-radius: 2px;
+      background: var(--td-brand-color, #0052d9);
+    }
+
+    .setting-info label {
+      font-weight: 600;
+    }
+  }
 }
 
 .setting-info {
@@ -3724,24 +3998,6 @@ const handleSave = async () => {
     border-color: var(--td-warning-color-light, #fcd7b6);
 
     .t-icon { color: var(--td-warning-color); }
-  }
-}
-
-.tools-preset-label {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  gap: 2px;
-
-  .tools-preset-title {
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--td-text-color-primary);
-  }
-
-  .tools-preset-hint {
-    font-size: 12px;
-    color: var(--td-text-color-secondary);
   }
 }
 
@@ -4404,6 +4660,32 @@ const handleSave = async () => {
   white-space: nowrap;
 }
 
+.kb-option-disabled-hint {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--td-warning-color-6, #d46b08);
+  background: var(--td-warning-color-1, #fff7e6);
+  padding: 1px 6px;
+  border-radius: 4px;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-type-preset-desc {
+  margin-top: 4px;
+  color: var(--td-text-color-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.agent-type-select {
+  width: 100%;
+  min-width: 240px;
+  max-width: 360px;
+}
+
 .kb-option-count {
   flex-shrink: 0;
   font-size: 11px;
@@ -4473,5 +4755,43 @@ const handleSave = async () => {
   &:first-of-type {
     padding-top: 0;
   }
+}
+</style>
+
+<!-- Non-scoped styles: TDesign teleports the popup outside this component, so
+     scoped selectors can't reach .agent-type-popup .t-select-option. -->
+<style lang="less">
+.agent-type-popup {
+  .t-select-option {
+    // 默认 option 是 32px 单行；我们要双行显示，取消固定高度并放宽 padding
+    height: auto !important;
+    min-height: 48px;
+    line-height: 1.4;
+    padding: 8px 12px;
+    white-space: normal;
+  }
+}
+
+.agent-type-option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  width: 100%;
+}
+
+.agent-type-option-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--td-text-color-primary);
+  line-height: 1.4;
+}
+
+.agent-type-option-desc {
+  font-size: 12px;
+  color: var(--td-text-color-secondary);
+  line-height: 1.4;
+  white-space: normal;
+  overflow-wrap: break-word;
 }
 </style>

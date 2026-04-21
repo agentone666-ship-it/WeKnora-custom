@@ -37,10 +37,6 @@ type AgentConfig struct {
 	// Whether to retrieve knowledge base only when explicitly mentioned with @ (default: false)
 	RetrieveKBOnlyWhenMentioned bool `json:"retrieve_kb_only_when_mentioned"`
 
-	// RetrievalPreference controls which retrieval tools the agent uses:
-	//   "auto" (default), "vector_only", "wiki_only", "hybrid"
-	RetrievalPreference string `json:"retrieval_preference"`
-
 	// Whether to retain retrieval history (like wiki_read_page results) across turns (default: false)
 	RetainRetrievalHistory bool `json:"retain_retrieval_history"`
 
