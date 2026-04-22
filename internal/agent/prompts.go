@@ -185,16 +185,26 @@ func formatKnowledgeBaseList(kbInfos []*KnowledgeBaseInfo) string {
 	return b.String()
 }
 
-// renderPromptPlaceholders renders placeholders in the prompt template
+// renderPromptPlaceholders renders placeholders in the prompt template.
+//
 // Supported placeholders:
-//   - {{knowledge_bases}} - Replaced with formatted knowledge base list
+//   - {{knowledge_bases}} - Historically expanded to the full bound-KB XML
+//     block. Since that block now lives in the user message's
+//     `<runtime_context>` (see observe.buildRuntimeContextBlock), the
+//     placeholder is expanded to a short pointer so legacy / custom
+//     templates that still reference `{{knowledge_bases}}` degrade
+//     gracefully instead of dumping the detail twice.
 func renderPromptPlaceholders(template string, knowledgeBases []*KnowledgeBaseInfo) string {
 	result := template
 
-	// Replace {{knowledge_bases}} placeholder
 	if strings.Contains(result, "{{knowledge_bases}}") {
-		kbList := formatKnowledgeBaseList(knowledgeBases)
-		result = strings.ReplaceAll(result, "{{knowledge_bases}}", kbList)
+		var replacement string
+		if len(knowledgeBases) == 0 {
+			replacement = "(no knowledge bases bound to this session)"
+		} else {
+			replacement = "(see `<bound_knowledge_bases>` inside the user message's `<runtime_context>` for the current bound KB list and their capabilities)"
+		}
+		result = strings.ReplaceAll(result, "{{knowledge_bases}}", replacement)
 	}
 
 	return result

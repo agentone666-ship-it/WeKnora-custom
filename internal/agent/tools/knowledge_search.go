@@ -471,6 +471,44 @@ func (t *KnowledgeSearchTool) concurrentSearchByTargets(
 		kbList = kbs
 	}
 
+	// Filter out non-searchable KBs (wiki-only / graph-only). knowledge_search
+	// can only serve KBs with vector or keyword indexing; feeding a wiki-only
+	// KB into HybridSearch causes spurious "model ID cannot be empty" errors
+	// because such KBs have no EmbeddingModelID configured. Such scopes
+	// should be queried via wiki_search / graph tools instead.
+	//
+	// KBs that we couldn't fetch from the repo (not in kbList) are kept so
+	// the downstream HybridSearch path can still surface the real error.
+	searchableKBs := make(map[string]bool, len(kbList))
+	knownKBs := make(map[string]bool, len(kbList))
+	for _, kb := range kbList {
+		if kb == nil {
+			continue
+		}
+		knownKBs[kb.ID] = true
+		if kb.IsVectorEnabled() || kb.IsKeywordEnabled() {
+			searchableKBs[kb.ID] = true
+		}
+	}
+	filteredTargets := make(types.SearchTargets, 0, len(searchTargets))
+	for _, st := range searchTargets {
+		if searchableKBs[st.KnowledgeBaseID] {
+			filteredTargets = append(filteredTargets, st)
+			continue
+		}
+		if knownKBs[st.KnowledgeBaseID] {
+			logger.Infof(ctx, "[Tool][KnowledgeSearch] Skipping non-searchable KB %s (no vector/keyword index, likely wiki/graph-only)", st.KnowledgeBaseID)
+			continue
+		}
+		// KB record unavailable; keep so downstream can surface real errors.
+		filteredTargets = append(filteredTargets, st)
+	}
+	if len(filteredTargets) == 0 {
+		logger.Infof(ctx, "[Tool][KnowledgeSearch] No searchable KBs in scope (all wiki/graph-only); skipping retrieval")
+		return nil
+	}
+	searchTargets = filteredTargets
+
 	// Resolve actual model identities (name + endpoint) for cross-tenant grouping
 	modelKeyMap := t.knowledgeBaseService.ResolveEmbeddingModelKeys(ctx, kbList)
 
@@ -1135,10 +1173,14 @@ func (t *KnowledgeSearchTool) formatOutput(
 				logger.Warnf(ctx, "[Tool][KnowledgeSearch] KB %s not found in searchTargets, skipping chunk count", result.KnowledgeBaseID)
 				knowledgeTotalMap[result.KnowledgeID] = 0
 			} else {
+				// Use the same chunk-type filter as list_knowledge_chunks so the
+				// total reported here matches what list_knowledge_chunks can page
+				// over. Mismatched filters previously let LLMs compute offsets
+				// against an inflated/deflated total and page past the end.
 				_, total, err := t.chunkService.GetRepository().ListPagedChunksByKnowledgeID(ctx,
 					effectiveTenantID, result.KnowledgeID,
 					&types.Pagination{Page: 1, PageSize: 1},
-					[]types.ChunkType{types.ChunkTypeText}, "", "", "", "", "",
+					[]types.ChunkType{types.ChunkTypeText, types.ChunkTypeFAQ}, "", "", "", "", "",
 				)
 				if err != nil {
 					logger.Warnf(ctx, "[Tool][KnowledgeSearch] Failed to get total chunks for knowledge %s: %v", result.KnowledgeID, err)

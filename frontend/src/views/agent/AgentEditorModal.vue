@@ -1780,8 +1780,9 @@ const defaultFormData = {
     // Skills 设置
     skills_selection_mode: 'none' as 'all' | 'selected' | 'none',
     selected_skills: [] as string[],
-    // 知识库设置
-    kb_selection_mode: 'none' as 'all' | 'selected' | 'none',
+    // 知识库设置：新建智能体默认选择 "全部知识库"，
+    // 让用户无需先去勾选 KB 即可上手；如有需要可改为 "selected" / "none"。
+    kb_selection_mode: 'all' as 'all' | 'selected' | 'none',
     knowledge_bases: [] as string[],
     retrieve_kb_only_when_mentioned: false,
     // 智能推理下的类型预设：新建 agent 时默认给 RAG 问答（最常用场景）。
@@ -2159,7 +2160,8 @@ watch(() => props.visible, async (val) => {
         }
       }
       formData.value = newFormData;
-      kbSelectionMode.value = 'none';
+      // 新建智能体：知识库默认 "全部"，MCP / Skills 仍默认 "不使用"。
+      kbSelectionMode.value = 'all';
       mcpSelectionMode.value = 'none';
       skillsSelectionMode.value = 'none';
 

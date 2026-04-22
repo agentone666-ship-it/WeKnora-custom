@@ -200,6 +200,22 @@ func (e *AgentEngine) analyzeResponse(
 	return responseVerdict{isDone: false, step: step}
 }
 
+// indentLines prefixes every line of s with indent. Used to nest pre-rendered
+// XML blocks inside the `<runtime_context>` envelope without losing readability.
+func indentLines(s, indent string) string {
+	if s == "" {
+		return ""
+	}
+	lines := strings.Split(s, "\n")
+	for i, line := range lines {
+		if line == "" {
+			continue
+		}
+		lines[i] = indent + line
+	}
+	return strings.Join(lines, "\n")
+}
+
 // escapeXMLAttr escapes a string for safe inclusion in an XML attribute value.
 // Titles and names may contain user-supplied characters like <, >, &, ".
 func escapeXMLAttr(s string) string {
@@ -217,6 +233,13 @@ func escapeXMLAttr(s string) string {
 // their own scope snapshot in history, so the model can see the scope change
 // and avoid reusing last turn's answer against the new scope.
 //
+// The detailed bound-KB metadata (capabilities, recent documents, summaries)
+// also lives here — it is turn state, not instructions, so it belongs next
+// to the user query rather than baked into the system prompt. Keeping it in
+// the user message keeps the system prompt stable/cacheable and lets the
+// model see exactly which KBs were in scope at the time of each historical
+// turn.
+//
 // Emitted as an XML-ish block (not free prose) so it is a visually distinct,
 // non-instruction envelope that is hard to conflate with user text and
 // prompt-injection-safe.
@@ -231,19 +254,15 @@ func buildRuntimeContextBlock(
 	fmt.Fprintf(&sb, "  <session>%s</session>\n", escapeXMLAttr(sessionID))
 
 	if len(kbs) > 0 {
-		sb.WriteString("  <active_knowledge_bases>\n")
-		for _, kb := range kbs {
-			if kb == nil {
-				continue
-			}
-			name := kb.Name
-			if name == "" {
-				name = kb.ID
-			}
-			fmt.Fprintf(&sb, "    <knowledge_base id=\"%s\" name=\"%s\" />\n",
-				escapeXMLAttr(kb.ID), escapeXMLAttr(name))
-		}
-		sb.WriteString("  </active_knowledge_bases>\n")
+		// Render the full bound-KB detail (capabilities + recent docs) so the
+		// model has everything it needs to route its retrieval in one place.
+		// `formatKnowledgeBaseList` already emits a `<knowledge_bases>…</knowledge_bases>`
+		// envelope; we wrap it in `<bound_knowledge_bases>` to make the scope
+		// semantics explicit and to match the naming the prompt templates use
+		// when referring back to this block.
+		sb.WriteString("  <bound_knowledge_bases>\n")
+		sb.WriteString(indentLines(formatKnowledgeBaseList(kbs), "    "))
+		sb.WriteString("\n  </bound_knowledge_bases>\n")
 	}
 
 	if len(docs) > 0 {

@@ -27,10 +27,18 @@ var listKnowledgeChunksTool = BaseTool{
 ## Parameters:
 - knowledge_id (required): Document ID
 - limit (optional): Chunks per page (default 20, max 100)
-- offset (optional): Start position (default 0)
+- offset (optional): 0-based position in the chunk list (NOT chunk_index).
+  Must be < total. Use offset=0 to read from the first chunk, offset=N to
+  skip the first N chunks. If offset >= total the tool returns an explicit
+  out-of-range error with the valid total so you can retry.
 
 ## Output:
-Full chunk content with chunk_id, chunk_index, and content text.`,
+Full chunk content with chunk_id, chunk_index, and content text.
+The response attributes include:
+- total: total number of chunks in the document
+- fetched: how many chunks this page returned
+If fetched=0 with total>0, your offset is past the end — retry with a
+smaller offset (e.g. offset = max(0, total - limit)).`,
 	schema: json.RawMessage(`{
   "type": "object",
   "properties": {
@@ -160,6 +168,32 @@ func (t *ListKnowledgeChunksTool) Execute(ctx context.Context, args json.RawMess
 
 	totalChunks := total
 	fetched := len(chunks)
+
+	// Explicit out-of-range guidance: when the caller paged past the end
+	// (offset >= total with total > 0), silently returning fetched=0 is
+	// confusing for LLMs that just saw the document in search results. Tell
+	// them exactly what happened and what offset would be valid so the next
+	// call lands on a real page.
+	if fetched == 0 && totalChunks > 0 && int64(offset) >= totalChunks {
+		suggestedOffset := totalChunks - int64(chunkLimit)
+		if suggestedOffset < 0 {
+			suggestedOffset = 0
+		}
+		return &types.ToolResult{
+			Success: false,
+			Error: fmt.Sprintf(
+				"offset %d is out of range: document has only %d chunks (valid offset range: 0..%d). Retry with offset=%d (or any value < %d).",
+				offset, totalChunks, totalChunks-1, suggestedOffset, totalChunks,
+			),
+			Data: map[string]interface{}{
+				"knowledge_id":     knowledgeID,
+				"total_chunks":     totalChunks,
+				"requested_offset": offset,
+				"requested_limit":  chunkLimit,
+				"suggested_offset": suggestedOffset,
+			},
+		}, nil
+	}
 
 	// Enrich image info from child image chunks (lazy loading)
 	if fetched > 0 {
