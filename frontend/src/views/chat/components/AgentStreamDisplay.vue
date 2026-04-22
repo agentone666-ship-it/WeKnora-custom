@@ -521,7 +521,10 @@ const sanitizeForDisplay = (text: string): string => {
   });
   result = result.replace(ID_LABEL_RE, '');
   result = result.replace(UUID_RE, '');
-  result = result.replace(/`\s*`/g, '');
+  // Remove empty inline code like `` or ` ` while preserving triple-backtick
+  // fenced code blocks (```). Without the lookaround the greedy pair match
+  // would eat two of the three fence backticks and break code block rendering.
+  result = result.replace(/(?<!`)`[ \t]*`(?!`)/g, '');
   result = result.replace(/\(\s*\)/g, '');
   return result;
 };
