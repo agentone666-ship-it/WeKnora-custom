@@ -92,6 +92,7 @@ func (s *wikiPageService) UpdatePage(ctx context.Context, page *types.WikiPage) 
 	existing.Summary = page.Summary
 	existing.PageType = page.PageType
 	existing.SourceRefs = page.SourceRefs
+	existing.ChunkRefs = page.ChunkRefs
 	existing.PageMetadata = page.PageMetadata
 	existing.Status = page.Status
 	existing.UpdatedAt = time.Now()

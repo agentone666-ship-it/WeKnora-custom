@@ -45,7 +45,7 @@ const uploading = ref(false);
 const kbLoading = ref(false);
 const docListLoading = ref(true);
 const isFAQ = computed(() => (kbInfo.value?.type || '') === 'faq');
-const isWiki = computed(() => !!kbInfo.value?.wiki_config?.enabled);
+const isWiki = computed(() => !!kbInfo.value?.indexing_strategy?.wiki_enabled);
 const validTabs = ['documents', 'wiki', 'graph'] as const
 type KbTab = typeof validTabs[number]
 const initTab = validTabs.includes(route.query.tab as any) ? (route.query.tab as KbTab) : 'documents'

@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS wiki_pages (
     content         TEXT NOT NULL DEFAULT '',
     summary         TEXT NOT NULL DEFAULT '',
     source_refs     JSONB DEFAULT '[]'::JSONB,
+    chunk_refs      JSONB DEFAULT '[]'::JSONB,
     in_links        JSONB DEFAULT '[]'::JSONB,
     out_links       JSONB DEFAULT '[]'::JSONB,
     page_metadata   JSONB DEFAULT '{}'::JSONB,

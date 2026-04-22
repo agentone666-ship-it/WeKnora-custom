@@ -29,11 +29,8 @@ func TestWikiPageTypes(t *testing.T) {
 }
 
 func TestWikiConfigValueScan(t *testing.T) {
-	// Test Value (serialize)
 	config := WikiConfig{
-		Enabled:          true,
-		AutoIngest:       true,
-		SynthesisModelID: "model-123",
+		SynthesisModelID:  "model-123",
 		MaxPagesPerIngest: 20,
 	}
 
@@ -42,7 +39,6 @@ func TestWikiConfigValueScan(t *testing.T) {
 		t.Fatalf("WikiConfig.Value() error: %v", err)
 	}
 
-	// Test Scan (deserialize)
 	var restored WikiConfig
 	b, ok := val.([]byte)
 	if !ok {
@@ -52,9 +48,6 @@ func TestWikiConfigValueScan(t *testing.T) {
 		t.Fatalf("WikiConfig.Scan() error: %v", err)
 	}
 
-	if restored.AutoIngest != true {
-		t.Error("AutoIngest mismatch")
-	}
 	if restored.SynthesisModelID != "model-123" {
 		t.Error("SynthesisModelID mismatch")
 	}
@@ -115,24 +108,20 @@ func TestStringArrayEmpty(t *testing.T) {
 }
 
 func TestKnowledgeBaseEnsureDefaultsWiki(t *testing.T) {
-	kb := &KnowledgeBase{Type: KnowledgeBaseTypeDocument, WikiConfig: &WikiConfig{Enabled: true, AutoIngest: true}}
+	kb := &KnowledgeBase{
+		Type:       KnowledgeBaseTypeDocument,
+		WikiConfig: &WikiConfig{SynthesisModelID: "m-1"},
+	}
 	kb.EnsureDefaults()
 
 	if kb.WikiConfig == nil {
 		t.Fatal("EnsureDefaults should preserve WikiConfig for wiki-enabled KB")
 	}
-	if kb.WikiConfig.AutoIngest != true {
-		t.Error("AutoIngest should be preserved")
+	if kb.WikiConfig.SynthesisModelID != "m-1" {
+		t.Error("SynthesisModelID should be preserved")
 	}
 	if kb.FAQConfig != nil {
 		t.Error("Document KB should not have FAQConfig")
-	}
-
-	// Test that user can disable AutoIngest
-	kb2 := &KnowledgeBase{Type: KnowledgeBaseTypeDocument, WikiConfig: &WikiConfig{Enabled: true, AutoIngest: false}}
-	kb2.EnsureDefaults()
-	if kb2.WikiConfig.AutoIngest != false {
-		t.Error("EnsureDefaults should not override user's AutoIngest=false setting")
 	}
 }
 
@@ -150,16 +139,16 @@ func TestKnowledgeBaseEnsureDefaultsDocumentWithoutWiki(t *testing.T) {
 
 func TestWikiPageJSON(t *testing.T) {
 	page := WikiPage{
-		ID:              "test-id",
-		Slug:            "entity/test",
-		Title:           "Test Entity",
-		PageType:        WikiPageTypeEntity,
-		Content:         "# Test\n\nSome content with [[concept/related]]",
-		Summary:         "A test entity page",
-		SourceRefs:      StringArray{"source-1", "source-2"},
-		OutLinks:        StringArray{"concept/related"},
-		InLinks:         StringArray{"summary/doc1"},
-		Version:         3,
+		ID:         "test-id",
+		Slug:       "entity/test",
+		Title:      "Test Entity",
+		PageType:   WikiPageTypeEntity,
+		Content:    "# Test\n\nSome content with [[concept/related]]",
+		Summary:    "A test entity page",
+		SourceRefs: StringArray{"source-1", "source-2"},
+		OutLinks:   StringArray{"concept/related"},
+		InLinks:    StringArray{"summary/doc1"},
+		Version:    3,
 	}
 
 	// Serialize
@@ -223,5 +212,75 @@ func TestWikiGraphDataJSON(t *testing.T) {
 func TestChunkTypeWikiPage(t *testing.T) {
 	if ChunkTypeWikiPage != "wiki_page" {
 		t.Errorf("ChunkTypeWikiPage should be 'wiki_page', got '%s'", ChunkTypeWikiPage)
+	}
+}
+
+func TestWikiExtractionGranularity_IsValid(t *testing.T) {
+	valid := []WikiExtractionGranularity{
+		WikiExtractionFocused,
+		WikiExtractionStandard,
+		WikiExtractionExhaustive,
+	}
+	for _, g := range valid {
+		if !g.IsValid() {
+			t.Errorf("%q should be valid", g)
+		}
+	}
+
+	invalid := []WikiExtractionGranularity{"", "FOCUSED", "strict", "none", "FULL"}
+	for _, g := range invalid {
+		if g.IsValid() {
+			t.Errorf("%q should NOT be valid", g)
+		}
+	}
+}
+
+func TestWikiExtractionGranularity_Normalize(t *testing.T) {
+	cases := map[WikiExtractionGranularity]WikiExtractionGranularity{
+		"":           WikiExtractionStandard, // legacy / unset
+		"unknown":    WikiExtractionStandard,
+		"FOCUSED":    WikiExtractionStandard, // case-sensitive on purpose
+		"focused":    WikiExtractionFocused,
+		"standard":   WikiExtractionStandard,
+		"exhaustive": WikiExtractionExhaustive,
+	}
+	for in, want := range cases {
+		if got := in.Normalize(); got != want {
+			t.Errorf("Normalize(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestWikiConfig_JSONRoundTrip_WithGranularity(t *testing.T) {
+	original := WikiConfig{
+		SynthesisModelID:      "m-1",
+		MaxPagesPerIngest:     20,
+		ExtractionGranularity: WikiExtractionFocused,
+	}
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal error: %v", err)
+	}
+	var restored WikiConfig
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatalf("Unmarshal error: %v", err)
+	}
+	if restored.ExtractionGranularity != WikiExtractionFocused {
+		t.Errorf("granularity round-trip failed: got %q", restored.ExtractionGranularity)
+	}
+
+	// Legacy row without the granularity field. We also include the removed
+	// "enabled" / "auto_ingest" keys to verify the decoder tolerates unknown
+	// fields on rows written before those columns were retired.
+	legacy := []byte(`{"enabled":true,"auto_ingest":true,"synthesis_model_id":"","max_pages_per_ingest":0}`)
+	var oldCfg WikiConfig
+	if err := json.Unmarshal(legacy, &oldCfg); err != nil {
+		t.Fatalf("Unmarshal legacy error: %v", err)
+	}
+	if oldCfg.ExtractionGranularity != "" {
+		t.Errorf("legacy row should decode to empty granularity, got %q", oldCfg.ExtractionGranularity)
+	}
+	if oldCfg.ExtractionGranularity.Normalize() != WikiExtractionStandard {
+		t.Errorf("legacy row should normalize to standard")
 	}
 }

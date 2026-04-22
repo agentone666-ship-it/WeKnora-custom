@@ -103,11 +103,9 @@ const emit = defineEmits<{
 const uiStore = useUIStore()
 const { t } = useI18n()
 
-// 引用各个模型选择器
 const llmSelectorRef = ref<InstanceType<typeof ModelSelector>>()
 const embeddingSelectorRef = ref<InstanceType<typeof ModelSelector>>()
 
-// 处理LLM模型变化
 const handleLLMChange = (modelId: string) => {
   emit('update:config', {
     ...props.config,
@@ -115,7 +113,6 @@ const handleLLMChange = (modelId: string) => {
   })
 }
 
-// 处理Embedding模型变化
 const handleEmbeddingChange = (modelId: string) => {
   emit('update:config', {
     ...props.config,
@@ -123,7 +120,6 @@ const handleEmbeddingChange = (modelId: string) => {
   })
 }
 
-// 处理Wiki合成模型变化
 const handleWikiModelChange = (modelId: string) => {
   emit('update:config', {
     ...props.config,
@@ -131,13 +127,9 @@ const handleWikiModelChange = (modelId: string) => {
   })
 }
 
-// 处理添加模型按钮点击
 const handleAddModel = (subSection: string) => {
-  // 打开全局设置对话框，并导航到对应的模型子页面
   uiStore.openSettings('models', subSection)
 }
-
-// 由于使用了 allModels prop，不再需要单独刷新各个选择器
 </script>
 
 <style lang="less" scoped>

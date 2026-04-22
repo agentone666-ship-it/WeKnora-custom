@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -18,6 +19,15 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/redis/go-redis/v9"
 )
+
+// ErrWikiIngestConcurrent is returned by the wiki ingest handler when another
+// batch is already running for the same KB (i.e. the `wiki:active:<kbID>`
+// Redis lock is held). The asynq server's RetryDelayFunc uses errors.Is on
+// this sentinel to apply a short, fixed retry delay instead of asynq's default
+// exponential backoff — otherwise a freshly orphaned lock (e.g. from a crash
+// or restart) would force newcomers to wait minutes even after the lock
+// naturally expires.
+var ErrWikiIngestConcurrent = errors.New("concurrent wiki task active")
 
 const (
 	// maxContentForWiki limits the document content sent to LLM for wiki generation
@@ -54,6 +64,20 @@ const (
 	// wikiDeletedTTL bounds how long we remember a deletion. Must comfortably
 	// exceed the longest plausible ingest run (LLM extraction + reduce).
 	wikiDeletedTTL = 1 * time.Hour
+
+	// wikiActiveLockTTL is the TTL for the per-KB "batch in progress" flag.
+	// Kept short (relative to total batch runtime) so that if the owning
+	// process crashes without running its `defer Del`, the orphaned lock
+	// expires quickly and newcomers aren't blocked. A periodic renew
+	// (wikiActiveLockRenew) keeps the lock alive while the handler is
+	// genuinely still running.
+	wikiActiveLockTTL = 60 * time.Second
+
+	// wikiActiveLockRenew is how often the in-flight handler bumps the TTL.
+	// Must be comfortably shorter than wikiActiveLockTTL so a single missed
+	// tick (GC pause, Redis blip) doesn't let the lock slip out from under a
+	// live handler.
+	wikiActiveLockRenew = 20 * time.Second
 )
 
 // WikiDeletedTombstoneKey returns the Redis key used to mark a knowledge as
@@ -318,6 +342,12 @@ type WikiBatchContext struct {
 	AllPages                    []*types.WikiPage
 	SlugTitleMap                map[string]string
 	SummaryContentByKnowledgeID map[string]string
+	// ExtractionGranularity drives Pass 0 (candidate slug extraction)
+	// aggressiveness. Resolved once per batch from the KnowledgeBase's
+	// WikiConfig so every doc in the batch sees the same scope rules.
+	// Already Normalize()'d — consumers can assume it is one of the
+	// three valid values.
+	ExtractionGranularity types.WikiExtractionGranularity
 }
 
 // SlugUpdate represents a single update operation for a specific slug
@@ -332,6 +362,19 @@ type SlugUpdate struct {
 	SummaryBody       string // For summary
 	SummaryLine       string // For summary
 	RetractDocContent string // For retract / retractStale
+	// SourceChunks lists the chunk IDs (within KnowledgeID) that substantively
+	// support this update. Mirrors Item.SourceChunks for convenience — the
+	// Reduce phase reads from here to avoid an extra field hop.
+	SourceChunks []string
+	// DocSummary is the document-level summary body produced by
+	// WikiSummaryPrompt (everything after the SUMMARY: ... headline, falling
+	// back to the raw output if no headline could be parsed out). Carried
+	// here so the Reduce phase can frame cited chunks with a rich
+	// <source_context> block that tells the editor model what the document
+	// is about AND what kind of document it is (resume vs announcement vs
+	// product page). The one-line headline alone was too terse to keep the
+	// editor grounded on longer / multi-topic source documents.
+	DocSummary string
 }
 
 func previewText(s string, maxRunes int) string {
@@ -537,13 +580,19 @@ func (s *wikiIngestService) getExistingPageSlugsForKnowledge(ctx context.Context
 
 // Multi-source → remove ref, queue retract
 
-// extractedItem represents a single extracted entity or concept
+// extractedItem represents a single extracted entity or concept.
+//
+// SourceChunks holds the stable chunk IDs (from the source document) that
+// substantively discuss this item. Populated by the chunk-citation pass; when
+// non-empty the Reduce phase uses these chunks verbatim as the item's
+// evidence instead of the shorter Description/Details fields.
 type extractedItem struct {
-	Name        string   `json:"name"`
-	Slug        string   `json:"slug"`
-	Aliases     []string `json:"aliases"`
-	Description string   `json:"description"`
-	Details     string   `json:"details"`
+	Name         string   `json:"name"`
+	Slug         string   `json:"slug"`
+	Aliases      []string `json:"aliases"`
+	Description  string   `json:"description"`
+	Details      string   `json:"details"`
+	SourceChunks []string `json:"source_chunks,omitempty"`
 }
 
 // combinedExtraction represents the parsed result of the combined entity+concept extraction
@@ -779,11 +828,29 @@ func (s *wikiIngestService) deduplicateExtractedBatch(
 		return entities, concepts
 	}
 
+	if len(allPages) == 0 {
+		return entities, concepts
+	}
+
+	// Pre-filter the candidate existing-pages set. Passing the full corpus
+	// to the LLM on large KBs bloats the prompt and empirically lets the
+	// model hallucinate merges between totally unrelated slugs. The filter
+	// is conservative (high recall) and the downstream validMerge check
+	// remains in place for defense in depth.
+	newItems := make([]extractedItem, 0, len(entities)+len(concepts))
+	newItems = append(newItems, entities...)
+	newItems = append(newItems, concepts...)
+	candidatePages := selectDedupCandidatePages(newItems, allPages)
+	if len(candidatePages) == 0 {
+		return entities, concepts
+	}
+	if origCount := countEntityConceptPages(allPages); origCount > len(candidatePages) {
+		logger.Infof(ctx, "wiki ingest: dedup candidate filter kept %d/%d existing pages for %d new items",
+			len(candidatePages), origCount, len(newItems))
+	}
+
 	var existingBuf strings.Builder
-	for _, p := range allPages {
-		if p.PageType != types.WikiPageTypeEntity && p.PageType != types.WikiPageTypeConcept {
-			continue
-		}
+	for _, p := range candidatePages {
 		writeDedupItemXML(&existingBuf, p.Slug, p.Title, string(p.PageType), []string(p.Aliases))
 	}
 	if existingBuf.Len() == 0 {

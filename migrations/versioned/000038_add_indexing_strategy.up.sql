@@ -13,8 +13,8 @@ UPDATE knowledge_bases
 SET indexing_strategy = jsonb_build_object(
     'vector_enabled',  TRUE,
     'keyword_enabled', TRUE,
-    'wiki_enabled',    COALESCE((wiki_config    ->> 'enabled')::boolean, FALSE),
-    'graph_enabled',   COALESCE((extract_config ->> 'enabled')::boolean, FALSE)
+    'wiki_enabled',    FALSE,
+    'graph_enabled',   FALSE
 )
 WHERE indexing_strategy IS NULL;
 

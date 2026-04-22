@@ -93,6 +93,28 @@
                         </p>
                       </div>
 
+                      <!-- Wiki 提取粒度 (仅当 Wiki 启用时显示) -->
+                      <div v-if="!isFAQ && formData.indexingStrategy.wikiEnabled" class="form-item">
+                        <label class="form-label">{{ $t('knowledgeEditor.wiki.extractionGranularityLabel') }}</label>
+                        <p class="form-tip">{{ $t('knowledgeEditor.wiki.extractionGranularityTip') }}</p>
+                        <t-radio-group
+                          :value="resolvedGranularity"
+                          class="granularity-radio-group"
+                          @change="handleGranularityChange"
+                        >
+                          <t-radio-button value="focused">
+                            {{ $t('knowledgeEditor.wiki.granularityFocused') }}
+                          </t-radio-button>
+                          <t-radio-button value="standard">
+                            {{ $t('knowledgeEditor.wiki.granularityStandard') }}
+                          </t-radio-button>
+                          <t-radio-button value="exhaustive">
+                            {{ $t('knowledgeEditor.wiki.granularityExhaustive') }}
+                          </t-radio-button>
+                        </t-radio-group>
+                        <p class="form-tip granularity-hint">{{ granularityHint }}</p>
+                      </div>
+
                       <div class="form-item">
                         <label class="form-label required">{{ $t('knowledgeEditor.basic.nameLabel') }}</label>
                         <t-input 
@@ -482,10 +504,9 @@ const initFormData = (type: 'document' | 'faq' = 'document') => {
       questionCount: 3
     },
     wikiConfig: {
-      enabled: false,
-      autoIngest: true,
       synthesisModelId: '',
       maxPagesPerIngest: 0,
+      extractionGranularity: 'standard' as 'focused' | 'standard' | 'exhaustive',
     },
     indexingStrategy: {
       vectorEnabled: true,
@@ -576,10 +597,14 @@ const loadKBData = async () => {
         questionCount: kb.question_generation_config?.question_count || 3
       },
       wikiConfig: {
-        enabled: kb.wiki_config?.enabled ?? false,
-        autoIngest: kb.wiki_config?.auto_ingest ?? true,
         synthesisModelId: kb.wiki_config?.synthesis_model_id || '',
         maxPagesPerIngest: kb.wiki_config?.max_pages_per_ingest || 0,
+        extractionGranularity: (
+          kb.wiki_config?.extraction_granularity === 'focused' ||
+          kb.wiki_config?.extraction_granularity === 'exhaustive'
+            ? kb.wiki_config.extraction_granularity
+            : 'standard'
+        ) as 'focused' | 'standard' | 'exhaustive',
       },
       indexingStrategy: {
         vectorEnabled: kb.indexing_strategy?.vector_enabled ?? true,
@@ -603,6 +628,39 @@ const loadKBData = async () => {
 const handleModelConfigUpdate = (config: any) => {
   if (formData.value) {
     formData.value.modelConfig = { ...config }
+  }
+}
+
+// 粒度选择器：从 formData.wikiConfig 读出并规范化，未知值回退到 'standard'，
+// 与后端 WikiExtractionGranularity.Normalize() 的契约保持一致。
+const resolvedGranularity = computed<'focused' | 'standard' | 'exhaustive'>(() => {
+  const g = formData.value?.wikiConfig?.extractionGranularity
+  if (g === 'focused' || g === 'standard' || g === 'exhaustive') {
+    return g
+  }
+  return 'standard'
+})
+
+const granularityHint = computed<string>(() => {
+  switch (resolvedGranularity.value) {
+    case 'focused':
+      return t('knowledgeEditor.wiki.granularityFocusedHint')
+    case 'exhaustive':
+      return t('knowledgeEditor.wiki.granularityExhaustiveHint')
+    default:
+      return t('knowledgeEditor.wiki.granularityStandardHint')
+  }
+})
+
+const handleGranularityChange = (value: string | number | boolean) => {
+  if (!formData.value) return
+  const next: 'focused' | 'standard' | 'exhaustive' =
+    value === 'focused' || value === 'exhaustive'
+      ? (value as 'focused' | 'exhaustive')
+      : 'standard'
+  formData.value.wikiConfig = {
+    ...formData.value.wikiConfig,
+    extractionGranularity: next,
   }
 }
 
@@ -795,14 +853,13 @@ const buildSubmitData = () => {
     }
   }
 
-  // Always send wiki_config so enabled/disabled state is persisted
-  // Sync wiki_config.enabled from indexingStrategy.wikiEnabled
+  // Wiki enablement is carried solely by indexing_strategy.wiki_enabled.
+  // wiki_config only holds wiki-specific tunables.
   if (formData.value.type !== 'faq') {
     data.wiki_config = {
-      enabled: formData.value.indexingStrategy?.wikiEnabled ?? false,
-      auto_ingest: formData.value.wikiConfig?.autoIngest ?? true,
       synthesis_model_id: formData.value.modelConfig?.wikiSynthesisModelId || '',
       max_pages_per_ingest: formData.value.wikiConfig?.maxPagesPerIngest || 0,
+      extraction_granularity: formData.value.wikiConfig?.extractionGranularity || 'standard',
     }
   }
 
@@ -895,10 +952,9 @@ const doSubmit = async () => {
       }
       if (formData.value.wikiConfig && formData.value.type !== 'faq') {
         updateConfig.wiki_config = {
-          enabled: formData.value.indexingStrategy?.wikiEnabled ?? false,
-          auto_ingest: formData.value.wikiConfig.autoIngest ?? true,
           synthesis_model_id: formData.value.modelConfig?.wikiSynthesisModelId || '',
           max_pages_per_ingest: formData.value.wikiConfig.maxPagesPerIngest || 0,
+          extraction_granularity: formData.value.wikiConfig.extractionGranularity || 'standard',
         }
       }
       if (formData.value.type !== 'faq') {
@@ -1276,6 +1332,18 @@ watch(
   margin-top: 6px;
   font-size: 12px;
   color: var(--td-text-color-placeholder);
+}
+
+.granularity-radio-group {
+  margin-top: 4px;
+}
+
+.granularity-hint {
+  margin-top: 8px;
+  line-height: 1.6;
+  color: var(--td-text-color-secondary);
+  white-space: normal;
+  word-break: break-word;
 }
 
 .indexing-checks {

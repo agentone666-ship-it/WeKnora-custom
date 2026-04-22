@@ -101,16 +101,22 @@ func (s *wikiIngestService) ProcessWikiIngest(ctx context.Context, t *asynq.Task
 		ctx = context.WithValue(ctx, types.LanguageContextKey, payload.Language)
 	}
 
-	// Try to acquire the "active batch" flag (non-blocking)
+	// Try to acquire the "active batch" flag (non-blocking).
+	//
+	// TTL is intentionally short (wikiActiveLockTTL ≈ 60s) so that if the
+	// owning process dies without releasing the lock (crash, kill -9,
+	// container restart), the orphaned key expires within ~1 minute and new
+	// tasks aren't starved. A renew goroutine keeps the lock alive while
+	// the handler is genuinely running.
 	if s.redisClient != nil {
 		activeKey := wikiActiveKeyPrefix + payload.KnowledgeBaseID
-		acquired, err := s.redisClient.SetNX(ctx, activeKey, "1", 5*time.Minute).Result()
+		acquired, err := s.redisClient.SetNX(ctx, activeKey, "1", wikiActiveLockTTL).Result()
 		if err != nil {
 			logger.Warnf(ctx, "wiki ingest: redis SetNX failed: %v", err)
 		} else if !acquired {
 			exitStatus = "active_lock_conflict"
 			logger.Infof(ctx, "wiki ingest: another batch active for KB %s, deferring to asynq retry", payload.KnowledgeBaseID)
-			return fmt.Errorf("concurrent wiki task active, please retry")
+			return ErrWikiIngestConcurrent
 		}
 		lockAcquired = acquired
 
@@ -121,14 +127,14 @@ func (s *wikiIngestService) ProcessWikiIngest(ctx context.Context, t *asynq.Task
 		}()
 
 		go func() {
-			ticker := time.NewTicker(2 * time.Minute)
+			ticker := time.NewTicker(wikiActiveLockRenew)
 			defer ticker.Stop()
 			for {
 				select {
 				case <-lockCtx.Done():
 					return
 				case <-ticker.C:
-					s.redisClient.Expire(context.Background(), activeKey, 5*time.Minute)
+					s.redisClient.Expire(context.Background(), activeKey, wikiActiveLockTTL)
 				}
 			}
 		}()
@@ -145,13 +151,11 @@ func (s *wikiIngestService) ProcessWikiIngest(ctx context.Context, t *asynq.Task
 		exitStatus = "kb_not_wiki_enabled"
 		return fmt.Errorf("wiki ingest: KB %s is not wiki type", kb.ID)
 	}
-	if kb.WikiConfig == nil || !kb.WikiConfig.AutoIngest {
-		exitStatus = "auto_ingest_disabled"
-		logger.Infof(ctx, "wiki ingest: auto_ingest disabled for KB %s, skipping", kb.ID)
-		return nil
-	}
 
-	synthesisModelID := kb.WikiConfig.SynthesisModelID
+	var synthesisModelID string
+	if kb.WikiConfig != nil {
+		synthesisModelID = kb.WikiConfig.SynthesisModelID
+	}
 	if synthesisModelID == "" {
 		synthesisModelID = kb.SummaryModelID
 	}
@@ -189,10 +193,21 @@ func (s *wikiIngestService) ProcessWikiIngest(ctx context.Context, t *asynq.Task
 
 	// Fetch all existing pages once, shared across Map and Reduce phases
 	allPages, _ := s.wikiService.ListAllPages(ctx, payload.KnowledgeBaseID)
+
+	// Resolve extraction granularity once per batch. Historical rows with
+	// empty/unknown values fall back to Standard via Normalize(). Failures
+	// to load the KB (unlikely since we're already acting on it) also
+	// degrade gracefully to Standard.
+	granularity := types.WikiExtractionStandard
+	if kb, kbErr := s.kbService.GetKnowledgeBaseByID(ctx, payload.KnowledgeBaseID); kbErr == nil && kb != nil && kb.WikiConfig != nil {
+		granularity = kb.WikiConfig.ExtractionGranularity.Normalize()
+	}
+
 	batchCtx := &WikiBatchContext{
 		AllPages:                    allPages,
 		SlugTitleMap:                make(map[string]string),
 		SummaryContentByKnowledgeID: make(map[string]string),
+		ExtractionGranularity:       granularity,
 	}
 	for _, p := range allPages {
 		if p.PageType != types.WikiPageTypeIndex && p.PageType != types.WikiPageTypeLog && p.Status != types.WikiPageStatusArchived {
@@ -457,22 +472,35 @@ func (s *wikiIngestService) mapOneDocument(
 	sourceRef := fmt.Sprintf("%s|%s", knowledgeID, docTitle)
 	oldPageSlugs := s.getExistingPageSlugsForKnowledge(ctx, payload.KnowledgeBaseID, knowledgeID)
 
-	logger.Infof(ctx, "wiki ingest: extracting entities and concepts for %s", knowledgeID)
-	extractedEntities, extractedConcepts, slugItems, err := s.extractEntitiesAndConceptsNoUpsert(ctx, chatModel, content, docTitle, lang, oldPageSlugs, batchCtx)
+	// Pass 0: lightweight candidate slug extraction (skeleton only).
+	// On failure we fall back to the legacy single-shot extractor so the doc
+	// still gets ingested, just without chunk-level citations.
+	var (
+		extractedEntities []extractedItem
+		extractedConcepts []extractedItem
+		slugItems         map[string]extractedItem
+		pass0Failed       bool
+	)
+	logger.Infof(ctx, "wiki ingest: pass 0 — extracting candidate slugs for %s", knowledgeID)
+	extractedEntities, extractedConcepts, slugItems, err = s.extractCandidateSlugs(ctx, chatModel, content, docTitle, lang, oldPageSlugs, batchCtx)
 	if err != nil {
-		logger.Warnf(ctx, "wiki ingest: knowledge extraction failed for %s: %v", knowledgeID, err)
-		return nil, nil, err
+		logger.Warnf(ctx, "wiki ingest: pass 0 failed for %s (%v) — falling back to legacy extractor", knowledgeID, err)
+		pass0Failed = true
+		extractedEntities, extractedConcepts, slugItems, err = s.extractEntitiesAndConceptsNoUpsert(ctx, chatModel, content, docTitle, lang, oldPageSlugs, batchCtx)
+		if err != nil {
+			logger.Warnf(ctx, "wiki ingest: legacy fallback also failed for %s: %v", knowledgeID, err)
+			return nil, nil, err
+		}
 	}
 
-	var extractedPages []string
+	// Build slug listing for Summary's wiki-link input.
+	var summaryExtractedPages []string
 	for slug := range slugItems {
-		extractedPages = append(extractedPages, slug)
+		summaryExtractedPages = append(summaryExtractedPages, slug)
 	}
-
-	// Summary
 	summarySlug := fmt.Sprintf("summary/%s", slugify(docTitle))
 	var slugListing string
-	for _, slug := range extractedPages {
+	for _, slug := range summaryExtractedPages {
 		if item, ok := slugItems[slug]; ok {
 			aliases := ""
 			if len(item.Aliases) > 0 {
@@ -484,20 +512,87 @@ func (s *wikiIngestService) mapOneDocument(
 		}
 	}
 
-	var docSummaryLine string
-	summaryContent, err := s.generateWithTemplate(ctx, chatModel, agent.WikiSummaryPrompt, map[string]string{
-		"Title":          docTitle,
-		"FileName":       docTitle,
-		"FileType":       "document",
-		"Content":        content,
-		"Language":       lang,
-		"ExtractedSlugs": slugListing,
-	})
+	// Summary and chunk classification are independent given Pass 0 output —
+	// run them in parallel. Summary handles wiki-link injection; classification
+	// attaches concrete chunk IDs to each candidate slug.
+	var (
+		summaryContent string
+		summaryErr     error
+		citations      map[string][]string
+		newSlugs       []newSlugFromCitation
+		batchCount     int
+	)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		summaryContent, summaryErr = s.generateWithTemplate(ctx, chatModel, agent.WikiSummaryPrompt, map[string]string{
+			"Title":          docTitle,
+			"FileName":       docTitle,
+			"FileType":       "document",
+			"Content":        content,
+			"Language":       lang,
+			"ExtractedSlugs": slugListing,
+		})
+	}()
+	go func() {
+		defer wg.Done()
+		// Skip citation pass when Pass 0 has fallen back to the legacy path —
+		// the legacy output already contains paraphrased Details, so chunk
+		// citations would be redundant and we'd spend LLM calls for nothing.
+		if pass0Failed {
+			citations = map[string][]string{}
+			return
+		}
+		candidatesXML := renderCandidateSlugsXML(extractedEntities, extractedConcepts)
+		citations, newSlugs, batchCount = s.classifyChunkCitations(ctx, chatModel, candidatesXML, docTitle, chunks, lang)
+	}()
+	wg.Wait()
+
+	// Merge citations back into the item structs (non-failing; items without
+	// citations simply keep their Description+Details fallback).
+	var uncited int
+	extractedEntities, extractedConcepts, uncited = mergeCitationsIntoItems(extractedEntities, extractedConcepts, citations, newSlugs)
+
+	// Rebuild slugItems so stale entries (for slugs that did not survive the
+	// merge) and brand-new slugs discovered by the citation pass are both
+	// reflected in summaryExtractedPages tracking.
+	slugItems = make(map[string]extractedItem, len(extractedEntities)+len(extractedConcepts))
+	for _, item := range extractedEntities {
+		if item.Slug != "" && item.Name != "" {
+			slugItems[item.Slug] = item
+		}
+	}
+	for _, item := range extractedConcepts {
+		if item.Slug != "" && item.Name != "" {
+			slugItems[item.Slug] = item
+		}
+	}
+
+	extractedPages := make([]string, 0, len(slugItems)+1)
+	for slug := range slugItems {
+		extractedPages = append(extractedPages, slug)
+	}
+
+	// Count total distinct chunks cited across all slugs for logging.
+	citedChunkSet := make(map[string]bool)
+	for _, ids := range citations {
+		for _, id := range ids {
+			citedChunkSet[id] = true
+		}
+	}
 
 	var updates []SlugUpdate
+	// docSummaryLine is the one-sentence headline used for terse log/audit
+	// previews and for <document_added> blocks in retract prompts.
+	// docSummary is the full summary body attached to each entity/concept
+	// update so the editor model gets rich framing in <source_context>.
+	var docSummaryLine string
+	var docSummary string
 
-	if err != nil {
-		logger.Errorf(ctx, "wiki ingest: generate summary failed for %s: %v", knowledgeID, err)
+	if summaryErr != nil {
+		logger.Errorf(ctx, "wiki ingest: generate summary failed for %s: %v", knowledgeID, summaryErr)
 	} else {
 		sumLine, sumBody := splitSummaryLine(summaryContent)
 		if sumBody == "" {
@@ -507,6 +602,10 @@ func (s *wikiIngestService) mapOneDocument(
 			sumLine = docTitle
 		}
 		docSummaryLine = sumLine
+		docSummary = sumBody
+		if strings.TrimSpace(docSummary) == "" {
+			docSummary = sumLine
+		}
 		updates = append(updates, SlugUpdate{
 			Slug:        summarySlug,
 			Type:        types.WikiPageTypeSummary,
@@ -524,13 +623,15 @@ func (s *wikiIngestService) mapOneDocument(
 	for _, item := range extractedEntities {
 		if item.Slug != "" {
 			updates = append(updates, SlugUpdate{
-				Slug:        item.Slug,
-				Type:        types.WikiPageTypeEntity,
-				Item:        item,
-				DocTitle:    docTitle,
-				KnowledgeID: knowledgeID,
-				SourceRef:   sourceRef,
-				Language:    lang,
+				Slug:         item.Slug,
+				Type:         types.WikiPageTypeEntity,
+				Item:         item,
+				DocTitle:     docTitle,
+				KnowledgeID:  knowledgeID,
+				SourceRef:    sourceRef,
+				Language:     lang,
+				SourceChunks: item.SourceChunks,
+				DocSummary:   docSummary,
 			})
 		}
 	}
@@ -539,13 +640,15 @@ func (s *wikiIngestService) mapOneDocument(
 	for _, item := range extractedConcepts {
 		if item.Slug != "" {
 			updates = append(updates, SlugUpdate{
-				Slug:        item.Slug,
-				Type:        types.WikiPageTypeConcept,
-				Item:        item,
-				DocTitle:    docTitle,
-				KnowledgeID: knowledgeID,
-				SourceRef:   sourceRef,
-				Language:    lang,
+				Slug:         item.Slug,
+				Type:         types.WikiPageTypeConcept,
+				Item:         item,
+				DocTitle:     docTitle,
+				KnowledgeID:  knowledgeID,
+				SourceRef:    sourceRef,
+				Language:     lang,
+				SourceChunks: item.SourceChunks,
+				DocSummary:   docSummary,
 			})
 		}
 	}
@@ -571,8 +674,13 @@ func (s *wikiIngestService) mapOneDocument(
 		}
 	}
 
-	logger.Infof(ctx, "wiki ingest: mapped knowledge %s title=%q generated_updates=%d elapsed=%s",
-		knowledgeID, previewText(docTitle, 80), len(updates), time.Since(docStartedAt).Round(time.Millisecond))
+	logger.Infof(ctx,
+		"wiki ingest: mapped knowledge %s title=%q candidates=%d chunks=%d batches=%d cited_chunks=%d uncited_slugs=%d new_slugs=%d updates=%d pass0_fallback=%v elapsed=%s",
+		knowledgeID, previewText(docTitle, 80),
+		len(slugItems), len(chunks), batchCount, len(citedChunkSet), uncited, len(newSlugs),
+		len(updates), pass0Failed,
+		time.Since(docStartedAt).Round(time.Millisecond),
+	)
 
 	return &docIngestResult{
 		KnowledgeID: knowledgeID,
@@ -716,6 +824,11 @@ func (s *wikiIngestService) reduceSlugUpdates(
 		page.Summary = summaryUpdate.SummaryLine
 		page.PageType = types.WikiPageTypeSummary
 		page.SourceRefs = appendUnique(page.SourceRefs, summaryUpdate.SourceRef)
+		// Summary pages don't carry chunk-level citations (they are document-
+		// level synopses generated from the whole content). Clear any stale
+		// chunk refs that may remain if this slug was once an entity page
+		// and got converted to a summary page.
+		page.ChunkRefs = types.StringArray{}
 		changed = true
 
 		if exists {
@@ -786,9 +899,38 @@ func (s *wikiIngestService) reduceSlugUpdates(
 
 	if len(additions) > 0 {
 		language = additions[0].Language
+
+		// Resolve SourceChunks → chunk contents in a single batched query per
+		// knowledge ID, so the <new_information> block can quote the chunks
+		// verbatim instead of relying on the short Details paraphrase.
+		chunkContentByID := s.resolveCitedChunks(ctx, tenantID, additions)
+
 		for _, add := range additions {
-			fmt.Fprintf(&newContentBuilder, "<document>\n<title>%s</title>\n<content>\n**%s**: %s\n\n%s\n</content>\n</document>\n\n",
-				add.DocTitle, add.Item.Name, add.Item.Description, add.Item.Details)
+			cited := collectCitedChunkContent(add.SourceChunks, chunkContentByID)
+			// Frame the chunks with the document-level summary body so the
+			// editor model knows BOTH what the document is about AND what
+			// kind of document it is (resume vs announcement vs product
+			// page vs schedule). The one-sentence headline alone was too
+			// terse to keep the editor grounded on longer or multi-topic
+			// source documents, and calibrating tone (self-reported vs
+			// third-party authoritative) benefits from the richer context.
+			sourceCtx := strings.TrimSpace(add.DocSummary)
+			sourceCtxBlock := ""
+			if sourceCtx != "" {
+				sourceCtxBlock = fmt.Sprintf("<source_context>\n%s\n</source_context>\n", sourceCtx)
+			}
+			if cited != "" {
+				fmt.Fprintf(&newContentBuilder,
+					"<document>\n<title>%s</title>\n%s<content>\n**%s**: %s\n\n%s\n</content>\n</document>\n\n",
+					add.DocTitle, sourceCtxBlock, add.Item.Name, add.Item.Description, cited)
+			} else {
+				// Fallback: no citations available (legacy path, citation pass
+				// failed, or bad chunk IDs were filtered out) — stick with
+				// the short Details summary so the page still gets real text.
+				fmt.Fprintf(&newContentBuilder,
+					"<document>\n<title>%s</title>\n%s<content>\n**%s**: %s\n\n%s\n</content>\n</document>\n\n",
+					add.DocTitle, sourceCtxBlock, add.Item.Name, add.Item.Description, add.Item.Details)
+			}
 			docTitles = appendUnique(docTitles, add.DocTitle)
 
 			for _, alias := range add.Item.Aliases {
@@ -872,6 +1014,11 @@ func (s *wikiIngestService) reduceSlugUpdates(
 	}
 
 	if changed {
+		// Refresh chunk refs in-place on the page so they persist alongside
+		// the rest of the row. Retract-only updates (no additions) preserve
+		// the existing refs; addition rounds append the newly-cited chunks
+		// on top of what was already there, deduplicated.
+		page.ChunkRefs = mergeChunkRefs(page.ChunkRefs, additions)
 		if exists {
 			_, err = s.wikiService.UpdatePage(ctx, page)
 		} else {
@@ -881,4 +1028,35 @@ func (s *wikiIngestService) reduceSlugUpdates(
 	}
 
 	return false, "", nil
+}
+
+// mergeChunkRefs unions the chunk IDs currently on the page with the ones
+// cited by this batch's additions, preserving insertion order and dropping
+// duplicates. Empty strings are filtered out so a malformed source_chunks
+// array can't leave junk in the column.
+//
+// A retract round with no additions leaves the current refs untouched —
+// retract-only paths don't carry chunk IDs (only knowledge IDs), and we
+// can't surgically filter without that info. The next time the slug is
+// re-materialized via additions the fresh chunks will overlay on top.
+func mergeChunkRefs(current types.StringArray, additions []SlugUpdate) types.StringArray {
+	seen := make(map[string]bool, len(current))
+	out := make(types.StringArray, 0, len(current))
+	for _, id := range current {
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	for _, add := range additions {
+		for _, chunkID := range add.SourceChunks {
+			if chunkID == "" || seen[chunkID] {
+				continue
+			}
+			seen[chunkID] = true
+			out = append(out, chunkID)
+		}
+	}
+	return out
 }
