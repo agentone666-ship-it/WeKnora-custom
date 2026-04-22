@@ -1024,6 +1024,9 @@ interface GNode {
 let graphNodes: GNode[] = []
 let graphSvg: SVGSVGElement | null = null
 let graphAnimFrame = 0
+// Shared timer for debouncing node mouseleave -> mouseenter transitions.
+// Prevents flickering when the pointer quickly moves between adjacent nodes.
+let graphHoverLeaveTimer: ReturnType<typeof setTimeout> | null = null
 
 // Used for graph search centering interaction
 let graphPanZoomRef: {
@@ -1054,6 +1057,7 @@ function renderGraph() {
 
   // Stop any previous animation
   if (graphAnimFrame) { cancelAnimationFrame(graphAnimFrame); graphAnimFrame = 0 }
+  if (graphHoverLeaveTimer) { clearTimeout(graphHoverLeaveTimer); graphHoverLeaveTimer = null }
 
   const width = container.clientWidth || 800
   const height = container.clientHeight || 600
@@ -1247,26 +1251,36 @@ function renderGraph() {
     g.appendChild(text)
 
     // Hover highlight
+    // We debounce the "leave" side so that quickly sliding the pointer from
+    // one node to the next doesn't flash through the fully-unhighlighted state
+    // (which is what caused the whole-graph flickering).
     g.addEventListener('mouseenter', () => {
-      // Don't change highlight on hover if we have a selected node
+      if (graphHoverLeaveTimer) {
+        clearTimeout(graphHoverLeaveTimer)
+        graphHoverLeaveTimer = null
+      }
       if (!graphSelectedSlug.value) {
+        if (graphHighlightSlug.value === n.slug) return
         graphHighlightSlug.value = n.slug
         applyHighlight(n.slug, adjacency, nodeEls, edgeEls)
       } else if (graphSelectedSlug.value !== n.slug) {
-        // If a node is selected, hover over others should just add to highlight
-        // but we'll keep the selected one as the main focus
+        if (graphHighlightSlug.value === n.slug) return
+        graphHighlightSlug.value = n.slug
         applyHighlight(graphSelectedSlug.value, adjacency, nodeEls, edgeEls, n.slug)
       }
     })
     g.addEventListener('mouseleave', () => {
-      // Only clear if we were just highlighting on hover, not selected
-      if (!graphSelectedSlug.value) {
-        graphHighlightSlug.value = null
-        clearHighlight(nodeEls, edgeEls)
-      } else {
-        // Restore pure selected state
-        applyHighlight(graphSelectedSlug.value, adjacency, nodeEls, edgeEls)
-      }
+      if (graphHoverLeaveTimer) clearTimeout(graphHoverLeaveTimer)
+      graphHoverLeaveTimer = setTimeout(() => {
+        graphHoverLeaveTimer = null
+        if (!graphSelectedSlug.value) {
+          graphHighlightSlug.value = null
+          clearHighlight(nodeEls, edgeEls)
+        } else {
+          graphHighlightSlug.value = null
+          applyHighlight(graphSelectedSlug.value, adjacency, nodeEls, edgeEls)
+        }
+      }, 60)
     })
 
     // Click to select & open drawer directly
@@ -1832,6 +1846,14 @@ onMounted(() => {
 onUnmounted(() => {
   if (statsTimer) {
     clearInterval(statsTimer)
+  }
+  if (graphHoverLeaveTimer) {
+    clearTimeout(graphHoverLeaveTimer)
+    graphHoverLeaveTimer = null
+  }
+  if (graphAnimFrame) {
+    cancelAnimationFrame(graphAnimFrame)
+    graphAnimFrame = 0
   }
 })
 </script>
