@@ -278,8 +278,6 @@ func RegisterKnowledgeBaseRoutes(r *gin.RouterGroup, handler *handler.KnowledgeB
 		kb.GET("/copy/progress/:task_id", handler.GetKBCloneProgress)
 		// 获取可移动目标知识库列表
 		kb.GET("/:id/move-targets", handler.ListMoveTargets)
-		// 重建索引（当索引策略变更后，对已有文档重新处理）
-		kb.POST("/:id/rebuild-index", handler.RebuildIndex)
 	}
 }
 

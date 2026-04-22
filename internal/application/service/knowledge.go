@@ -3057,34 +3057,6 @@ func (s *knowledgeService) enqueueManualProcessing(ctx context.Context,
 	return nil
 }
 
-// RebuildKnowledgeBaseIndex re-processes all documents in a knowledge base by enqueuing
-// reparse tasks. Used when the indexing strategy changes (e.g., enabling wiki on an
-// existing KB with documents) and all documents need to be re-indexed.
-func (s *knowledgeService) RebuildKnowledgeBaseIndex(ctx context.Context, kbID string) (int, error) {
-	logger.Infof(ctx, "Start rebuilding index for knowledge base: %s", kbID)
-
-	knowledgeList, err := s.ListKnowledgeByKnowledgeBaseID(ctx, kbID)
-	if err != nil {
-		return 0, fmt.Errorf("list knowledge for KB %s: %w", kbID, err)
-	}
-
-	count := 0
-	for _, k := range knowledgeList {
-		// Skip knowledge that is being deleted or has failed status
-		if k.ParseStatus == types.ParseStatusDeleting {
-			continue
-		}
-		if _, err := s.ReparseKnowledge(ctx, k.ID); err != nil {
-			logger.Warnf(ctx, "Failed to enqueue reparse for knowledge %s: %v", k.ID, err)
-			continue
-		}
-		count++
-	}
-
-	logger.Infof(ctx, "Rebuild index: enqueued %d/%d documents for KB %s", count, len(knowledgeList), kbID)
-	return count, nil
-}
-
 // ReparseKnowledge deletes existing document content and re-parses the knowledge asynchronously.
 // This method reuses the logic from UpdateManualKnowledge for resource cleanup and async parsing.
 func (s *knowledgeService) ReparseKnowledge(ctx context.Context, knowledgeID string) (*types.Knowledge, error) {
