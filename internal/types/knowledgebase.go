@@ -496,8 +496,6 @@ func (kb *KnowledgeBase) EnsureDefaults() {
 	if kb.Type != KnowledgeBaseTypeFAQ {
 		kb.FAQConfig = nil
 	}
-	// Wiki defaults are handled at creation time, not in EnsureDefaults,
-	// because AutoIngest is a user-configurable toggle (not a missing-field default).
 	// Set defaults for FAQ
 	if kb.Type == KnowledgeBaseTypeFAQ {
 		if kb.FAQConfig == nil {
@@ -521,10 +519,6 @@ func (kb *KnowledgeBase) EnsureDefaults() {
 	// case where a fresh struct was created in-memory without touching DB.
 	if kb.IndexingStrategy.IsZero() {
 		kb.IndexingStrategy = DefaultIndexingStrategy()
-	}
-	// Sync legacy WikiConfig.Enabled → IndexingStrategy.WikiEnabled
-	if kb.WikiConfig != nil && kb.WikiConfig.Enabled && !kb.IndexingStrategy.WikiEnabled {
-		kb.IndexingStrategy.WikiEnabled = true
 	}
 	// Sync legacy ExtractConfig.Enabled → IndexingStrategy.GraphEnabled
 	if kb.ExtractConfig != nil && kb.ExtractConfig.Enabled && !kb.IndexingStrategy.GraphEnabled {
@@ -580,17 +574,12 @@ func (kb *KnowledgeBase) MarshalJSON() ([]byte, error) {
 }
 
 // IsWikiEnabled checks if the wiki feature is enabled for this knowledge base.
-// Wiki requires both IndexingStrategy.WikiEnabled and WikiConfig with Enabled=true.
+// Wiki enablement is the single source of truth on IndexingStrategy.WikiEnabled.
 func (kb *KnowledgeBase) IsWikiEnabled() bool {
 	if kb == nil {
 		return false
 	}
-	// Primary: check IndexingStrategy (canonical source after migration)
-	if kb.IndexingStrategy.WikiEnabled {
-		return kb.WikiConfig != nil && kb.WikiConfig.Enabled
-	}
-	// Legacy fallback: direct WikiConfig check
-	return kb.WikiConfig != nil && kb.WikiConfig.Enabled
+	return kb.IndexingStrategy.WikiEnabled
 }
 
 // IsVectorEnabled checks if vector (semantic) search is enabled.

@@ -297,17 +297,16 @@ func (s *knowledgeBaseService) UpdateKnowledgeBase(ctx context.Context,
 		if config.WikiConfig != nil {
 			kb.WikiConfig = config.WikiConfig
 		}
-		// Update indexing strategy — syncs to WikiConfig and ExtractConfig for backward compat
+		// Update indexing strategy — syncs to ExtractConfig for backward compat
 		if config.IndexingStrategy != nil {
 			if !config.IndexingStrategy.HasAnyIndexing() {
 				return nil, errors.New("at least one indexing strategy must be enabled")
 			}
 			kb.IndexingStrategy = *config.IndexingStrategy
-			// Sync WikiEnabled → WikiConfig
-			if kb.WikiConfig != nil {
-				kb.WikiConfig.Enabled = config.IndexingStrategy.WikiEnabled
-			} else if config.IndexingStrategy.WikiEnabled {
-				kb.WikiConfig = &types.WikiConfig{Enabled: true, AutoIngest: true}
+			// Ensure WikiConfig exists when wiki indexing is enabled so that
+			// wiki-specific tunables (synthesis model, granularity, …) have a home.
+			if kb.WikiConfig == nil && config.IndexingStrategy.WikiEnabled {
+				kb.WikiConfig = &types.WikiConfig{}
 			}
 			// Sync GraphEnabled → ExtractConfig
 			if kb.ExtractConfig != nil {
