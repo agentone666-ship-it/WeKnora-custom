@@ -319,11 +319,17 @@ type SuggestedQuestion struct {
 var BuiltinAgentRegistry = map[string]func(uint64) *CustomAgent{}
 
 // builtinAgentIDsOrdered defines the fixed display order of built-in agents
+// that are exposed in the user-facing agent list (ListAgents).
+//
+// NOTE: BuiltinWikiFixerID is intentionally excluded here. The wiki fixer is
+// an internal agent invoked programmatically from the Wiki editor
+// (see frontend WikiBrowser.vue) and should not clutter the tenant's agent
+// picker. It remains fully usable via GetAgentByID because the YAML entry
+// still registers it in BuiltinAgentRegistry.
 var builtinAgentIDsOrdered = []string{
 	BuiltinQuickAnswerID,
 	BuiltinSmartReasoningID,
 	BuiltinWikiResearcherID,
-	BuiltinWikiFixerID,
 	BuiltinDeepResearcherID,
 	BuiltinDataAnalystID,
 	BuiltinKnowledgeGraphExpertID,
