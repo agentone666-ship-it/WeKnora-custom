@@ -1647,27 +1647,9 @@ const preprocessMarkdown = (contentStr: string): string => {
         // as such, so the chat bubble must match.
         if (!slug) return match;
 
-        // Truncate long wiki labels the same way KB citations do, so both
-        // kinds of citation pills stay visually consistent in narrow bubbles.
-        const truncateMiddle = (text: string, maxLength = 13): string => {
-          if (!text) return '';
-          if (text.length <= maxLength) return text;
-          const half = Math.floor((maxLength - 3) / 2);
-          const start = text.slice(0, half + ((maxLength - 3) % 2));
-          const end = text.slice(-half);
-          return `${start}...${end}`;
-        };
-
         const safeSlug = escapeHtml(slug);
-        const safeDisplay = escapeHtml(truncateMiddle(display));
-        const tipSlug = escapeHtml(slug);
-        const tipDisplay = escapeHtml(display);
-        // Render as the same pill shape the KB citation uses (class
-        // `citation citation-wiki`) so the two retrieval sources share a
-        // single visual language. Anchor tag is kept for accessibility
-        // and keyboard handling; `data-slug` is preserved for the
-        // existing click/keyboard handlers above.
-        return `<a href="#" class="citation citation-wiki" data-slug="${safeSlug}" role="button" tabindex="0" title="${tipDisplay}"><span class="citation-icon wiki"></span><span class="citation-text">${safeDisplay}</span><span class="citation-tip"><span class="tip-title">${tipDisplay}</span><span class="tip-meta">${tipSlug}</span></span></a>`;
+        const safeDisplay = escapeHtml(display);
+        return `<a href="#" class="wiki-content-link citation-wiki" data-slug="${safeSlug}">${safeDisplay}</a>`;
       }
     );
 };
@@ -3065,13 +3047,6 @@ const handleAddToKnowledge = (answerEvent: any) => {
   background-image: url("../../../assets/img/zhishiku-thin.svg");
 }
 
-/* Wiki page icon — inline open-book SVG tinted brand blue (matches
-   .citation-wiki text color). Inlined as a data URI so no new asset
-   file is required. */
-:deep(.citation .citation-icon.wiki) {
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%230052d9' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M2 4.5h6a4 4 0 0 1 4 4v12a3 3 0 0 0-3-3H2z'/><path d='M22 4.5h-6a4 4 0 0 0-4 4v12a3 3 0 0 1 3-3h7z'/></svg>");
-}
-
 .kb-float-popup {
   position: absolute;
   z-index: 10000;
@@ -3165,38 +3140,27 @@ const handleAddToKnowledge = (answerEvent: any) => {
   pointer-events: none;
 }
 
-/* Wiki citation pill — same shape as KB / web citations but in brand blue
-   so the reader can tell at a glance whether evidence came from a
-   wiki-synthesized page or from a raw source chunk. */
-:deep(.citation.citation-wiki) {
-  background: var(--td-brand-color-light);
+/* Inline wiki link style for chat bubbles — brand-blue dashed underline,
+   matching the style used inside the wiki drawer. Rendered inline with
+   the surrounding text, NOT as a pill, so it reads like a regular link. */
+:deep(a.wiki-content-link) {
   color: var(--td-brand-color);
-  border: 1px solid var(--td-brand-color-focus);
+  text-decoration: none;
+  border-bottom: 1px dashed var(--td-brand-color);
   cursor: pointer;
-  white-space: nowrap;
-  position: relative;
-  text-decoration: none;
-  transition: all 0.2s ease;
+  font-weight: 500;
+  transition: border-bottom-style 0.15s ease;
 }
 
-:deep(.citation.citation-wiki:hover) {
-  background: var(--td-brand-color-light);
-  border-color: var(--td-brand-color);
-  color: var(--td-brand-color);
-  text-decoration: none;
+:deep(a.wiki-content-link:hover) {
+  border-bottom-style: solid;
+  text-decoration: none !important;
 }
 
-:deep(.citation.citation-wiki:focus-visible) {
+:deep(a.wiki-content-link:focus-visible) {
   outline: 2px solid var(--td-brand-color);
   outline-offset: 2px;
-}
-
-/* Embedded tooltip bubble — hidden; relies on browser-native `title`
-   attribute for hover preview. Keeps parity with citation-kb, which
-   also hides its inline tip in favor of the floatPopup. */
-:deep(.citation.citation-wiki .citation-tip) {
-  display: none !important;
-  pointer-events: none;
+  border-radius: 2px;
 }
 
 .tool-arguments-wrapper {
