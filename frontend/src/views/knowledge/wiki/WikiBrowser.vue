@@ -2272,9 +2272,12 @@ onUnmounted(() => {
   }
 
   // ── Markdown tables (GFM) ──
+  // Use `width: fit-content` so tables shrink to their content instead of
+  // always stretching to fill the reader column, while still respecting
+  // `max-width: 100%` and allowing horizontal scrolling for wide tables.
   :deep(table) {
     display: block;
-    width: 100%;
+    width: fit-content;
     max-width: 100%;
     overflow-x: auto;
     margin: 0 0 16px;
