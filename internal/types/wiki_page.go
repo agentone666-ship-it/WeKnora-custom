@@ -84,7 +84,11 @@ type WikiPage struct {
 	OutLinks StringArray `json:"out_links" gorm:"type:json"`
 	// Arbitrary metadata (tags, categories, dates, etc.)
 	PageMetadata JSON `json:"page_metadata" gorm:"column:page_metadata;type:json"`
-	// Version number, incremented on each update
+	// Version number. Incremented only when a user-visible content field
+	// (title, content, summary, page_type, status) actually changes; pure
+	// bookkeeping writes (link maintenance, same-content re-ingest, status
+	// sync from background jobs) leave it untouched so it can be used as a
+	// real "the page was edited" signal.
 	Version int `json:"version" gorm:"default:1"`
 	// Creation time
 	CreatedAt time.Time `json:"created_at"`

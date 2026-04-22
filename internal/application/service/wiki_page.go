@@ -77,7 +77,16 @@ func (s *wikiPageService) CreatePage(ctx context.Context, page *types.WikiPage) 
 	return page, nil
 }
 
-// UpdatePage updates an existing wiki page
+// UpdatePage updates an existing wiki page.
+//
+// Version bump policy: the `version` column is intended to track the user-
+// visible content revision, not every row rewrite. We therefore bump it only
+// when at least one of the user-facing fields actually changes — title,
+// content, summary, page_type, or status. Bookkeeping-only writes (refreshing
+// source_refs after re-ingest when the body is identical, rebuilding the index
+// page with the same directory, cross-link injection that ends up replacing
+// nothing, etc.) still persist through `UpdateMeta` but leave `version`
+// untouched so consumers can treat a bump as a real edit signal.
 func (s *wikiPageService) UpdatePage(ctx context.Context, page *types.WikiPage) (*types.WikiPage, error) {
 	existing, err := s.repo.GetBySlug(ctx, page.KnowledgeBaseID, page.Slug)
 	if err != nil {
@@ -86,7 +95,14 @@ func (s *wikiPageService) UpdatePage(ctx context.Context, page *types.WikiPage) 
 
 	oldOutLinks := existing.OutLinks
 
-	// Update fields (version is incremented by the repository's optimistic lock)
+	// Snapshot user-visible fields BEFORE mutation so we can decide whether
+	// this is a real content change or just bookkeeping.
+	contentChanged := existing.Title != page.Title ||
+		existing.Content != page.Content ||
+		existing.Summary != page.Summary ||
+		existing.PageType != page.PageType ||
+		existing.Status != page.Status
+
 	existing.Title = page.Title
 	existing.Content = page.Content
 	existing.Summary = page.Summary
@@ -97,14 +113,25 @@ func (s *wikiPageService) UpdatePage(ctx context.Context, page *types.WikiPage) 
 	existing.Status = page.Status
 	existing.UpdatedAt = time.Now()
 
-	// Re-parse outbound links
+	// Outbound links are a pure derivative of content, so they only shift
+	// when content shifts. Re-parse unconditionally to stay consistent with
+	// the stored body.
 	existing.OutLinks = s.parseOutLinks(existing.Content)
 
-	if err := s.repo.Update(ctx, existing); err != nil {
-		return nil, fmt.Errorf("update wiki page: %w", err)
+	if contentChanged {
+		if err := s.repo.Update(ctx, existing); err != nil {
+			return nil, fmt.Errorf("update wiki page: %w", err)
+		}
+	} else {
+		// No user-visible change — persist bookkeeping fields but preserve
+		// the version so downstream consumers can rely on it.
+		if err := s.repo.UpdateMeta(ctx, existing); err != nil {
+			return nil, fmt.Errorf("update wiki page meta: %w", err)
+		}
 	}
 
-	// Update inbound links: remove old, add new
+	// Update inbound links: remove old, add new. If content didn't change,
+	// oldOutLinks == existing.OutLinks and these calls are effectively no-ops.
 	s.removeInLinks(ctx, existing.KnowledgeBaseID, existing.Slug, oldOutLinks)
 	s.updateInLinks(ctx, existing.KnowledgeBaseID, existing.Slug, existing.OutLinks)
 

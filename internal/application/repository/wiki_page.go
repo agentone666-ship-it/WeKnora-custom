@@ -59,19 +59,25 @@ func (r *wikiPageRepository) Update(ctx context.Context, page *types.WikiPage) e
 	return nil
 }
 
-// UpdateMeta updates only metadata fields (links, status, source_refs) WITHOUT
-// incrementing the version number. Used for internal bookkeeping operations
-// like link maintenance, status changes, and source ref updates.
+// UpdateMeta updates bookkeeping / provenance fields WITHOUT incrementing the
+// version number. "Content" for versioning purposes is the user-visible page
+// body (title/content/summary/page_type/status); everything else — links,
+// source refs, chunk refs, page_metadata — is considered bookkeeping and is
+// refreshed here so the version counter only advances on real edits.
+//
+// Used by link maintenance, re-ingest (same-content case), and status changes.
 func (r *wikiPageRepository) UpdateMeta(ctx context.Context, page *types.WikiPage) error {
 	result := r.db.WithContext(ctx).
 		Model(page).
 		Where("id = ?", page.ID).
 		Updates(map[string]interface{}{
-			"in_links":    page.InLinks,
-			"out_links":   page.OutLinks,
-			"status":      page.Status,
-			"source_refs": page.SourceRefs,
-			"updated_at":  page.UpdatedAt,
+			"in_links":      page.InLinks,
+			"out_links":     page.OutLinks,
+			"status":        page.Status,
+			"source_refs":   page.SourceRefs,
+			"chunk_refs":    page.ChunkRefs,
+			"page_metadata": page.PageMetadata,
+			"updated_at":    page.UpdatedAt,
 		})
 	if result.Error != nil {
 		return result.Error

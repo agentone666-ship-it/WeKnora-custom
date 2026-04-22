@@ -14,13 +14,17 @@ type WikiPageService interface {
 	// bidirectional link references, and syncs to chunks for retrieval.
 	CreatePage(ctx context.Context, page *types.WikiPage) (*types.WikiPage, error)
 
-	// UpdatePage updates an existing wiki page, re-parses links,
-	// updates bidirectional references, increments version, and re-syncs chunks.
-	// Use for content changes visible to the user.
+	// UpdatePage updates an existing wiki page, re-parses links, and updates
+	// bidirectional references. The `version` field is incremented only when
+	// a user-visible content field (title, content, summary, page_type,
+	// status) actually differs from the stored value — bookkeeping-only
+	// writes (e.g. refreshing source_refs after a same-content re-ingest) are
+	// persisted without bumping the version.
 	UpdatePage(ctx context.Context, page *types.WikiPage) (*types.WikiPage, error)
 
-	// UpdatePageMeta updates only metadata (status, source_refs) without
-	// incrementing version or re-parsing links. Use for publish/archive/source ref changes.
+	// UpdatePageMeta updates only metadata (status, source_refs, etc.) without
+	// incrementing version or re-parsing links. Use for publish/archive/source
+	// ref changes driven by internal reconciliation.
 	UpdatePageMeta(ctx context.Context, page *types.WikiPage) error
 
 	// GetPageBySlug retrieves a wiki page by its slug within a knowledge base.
@@ -87,10 +91,16 @@ type WikiPageRepository interface {
 	// Create inserts a new wiki page record.
 	Create(ctx context.Context, page *types.WikiPage) error
 
-	// Update updates an existing wiki page record (increments version — content changes).
+	// Update rewrites a wiki page record with optimistic locking and
+	// unconditionally increments `version`. Callers are responsible for
+	// deciding whether the edit is user-visible — the service layer uses
+	// UpdateMeta for bookkeeping-only writes instead.
 	Update(ctx context.Context, page *types.WikiPage) error
 
-	// UpdateMeta updates only metadata fields (links, status, source_refs) without version bump.
+	// UpdateMeta updates bookkeeping / provenance fields (in/out links,
+	// status, source_refs, chunk_refs, page_metadata, updated_at) without
+	// touching `version`. Safe for link maintenance, re-ingest with an
+	// unchanged body, and status-only transitions.
 	UpdateMeta(ctx context.Context, page *types.WikiPage) error
 
 	// GetByID retrieves a wiki page by its unique ID.
