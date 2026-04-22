@@ -837,8 +837,27 @@ async function loadStats() {
       clearInterval(statsTimer)
       statsTimer = null
       loadPages()
+      // Also refresh the currently opened page (right panel) so users see updated content
+      refreshSelectedPage()
+      // If currently viewing the graph, reload it as well so new nodes/edges show up
+      if (props.view === 'graph') {
+        loadGraph()
+      }
     }
   } catch (e) { /* ignore */ }
+}
+
+// Refresh the currently selected page's content without touching navigation history
+async function refreshSelectedPage() {
+  if (!selectedPage.value) return
+  const slug = selectedPage.value.slug
+  try {
+    const res = await getWikiPage(props.knowledgeBaseId, slug)
+    selectedPage.value = (res as any).data || res as any
+    await loadPageIssues(slug)
+  } catch (e) {
+    console.error(`Failed to refresh wiki page ${slug}:`, e)
+  }
 }
 
 async function loadGraph() {
@@ -2250,6 +2269,59 @@ onUnmounted(() => {
       border-bottom-style: solid;
       text-decoration: none !important;
     }
+  }
+
+  // ── Markdown tables (GFM) ──
+  :deep(table) {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    overflow-x: auto;
+    margin: 0 0 16px;
+    border-collapse: collapse;
+    font-size: 13px;
+    line-height: 1.55;
+    background: var(--td-bg-color-container);
+    border: 1px solid var(--td-component-stroke);
+    border-radius: 6px;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  :deep(table thead) {
+    background: var(--td-bg-color-secondarycontainer);
+  }
+
+  :deep(table th),
+  :deep(table td) {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--td-component-stroke);
+    border-right: 1px solid var(--td-component-stroke);
+    text-align: left;
+    vertical-align: top;
+    word-break: break-word;
+  }
+
+  :deep(table th) {
+    font-weight: 600;
+    color: var(--td-text-color-primary);
+    white-space: nowrap;
+  }
+
+  :deep(table th:last-child),
+  :deep(table td:last-child) {
+    border-right: none;
+  }
+
+  :deep(table tbody tr:last-child td) {
+    border-bottom: none;
+  }
+
+  :deep(table tbody tr:hover) {
+    background: var(--td-bg-color-secondarycontainer);
+  }
+
+  :deep(table code) {
+    font-size: 12px;
   }
 }
 
