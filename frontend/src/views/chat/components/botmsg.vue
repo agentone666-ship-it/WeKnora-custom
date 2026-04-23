@@ -1,5 +1,5 @@
 <template>
-    <div class="bot_msg">
+    <div class="bot_msg" :class="{ 'is-embedded': embeddedMode }">
         <div style="display: flex;flex-direction: column; gap:8px">
             <!-- 显示@的知识库和文件（非 Agent 模式下显示） -->
             <div v-if="!session.isAgentMode && mentionedItems && mentionedItems.length > 0" class="mentioned_items">
@@ -127,6 +127,10 @@ const props = defineProps({
     isFirstEnter: {
         type: Boolean,
         required: false
+    },
+    embeddedMode: {
+        type: Boolean,
+        default: false
     }
 });
 
@@ -297,6 +301,16 @@ onBeforeUnmount(() => {
 <style lang="less" scoped>
 @import '../../../components/css/markdown.less';
 @import '../../../components/css/chat-message-shared.less';
+
+.bot_msg {
+    &.is-embedded {
+        width: 100%;
+        
+        :deep(.agent-stream-display) {
+            width: 100%;
+        }
+    }
+}
 
 // 内容包装器 - 与 Agent 模式的 answer 样式一致
 .content-wrapper {

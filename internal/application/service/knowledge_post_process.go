@@ -10,6 +10,7 @@ import (
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
 	"github.com/hibiken/asynq"
+	"github.com/redis/go-redis/v9"
 )
 
 // KnowledgePostProcessService acts as an orchestrator for all post-processing tasks
@@ -19,6 +20,7 @@ type KnowledgePostProcessService struct {
 	kbService     interfaces.KnowledgeBaseService
 	chunkService  interfaces.ChunkService
 	taskEnqueuer  interfaces.TaskEnqueuer
+	redisClient   *redis.Client
 }
 
 func NewKnowledgePostProcessService(
@@ -26,12 +28,14 @@ func NewKnowledgePostProcessService(
 	kbService interfaces.KnowledgeBaseService,
 	chunkService interfaces.ChunkService,
 	taskEnqueuer interfaces.TaskEnqueuer,
+	redisClient *redis.Client,
 ) interfaces.TaskHandler {
 	return &KnowledgePostProcessService{
 		knowledgeRepo: knowledgeRepo,
 		kbService:     kbService,
 		chunkService:  chunkService,
 		taskEnqueuer:  taskEnqueuer,
+		redisClient:   redisClient,
 	}
 }
 
@@ -83,7 +87,7 @@ func (s *KnowledgePostProcessService) Handle(ctx context.Context, task *asynq.Ta
 	if knowledge.ParseStatus == types.ParseStatusProcessing {
 		knowledge.ParseStatus = types.ParseStatusCompleted
 		knowledge.UpdatedAt = time.Now()
-		
+
 		// Setup summary status
 		if len(textChunks) > 0 {
 			knowledge.SummaryStatus = types.SummaryStatusPending
@@ -101,11 +105,15 @@ func (s *KnowledgePostProcessService) Handle(ctx context.Context, task *asynq.Ta
 	// 4. Spawn Summary and Question Tasks
 	if len(textChunks) > 0 {
 		s.enqueueSummaryGenerationTask(ctx, payload)
-		s.enqueueQuestionGenerationIfEnabled(ctx, payload, kb)
+		// Question generation only makes sense for RAG indexing (improves chunk recall).
+		// Skip when only Wiki/Graph is enabled without vector/keyword search.
+		if kb.NeedsEmbeddingModel() {
+			s.enqueueQuestionGenerationIfEnabled(ctx, payload, kb)
+		}
 	}
 
-	// 5. Spawn Graph RAG Tasks
-	if kb.ExtractConfig != nil && kb.ExtractConfig.Enabled {
+	// 5. Spawn Graph RAG Tasks — only when graph indexing is enabled in IndexingStrategy
+	if kb.IsGraphEnabled() {
 		logger.Infof(ctx, "[KnowledgePostProcess] Spawning Graph RAG extract tasks for %d text-like chunks", len(textChunks))
 		for _, chunk := range textChunks {
 			err := NewChunkExtractTask(ctx, s.taskEnqueuer, payload.TenantID, chunk.ID, kb.SummaryModelID)
@@ -115,6 +123,11 @@ func (s *KnowledgePostProcessService) Handle(ctx context.Context, task *asynq.Ta
 		}
 	}
 
+	// 6. Spawn Wiki Ingest Task if wiki indexing is enabled in IndexingStrategy
+	if kb.IndexingStrategy.WikiEnabled && len(textChunks) > 0 {
+		EnqueueWikiIngest(ctx, s.taskEnqueuer, s.redisClient, payload.TenantID, payload.KnowledgeBaseID, payload.KnowledgeID)
+		logger.Infof(ctx, "[KnowledgePostProcess] Enqueued wiki ingest task for %s", payload.KnowledgeID)
+	}
 	return nil
 }
 

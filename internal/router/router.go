@@ -64,6 +64,7 @@ type RouterParams struct {
 	IMHandler                *handler.IMHandler
 	DataSourceHandler        *handler.DataSourceHandler
 	WeKnoraCloudHandler      *handler.WeKnoraCloudHandler
+	WikiPageHandler          *handler.WikiPageHandler
 }
 
 // NewRouter 创建新的路由
@@ -148,6 +149,7 @@ func NewRouter(params RouterParams) *gin.Engine {
 		RegisterIMChannelRoutes(v1, params.IMHandler)
 		RegisterDataSourceRoutes(v1, params.DataSourceHandler)
 		RegisterWeKnoraCloudRoutes(v1, params.WeKnoraCloudHandler)
+		RegisterWikiPageRoutes(v1, params.WikiPageHandler)
 	}
 
 	return r
@@ -528,6 +530,8 @@ func RegisterCustomAgentRoutes(r *gin.RouterGroup, agentHandler *handler.CustomA
 	{
 		// Get placeholder definitions (must be before /:id to avoid conflict)
 		agents.GET("/placeholders", agentHandler.GetPlaceholders)
+		// List smart-reasoning agent type presets (rag-qa / wiki-qa / hybrid / custom)
+		agents.GET("/type-presets", agentHandler.GetAgentTypePresets)
 		// Create custom agent
 		agents.POST("", agentHandler.CreateAgent)
 		// List all agents (including built-in)
@@ -832,4 +836,35 @@ func RegisterDataSourceRoutes(r *gin.RouterGroup, handler *handler.DataSourceHan
 func RegisterWeKnoraCloudRoutes(r *gin.RouterGroup, handler *handler.WeKnoraCloudHandler) {
 	r.POST("/weknoracloud/credentials", handler.SaveCredentials)
 	r.GET("/models/weknoracloud/status", handler.Status)
+}
+
+// RegisterWikiPageRoutes registers wiki page related routes
+func RegisterWikiPageRoutes(r *gin.RouterGroup, wikiHandler *handler.WikiPageHandler) {
+	wiki := r.Group("/knowledgebase/:kb_id/wiki")
+	{
+		// Page CRUD
+		wiki.GET("/pages", wikiHandler.ListPages)
+		wiki.POST("/pages", wikiHandler.CreatePage)
+		wiki.GET("/pages/*slug", wikiHandler.GetPage)
+		wiki.PUT("/pages/*slug", wikiHandler.UpdatePage)
+		wiki.DELETE("/pages/*slug", wikiHandler.DeletePage)
+
+		// Special pages
+		wiki.GET("/index", wikiHandler.GetIndex)
+		wiki.GET("/log", wikiHandler.GetLog)
+
+		// Graph and stats
+		wiki.GET("/graph", wikiHandler.GetGraph)
+		wiki.GET("/stats", wikiHandler.GetStats)
+
+		// Search and maintenance
+		wiki.GET("/search", wikiHandler.SearchPages)
+		wiki.POST("/rebuild-links", wikiHandler.RebuildLinks)
+		wiki.GET("/lint", wikiHandler.Lint)
+		wiki.POST("/auto-fix", wikiHandler.AutoFix)
+
+		// Issues
+		wiki.GET("/issues", wikiHandler.ListIssues)
+		wiki.PUT("/issues/:issue_id/status", wikiHandler.UpdateIssueStatus)
+	}
 }

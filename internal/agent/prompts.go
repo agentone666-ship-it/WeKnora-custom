@@ -78,7 +78,13 @@ type KnowledgeBaseInfo struct {
 	Type        string // Knowledge base type: "document" or "faq"
 	Description string
 	DocCount    int
-	RecentDocs  []RecentDocInfo // Recently added documents (up to 10)
+	// Capabilities lists the retrieval surfaces this KB exposes. Any subset of
+	// {"wiki", "chunks"}. "chunks" is present when the KB has vector and/or
+	// keyword (BM25) indexing enabled. This is the *deterministic* source of
+	// truth the agent should consult before picking a retrieval strategy —
+	// significantly more reliable than running probing searches.
+	Capabilities []string
+	RecentDocs   []RecentDocInfo // Recently added documents (up to 10)
 }
 
 // PlaceholderDefinition defines a placeholder exposed to UI/configuration
@@ -118,8 +124,12 @@ func formatKnowledgeBaseList(kbInfos []*KnowledgeBaseInfo) string {
 		if kbType == "" {
 			kbType = "document"
 		}
-		b.WriteString(fmt.Sprintf("<knowledge_base id=\"%s\" name=\"%s\" type=\"%s\" doc_count=\"%d\">\n",
-			kb.ID, kb.Name, kbType, kb.DocCount))
+		capsAttr := ""
+		if len(kb.Capabilities) > 0 {
+			capsAttr = fmt.Sprintf(" capabilities=\"%s\"", strings.Join(kb.Capabilities, ","))
+		}
+		b.WriteString(fmt.Sprintf("<knowledge_base id=\"%s\" name=\"%s\" type=\"%s\" doc_count=\"%d\"%s>\n",
+			kb.ID, kb.Name, kbType, kb.DocCount, capsAttr))
 		if kb.Description != "" {
 			b.WriteString(fmt.Sprintf("<description>%s</description>\n", kb.Description))
 		}
@@ -175,16 +185,26 @@ func formatKnowledgeBaseList(kbInfos []*KnowledgeBaseInfo) string {
 	return b.String()
 }
 
-// renderPromptPlaceholders renders placeholders in the prompt template
+// renderPromptPlaceholders renders placeholders in the prompt template.
+//
 // Supported placeholders:
-//   - {{knowledge_bases}} - Replaced with formatted knowledge base list
+//   - {{knowledge_bases}} - Historically expanded to the full bound-KB XML
+//     block. Since that block now lives in the user message's
+//     `<runtime_context>` (see observe.buildRuntimeContextBlock), the
+//     placeholder is expanded to a short pointer so legacy / custom
+//     templates that still reference `{{knowledge_bases}}` degrade
+//     gracefully instead of dumping the detail twice.
 func renderPromptPlaceholders(template string, knowledgeBases []*KnowledgeBaseInfo) string {
 	result := template
 
-	// Replace {{knowledge_bases}} placeholder
 	if strings.Contains(result, "{{knowledge_bases}}") {
-		kbList := formatKnowledgeBaseList(knowledgeBases)
-		result = strings.ReplaceAll(result, "{{knowledge_bases}}", kbList)
+		var replacement string
+		if len(knowledgeBases) == 0 {
+			replacement = "(no knowledge bases bound to this session)"
+		} else {
+			replacement = "(see `<bound_knowledge_bases>` inside the user message's `<runtime_context>` for the current bound KB list and their capabilities)"
+		}
+		result = strings.ReplaceAll(result, "{{knowledge_bases}}", replacement)
 	}
 
 	return result

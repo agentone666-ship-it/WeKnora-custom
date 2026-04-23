@@ -1,7 +1,7 @@
 <template>
-    <div class="chat">
+    <div class="chat" :class="{ 'is-embedded': embeddedMode, 'is-sidebar-collapsed': uiStore.sidebarCollapsed }">
         <div ref="scrollContainer" class="chat_scroll_box" @scroll="handleScroll">
-            <div class="msg_list">
+            <div class="msg_list" :class="{ 'is-embedded': embeddedMode }">
                 <!-- 消息列表骨架屏 -->
                 <div v-if="historyLoading && messagesList.length === 0" class="msg-skeleton-list">
                     <div class="msg-skeleton msg-skeleton-user">
@@ -47,11 +47,11 @@
                 </div>
                 <div v-for="(session, id) in messagesList" :key='id'>
                     <div v-if="session.role == 'user'">
-                        <usermsg :content="session.content" :mentioned_items="session.mentioned_items" :images="session.images" :attachments="session.attachments"></usermsg>
+                        <usermsg :content="session.content" :mentioned_items="session.mentioned_items" :images="session.images" :attachments="session.attachments" :embeddedMode="embeddedMode"></usermsg>
                     </div>
                     <div v-if="session.role == 'assistant'">
                         <botmsg :content="session.content" :session="session" :user-query="getUserQuery(id)" @scroll-bottom="scrollToBottom"
-                            :isFirstEnter="isFirstEnter"></botmsg>
+                            :isFirstEnter="isFirstEnter" :embeddedMode="embeddedMode"></botmsg>
                     </div>
                 </div>
                 <div v-if="loading"
@@ -69,7 +69,7 @@
                 <t-icon name="chevron-down" size="20px" />
             </div>
         </transition>
-        <div style="min-height: 115px; margin: 16px auto 4px;width: 100%;max-width: 800px;">
+        <div class="input-container" :class="{ 'is-embedded': embeddedMode }">
             <InputField
                 ref="inputFieldRef"
                 @send-msg="(query, modelId, mentionedItems, imageFiles, attachmentFiles) => sendMsg(query, modelId, mentionedItems, imageFiles, attachmentFiles)"
@@ -77,6 +77,7 @@
                 :isReplying="isReplying"
                 :sessionId="session_id"
                 :assistantMessageId="currentAssistantMessageId"
+                :embeddedMode="embeddedMode"
             ></InputField>
         </div>
     </div>
@@ -91,7 +92,7 @@
 </template>
 <script setup>
 import { storeToRefs } from 'pinia';
-import { ref, onMounted, onUnmounted, nextTick, watch, reactive, onBeforeUnmount } from 'vue';
+import { ref, onMounted, onUnmounted, nextTick, watch, reactive, onBeforeUnmount, defineProps } from 'vue';
 import { useRoute, useRouter, onBeforeRouteLeave, onBeforeRouteUpdate } from 'vue-router';
 import InputField from '../../components/Input-field.vue';
 import botmsg from './components/botmsg.vue';
@@ -106,6 +107,14 @@ import { useI18n } from 'vue-i18n';
 import { useUIStore } from '@/stores/ui';
 import KnowledgeBaseEditorModal from '@/views/knowledge/KnowledgeBaseEditorModal.vue';
 import { useKnowledgeBaseCreationNavigation } from '@/hooks/useKnowledgeBaseCreationNavigation';
+
+const props = defineProps({
+  session_id: { type: String, default: '' },
+  agentId: { type: String, default: '' },
+  kbIds: { type: Array, default: () => [] },
+  embeddedMode: { type: Boolean, default: false }
+});
+
 const usemenuStore = useMenuStore();
 const useSettingsStoreInstance = useSettingsStore();
 const uiStore = useUIStore();
@@ -115,7 +124,7 @@ const { menuArr, isFirstSession, firstQuery, firstMentionedItems, firstModelId, 
 const { output, onChunk, isStreaming, isLoading, error, startStream, stopStream } = useStream();
 const route = useRoute();
 const router = useRouter();
-const session_id = ref(route.params.chatid);
+const session_id = ref(props.session_id || route.params.chatid);
 const sessionData = ref(null);
 const inputFieldRef = ref();
 const created_at = ref('');
@@ -155,10 +164,10 @@ const fetchSuggestedQuestions = async () => {
     suggestedQuestionsLoading.value = true;
     // 加载期间保留旧数据，不清空，避免布局抖动
     try {
-        const agentId = useSettingsStoreInstance.selectedAgentId;
+        const agentId = props.embeddedMode ? props.agentId : useSettingsStoreInstance.selectedAgentId;
         if (!agentId) return;
-        const selectedKBs = useSettingsStoreInstance.getSelectedKnowledgeBases();
-        const selectedFiles = useSettingsStoreInstance.getSelectedFiles();
+        const selectedKBs = props.embeddedMode ? props.kbIds : useSettingsStoreInstance.getSelectedKnowledgeBases();
+        const selectedFiles = props.embeddedMode ? [] : useSettingsStoreInstance.getSelectedFiles();
         const res = await getSuggestedQuestions(agentId, {
             knowledge_base_ids: selectedKBs.length > 0 ? selectedKBs : undefined,
             knowledge_ids: selectedFiles.length > 0 ? selectedFiles : undefined,
@@ -530,18 +539,18 @@ const sendMsg = async (value, modelId = '', mentionedItems = [], imageFiles = []
     scrollToBottom(true);
     
     // Get agent mode status from settings store
-    const agentEnabled = useSettingsStoreInstance.isAgentEnabled;
+    const agentEnabled = props.embeddedMode ? (props.agentId && props.agentId !== 'builtin-quick-answer') : useSettingsStoreInstance.isAgentEnabled;
     
     // Get web search status from settings store
-    const webSearchEnabled = useSettingsStoreInstance.isWebSearchEnabled;
+    const webSearchEnabled = props.embeddedMode ? false : useSettingsStoreInstance.isWebSearchEnabled;
     
     // Get memory status from settings store
-    const enableMemory = useSettingsStoreInstance.isMemoryEnabled;
+    const enableMemory = props.embeddedMode ? false : useSettingsStoreInstance.isMemoryEnabled;
     
     // Get knowledge_base_ids from settings store (selected by user via KnowledgeBaseSelector)
     // Merge @mentioned KB/file IDs so retrieval uses the same targets user @mentioned (including shared KBs)
-    const sidebarKbIds = useSettingsStoreInstance.settings.selectedKnowledgeBases || [];
-    const sidebarFileIds = useSettingsStoreInstance.settings.selectedFiles || [];
+    const sidebarKbIds = props.embeddedMode ? props.kbIds : (useSettingsStoreInstance.settings.selectedKnowledgeBases || []);
+    const sidebarFileIds = props.embeddedMode ? [] : (useSettingsStoreInstance.settings.selectedFiles || []);
     const kbIdSet = new Set(sidebarKbIds);
     const fileIdSet = new Set(sidebarFileIds);
     for (const item of mentionedItems || []) {
@@ -556,13 +565,13 @@ const sendMsg = async (value, modelId = '', mentionedItems = [], imageFiles = []
     const knowledgeIds = [...fileIdSet];
 
     // Get selected agent ID (backend resolves shared agent and its tenant from share relation)
-    const selectedAgentId = useSettingsStoreInstance.selectedAgentId || '';
+    const selectedAgentId = props.embeddedMode ? props.agentId : (useSettingsStoreInstance.selectedAgentId || '');
 
     // Use agent-chat endpoint when agent is enabled, otherwise use knowledge-chat
     const endpoint = agentEnabled ? '/api/v1/agent-chat' : '/api/v1/knowledge-chat';
     
     // Get selected MCP services from settings store (if available)
-    const mcpServiceIds = useSettingsStoreInstance.settings.selectedMCPServices || [];
+    const mcpServiceIds = props.embeddedMode ? [] : (useSettingsStoreInstance.settings.selectedMCPServices || []);
     
     await startStream({ 
         session_id: session_id.value, 
@@ -1140,10 +1149,16 @@ onMounted(async () => {
     messagesList.splice(0);
     
     // 若从智能体列表点击共享智能体进入，URL 带 agent_id 与 source_tenant_id，同步到 store
-    const agentIdFromQuery = route.query.agent_id && String(route.query.agent_id);
+    const agentIdFromQuery = props.embeddedAgentId || (route.query.agent_id && String(route.query.agent_id));
     const sourceTenantIdFromQuery = route.query.source_tenant_id && String(route.query.source_tenant_id);
     if (agentIdFromQuery && sourceTenantIdFromQuery) {
         useSettingsStoreInstance.selectAgent(agentIdFromQuery, sourceTenantIdFromQuery);
+    } else if (agentIdFromQuery) {
+        useSettingsStoreInstance.selectAgent(agentIdFromQuery, null);
+    }
+    
+    if (props.embeddedKbIds && props.embeddedKbIds.length > 0) {
+        useSettingsStoreInstance.selectKnowledgeBases(props.embeddedKbIds);
     }
     
     // 初始化状态：加载历史消息时不应显示loading
@@ -1210,6 +1225,25 @@ onBeforeRouteUpdate((to, from, next) => {
     align-items: center;
     max-width: calc(100vw - 260px);
     min-width: 400px;
+
+    &.is-sidebar-collapsed {
+        max-width: calc(100vw - 60px);
+    }
+
+    &.is-embedded {
+        max-width: 100%;
+        min-width: 100%;
+        padding: 0;
+        overflow-x: hidden;
+    }
+
+    &.is-embedded :deep(.answers-input) {
+        transform: translateX(0);
+        width: 100%;
+        left: 0;
+        display: flex;
+        justify-content: center;
+    }
 
     :deep(.answers-input) {
         position: static;
@@ -1319,6 +1353,21 @@ onBeforeRouteUpdate((to, from, next) => {
     flex-direction: column;
     gap: 8px;
     padding-left: 4px;
+}
+
+.input-container {
+    min-height: 115px;
+    margin: 16px auto 4px;
+    width: 100%;
+    max-width: 800px;
+    box-sizing: border-box;
+
+    &.is-embedded {
+        max-width: 100%;
+        width: 100%;
+        margin: 0;
+        overflow-x: hidden;
+    }
 }
 
 .msg_list {

@@ -29,7 +29,7 @@ import (
 const (
 	// minImageDimension is the minimum width/height in pixels; images smaller
 	// than this on either axis are treated as icons and filtered out.
-	minImageDimension = 128
+	minImageDimension = 64
 	// minImageBytes is the minimum file size in bytes; very small images are
 	// almost certainly icons or decorative elements.
 	minImageBytes = 512 // 512 bytes
@@ -44,7 +44,7 @@ func isIconImage(data []byte) bool {
 		// Cannot decode dimensions — fall back to size-only heuristic.
 		return len(data) < minImageBytes
 	}
-	if cfg.Width < minImageDimension || cfg.Height < minImageDimension {
+	if cfg.Width < minImageDimension && cfg.Height < minImageDimension {
 		return true
 	}
 	return false

@@ -129,7 +129,7 @@ func fakeFeishu(nodes []wikiNode) (*httptest.Server, *Config) {
 	})
 
 	// --- export file download ---
-	mux.HandleFunc("/open-apis/drive/v1/export_tasks/file/ticket-123/download", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/open-apis/drive/v1/export_tasks/file/ft-abc/download", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.Write([]byte("fake-docx-content"))
 	})

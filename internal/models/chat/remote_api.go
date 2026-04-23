@@ -255,7 +255,8 @@ func (c *RemoteAPIChat) BuildChatCompletionRequest(messages []Message, opts *Cha
 
 		// 处理 ParallelToolCalls
 		if opts.ParallelToolCalls != nil {
-			req.ParallelToolCalls = *opts.ParallelToolCalls
+			val := *opts.ParallelToolCalls
+			req.ParallelToolCalls = val
 		}
 
 		// 处理 ToolChoice（标准实现）
@@ -367,13 +368,8 @@ func (c *RemoteAPIChat) chatWithRawHTTP(ctx context.Context, endpoint string, cu
 		httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
 	}
 
-	// print headers
-	headers, err := json.Marshal(httpReq.Header)
-	if err != nil {
-		return nil, fmt.Errorf("marshal headers: %w", err)
-	}
-	logger.Infof(ctx, "[LLM Request] Remote HTTP, endpoint=%s, model=%s, headers: %s",
-		endpoint, c.modelName, string(headers))
+	logger.Infof(ctx, "[LLM Request] Remote HTTP, endpoint=%s, model=%s",
+		endpoint, c.modelName)
 
 	resp, err := rawHTTPClient.Do(httpReq)
 	if err != nil {

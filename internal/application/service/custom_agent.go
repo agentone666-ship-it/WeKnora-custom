@@ -24,9 +24,10 @@ var (
 
 // customAgentService implements the CustomAgentService interface
 type customAgentService struct {
-	repo      interfaces.CustomAgentRepository
-	chunkRepo interfaces.ChunkRepository
-	kbService interfaces.KnowledgeBaseService
+	repo         interfaces.CustomAgentRepository
+	chunkRepo    interfaces.ChunkRepository
+	kbService    interfaces.KnowledgeBaseService
+	wikiPageRepo interfaces.WikiPageRepository
 }
 
 // NewCustomAgentService creates a new custom agent service
@@ -34,11 +35,13 @@ func NewCustomAgentService(
 	repo interfaces.CustomAgentRepository,
 	chunkRepo interfaces.ChunkRepository,
 	kbService interfaces.KnowledgeBaseService,
+	wikiPageRepo interfaces.WikiPageRepository,
 ) interfaces.CustomAgentService {
 	return &customAgentService{
-		repo:      repo,
-		chunkRepo: chunkRepo,
-		kbService: kbService,
+		repo:         repo,
+		chunkRepo:    chunkRepo,
+		kbService:    kbService,
+		wikiPageRepo: wikiPageRepo,
 	}
 }
 
@@ -567,6 +570,36 @@ func (s *customAgentService) GetSuggestedQuestions(
 		}
 	}
 
+	// Collect Wiki pages as a fallback source. This covers Wiki-only KBs where no
+	// document chunks carry AI-generated questions (question_generation is skipped
+	// when the KB does not need an embedding model). knowledge_id filter is
+	// intentionally ignored here because wiki pages are authored at the KB level
+	// and are not 1:1 with source knowledge items.
+	if len(queryKBIDs) > 0 && s.wikiPageRepo != nil {
+		wikiPages, err := s.wikiPageRepo.ListRecentForSuggestions(ctx, tenantID, queryKBIDs, fetchLimit)
+		if err != nil {
+			logger.ErrorWithFields(ctx, err, map[string]interface{}{
+				"agent_id": agentID,
+			})
+		} else {
+			locale, _ := types.LanguageFromContext(ctx)
+			for _, page := range wikiPages {
+				q := wikiSuggestionFromPage(page, locale)
+				if q == "" || seen[q] {
+					continue
+				}
+				seen[q] = true
+				// Use page.ID as the bucket key so round-robin mixes pages from
+				// different wiki entries rather than clumping them.
+				buckets[page.ID] = append(buckets[page.ID], types.SuggestedQuestion{
+					Question:        q,
+					Source:          "wiki",
+					KnowledgeBaseID: page.KnowledgeBaseID,
+				})
+			}
+		}
+	}
+
 	// 4. Shuffle within each bucket, then round-robin across buckets
 	//    to ensure diversity across different documents.
 	bucketKeys := make([]string, 0, len(buckets))
@@ -609,4 +642,48 @@ func (s *customAgentService) truncateQuestions(questions []types.SuggestedQuesti
 		return questions[:limit]
 	}
 	return questions
+}
+
+// wikiSuggestionFromPage converts a wiki page into a human-readable suggested
+// question string. The template is chosen per page type so the chip reads
+// naturally for that kind of content:
+//   - concept: "What is <title>?" works for abstract terms (RAG, embedding,
+//     idempotency…).
+//   - entity / summary: "Tell me about <title>" is neutral and works for
+//     people, places, organizations, products and document summaries where
+//     "what is <name>?" would read awkwardly ("什么是张三？").
+//   - everything else (synthesis, comparison, …): the raw title is already a
+//     good topical query on its own.
+func wikiSuggestionFromPage(page *types.WikiPage, locale string) string {
+	if page == nil {
+		return ""
+	}
+	title := strings.TrimSpace(page.Title)
+	if title == "" {
+		return ""
+	}
+	switch page.PageType {
+	case types.WikiPageTypeConcept:
+		if isEnglishLocale(locale) {
+			return "What is " + title + "?"
+		}
+		return "什么是" + title + "？"
+	case types.WikiPageTypeEntity, types.WikiPageTypeSummary:
+		if isEnglishLocale(locale) {
+			return "Tell me about " + title
+		}
+		return "介绍一下" + title
+	default:
+		return title
+	}
+}
+
+// isEnglishLocale reports whether the locale string is an English variant.
+// Unknown / empty locales fall back to Chinese, matching the product default.
+func isEnglishLocale(locale string) bool {
+	switch locale {
+	case "en-US", "en", "en-GB":
+		return true
+	}
+	return false
 }

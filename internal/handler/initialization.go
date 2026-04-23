@@ -89,7 +89,7 @@ func NewInitializationHandler(
 // KBModelConfigRequest 知识库模型配置请求（简化版，只传模型ID）
 type KBModelConfigRequest struct {
 	LLMModelID       string           `json:"llmModelId"       binding:"required"`
-	EmbeddingModelID string           `json:"embeddingModelId" binding:"required"`
+	EmbeddingModelID string           `json:"embeddingModelId"` // optional when RAG indexing is disabled
 	VLMConfig        *types.VLMConfig `json:"vlm_config"`
 	ASRConfig        *types.ASRConfig `json:"asr_config"`
 
@@ -236,7 +236,7 @@ func (h *InitializationHandler) UpdateKBConfig(c *gin.Context) {
 	}
 
 	// 检查Embedding模型是否可以修改
-	if kb.EmbeddingModelID != "" && kb.EmbeddingModelID != req.EmbeddingModelID {
+	if kb.EmbeddingModelID != "" && req.EmbeddingModelID != "" && kb.EmbeddingModelID != req.EmbeddingModelID {
 		// 检查是否已有文件
 		knowledgeList, err := h.knowledgeService.ListPagedKnowledgeByKnowledgeBaseID(ctx,
 			kbIdStr, &types.Pagination{
@@ -258,16 +258,21 @@ func (h *InitializationHandler) UpdateKBConfig(c *gin.Context) {
 		return
 	}
 
-	embeddingModel, err := h.modelService.GetModelByID(ctx, req.EmbeddingModelID)
-	if err != nil || embeddingModel == nil {
-		logger.Error(ctx, "Embedding model not found")
-		c.Error(errors.NewBadRequestError("Embedding模型不存在"))
-		return
+	// Embedding模型仅在需要时验证（RAG检索启用时）
+	if req.EmbeddingModelID != "" {
+		embeddingModel, err := h.modelService.GetModelByID(ctx, req.EmbeddingModelID)
+		if err != nil || embeddingModel == nil {
+			logger.Error(ctx, "Embedding model not found")
+			c.Error(errors.NewBadRequestError("Embedding模型不存在"))
+			return
+		}
 	}
 
 	// 更新知识库的模型ID
 	kb.SummaryModelID = req.LLMModelID
-	kb.EmbeddingModelID = req.EmbeddingModelID
+	if req.EmbeddingModelID != "" {
+		kb.EmbeddingModelID = req.EmbeddingModelID
+	}
 
 	// 处理多模态模型配置
 	kb.VLMConfig = types.VLMConfig{}

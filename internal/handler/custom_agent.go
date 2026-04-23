@@ -379,6 +379,25 @@ func (h *CustomAgentHandler) GetPlaceholders(c *gin.Context) {
 	})
 }
 
+// GetAgentTypePresets godoc
+// @Summary      获取智能体类型预设列表
+// @Description  返回所有 smart-reasoning 下可用的智能体类型预设（RAG/Wiki/Hybrid/Custom），用于编辑器自动填充系统提示词、工具和 KB 兼容性
+// @Tags         智能体
+// @Accept       json
+// @Produce      json
+// @Success      200  {object}  map[string]interface{}  "预设列表"
+// @Security     Bearer
+// @Security     ApiKeyAuth
+// @Router       /agents/type-presets [get]
+func (h *CustomAgentHandler) GetAgentTypePresets(c *gin.Context) {
+	ctx := c.Request.Context()
+	presets := types.ListAgentTypePresetsWithContext(ctx)
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data":    presets,
+	})
+}
+
 // GetSuggestedQuestions godoc
 // @Summary      获取推荐问题
 // @Description  基于智能体关联的知识库，返回推荐问题供用户快捷提问
