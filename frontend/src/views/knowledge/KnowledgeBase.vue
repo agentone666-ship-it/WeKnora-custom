@@ -31,6 +31,7 @@ import {
 } from "@/api/knowledge-base/index";
 import FAQEntryManager from './components/FAQEntryManager.vue';
 import WikiBrowser from './wiki/WikiBrowser.vue';
+import { getWikiStats } from '@/api/wiki';
 import { listMoveTargets, moveKnowledge, getKnowledgeMoveProgress } from '@/api/knowledge-base';
 import { useI18n } from 'vue-i18n';
 import { formatStringDate, kbFileTypeVerification } from '@/utils';
@@ -50,6 +51,59 @@ const validTabs = ['documents', 'wiki', 'graph'] as const
 type KbTab = typeof validTabs[number]
 const initTab = validTabs.includes(route.query.tab as any) ? (route.query.tab as KbTab) : 'documents'
 const activeKbTab = ref<KbTab>(initTab);
+
+// Wiki 状态用于面包屑上的索引中指示。父组件自行拉取，避免依赖 WikiBrowser 挂载状态
+// （用户切到"文档" tab 时 WikiBrowser 会卸载，这里仍需持续反映后台索引进度）。
+const wikiStatus = ref<{ pendingTasks: number; isActive: boolean; pendingIssues: number }>({
+  pendingTasks: 0,
+  isActive: false,
+  pendingIssues: 0,
+})
+const wikiIsIndexing = computed(() => wikiStatus.value.isActive || wikiStatus.value.pendingTasks > 0)
+const wikiIndexingTip = computed(() => {
+  if (!wikiIsIndexing.value) return ''
+  return t('knowledgeEditor.wikiBrowser.queueStatus', { count: wikiStatus.value.pendingTasks || 0 })
+})
+const onWikiStatusChange = (payload: { pendingTasks: number; isActive: boolean; pendingIssues: number }) => {
+  wikiStatus.value = payload
+}
+
+let wikiStatusTimer: ReturnType<typeof setInterval> | null = null
+const stopWikiStatusPolling = () => {
+  if (wikiStatusTimer) {
+    clearInterval(wikiStatusTimer)
+    wikiStatusTimer = null
+  }
+}
+const fetchWikiStatusOnce = async () => {
+  if (!kbId.value || !isWiki.value) return
+  try {
+    const res: any = await getWikiStats(kbId.value)
+    const data = res?.data || res
+    if (!data) return
+    wikiStatus.value = {
+      pendingTasks: data.pending_tasks || 0,
+      isActive: !!data.is_active,
+      pendingIssues: data.pending_issues || 0,
+    }
+    // 活跃时轮询，空闲时停掉定时器，避免无谓请求
+    if (wikiIsIndexing.value) {
+      if (!wikiStatusTimer) {
+        wikiStatusTimer = setInterval(fetchWikiStatusOnce, 5000)
+      }
+    } else {
+      stopWikiStatusPolling()
+    }
+  } catch (_) { /* ignore */ }
+}
+watch([kbId, isWiki], ([newKbId, newIsWiki]) => {
+  stopWikiStatusPolling()
+  wikiStatus.value = { pendingTasks: 0, isActive: false, pendingIssues: 0 }
+  if (newKbId && newIsWiki) {
+    fetchWikiStatusOnce()
+  }
+}, { immediate: true })
+onUnmounted(stopWikiStatusPolling)
 const missingStorageEngine = computed(() => {
   if (!kbInfo.value || isFAQ.value) return false
   const spc = kbInfo.value.storage_provider_config
@@ -1614,14 +1668,24 @@ async function createNewSession(value: string): Promise<void> {
                 >{{ $t('knowledgeEditor.wikiBrowser.tabDocuments') }}</span>
                 <span class="breadcrumb-tab-sep">/</span>
                 <span
-                  :class="['breadcrumb-tab', { active: activeKbTab === 'wiki' }]"
+                  :class="['breadcrumb-tab', { active: activeKbTab === 'wiki', indexing: wikiIsIndexing }]"
                   @click="activeKbTab = 'wiki'"
-                >Wiki</span>
+                >
+                  Wiki
+                  <t-tooltip v-if="wikiIsIndexing" :content="wikiIndexingTip" placement="bottom">
+                    <t-loading size="small" class="breadcrumb-tab-indicator" />
+                  </t-tooltip>
+                </span>
                 <span class="breadcrumb-tab-sep">/</span>
                 <span
-                  :class="['breadcrumb-tab', { active: activeKbTab === 'graph' }]"
+                  :class="['breadcrumb-tab', { active: activeKbTab === 'graph', indexing: wikiIsIndexing }]"
                   @click="activeKbTab = 'graph'"
-                >{{ $t('knowledgeEditor.wikiBrowser.tabGraph') }}</span>
+                >
+                  {{ $t('knowledgeEditor.wikiBrowser.tabGraph') }}
+                  <t-tooltip v-if="wikiIsIndexing" :content="wikiIndexingTip" placement="bottom">
+                    <t-loading size="small" class="breadcrumb-tab-indicator" />
+                  </t-tooltip>
+                </span>
               </template>
               <span v-else class="breadcrumb-current">{{ $t('knowledgeEditor.document.title') }}</span>
             </h2>
@@ -1677,7 +1741,7 @@ async function createNewSession(value: string): Promise<void> {
 
       <!-- Wiki Browser / Graph (shown when wiki or graph tab is active) -->
       <div v-if="isWiki && (activeKbTab === 'wiki' || activeKbTab === 'graph')" class="wiki-main-area">
-        <WikiBrowser v-if="kbId" :knowledge-base-id="kbId" :view="activeKbTab === 'graph' ? 'graph' : 'browser'" @open-source-doc="openSourceDoc" />
+        <WikiBrowser v-if="kbId" :knowledge-base-id="kbId" :view="activeKbTab === 'graph' ? 'graph' : 'browser'" @open-source-doc="openSourceDoc" @status-change="onWikiStatusChange" />
       </div>
 
       <template v-if="activeKbTab === 'documents' || !isWiki">
@@ -2274,6 +2338,9 @@ async function createNewSession(value: string): Promise<void> {
   color: var(--td-text-color-placeholder);
   font-weight: 400;
   transition: color 0.15s;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 
   &:hover {
     color: var(--td-text-color-primary);
@@ -2283,6 +2350,18 @@ async function createNewSession(value: string): Promise<void> {
     color: var(--td-brand-color);
     font-weight: 600;
   }
+
+  &.indexing {
+    color: var(--td-brand-color);
+  }
+}
+
+.breadcrumb-tab-indicator {
+  display: inline-flex;
+  align-items: center;
+  color: var(--td-brand-color);
+  font-size: 12px;
+  line-height: 1;
 }
 
 .breadcrumb-tab-sep {

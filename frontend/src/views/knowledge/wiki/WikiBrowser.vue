@@ -451,6 +451,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'open-source-doc', knowledgeId: string): void
+  (e: 'status-change', payload: { pendingTasks: number; isActive: boolean; pendingIssues: number }): void
 }>()
 const pages = ref<WikiPage[]>([])
 const selectedPage = ref<WikiPage | null>(null)
@@ -824,7 +825,16 @@ async function loadStats() {
   try {
     const res = await getWikiStats(props.knowledgeBaseId)
     stats.value = (res as any).data || res as any
-    
+
+    // Notify parent so it can reflect wiki status (e.g. indexing badge in the breadcrumb)
+    if (stats.value) {
+      emit('status-change', {
+        pendingTasks: stats.value.pending_tasks || 0,
+        isActive: !!stats.value.is_active,
+        pendingIssues: stats.value.pending_issues || 0,
+      })
+    }
+
     // Poll if there are pending tasks or wiki ingest is active
     if (stats.value && (stats.value.pending_tasks > 0 || stats.value.is_active)) {
       if (!statsTimer) {
