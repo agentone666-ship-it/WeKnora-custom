@@ -59,6 +59,30 @@ func (r *wikiPageRepository) Update(ctx context.Context, page *types.WikiPage) e
 	return nil
 }
 
+// UpdateAutoLinkedContent persists content changes produced by the automatic
+// link decorators (cross-link injection, dead-link cleanup) without bumping
+// `version`. These passes rewrite the same revision with wiki-link markup
+// added or removed; treating them as real edits would make newly-ingested
+// pages appear as v2 on first view and confuse users who expect `version` to
+// correspond to the number of intentional revisions.
+func (r *wikiPageRepository) UpdateAutoLinkedContent(ctx context.Context, page *types.WikiPage) error {
+	result := r.db.WithContext(ctx).
+		Model(page).
+		Where("id = ?", page.ID).
+		Updates(map[string]interface{}{
+			"content":    page.Content,
+			"out_links":  page.OutLinks,
+			"updated_at": page.UpdatedAt,
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return ErrWikiPageNotFound
+	}
+	return nil
+}
+
 // UpdateMeta updates bookkeeping / provenance fields WITHOUT incrementing the
 // version number. "Content" for versioning purposes is the user-visible page
 // body (title/content/summary/page_type/status); everything else — links,

@@ -339,7 +339,7 @@ func (s *WikiLintService) AutoFix(ctx context.Context, kbID string) (int, error)
 			}
 			target := issue.TargetSlug
 			page.Content = strings.ReplaceAll(page.Content, "[["+target+"]]", target)
-			if _, err := s.wikiService.UpdatePage(ctx, page); err == nil {
+			if err := s.wikiService.UpdateAutoLinkedContent(ctx, page); err == nil {
 				fixed++
 			}
 

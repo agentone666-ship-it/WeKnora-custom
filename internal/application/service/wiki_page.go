@@ -144,6 +144,33 @@ func (s *wikiPageService) UpdatePageMeta(ctx context.Context, page *types.WikiPa
 	return s.repo.UpdateMeta(ctx, page)
 }
 
+// UpdateAutoLinkedContent persists content produced by machine-only link
+// decorators (cross-link injection / dead-link cleanup) without bumping
+// `version`. Out-links are re-parsed from the new body and bidirectional
+// in-link references on target pages are refreshed so link navigation stays
+// consistent — only the user-facing revision counter is preserved.
+func (s *wikiPageService) UpdateAutoLinkedContent(ctx context.Context, page *types.WikiPage) error {
+	existing, err := s.repo.GetBySlug(ctx, page.KnowledgeBaseID, page.Slug)
+	if err != nil {
+		return fmt.Errorf("get existing page: %w", err)
+	}
+
+	oldOutLinks := existing.OutLinks
+
+	existing.Content = page.Content
+	existing.OutLinks = s.parseOutLinks(existing.Content)
+	existing.UpdatedAt = time.Now()
+
+	if err := s.repo.UpdateAutoLinkedContent(ctx, existing); err != nil {
+		return fmt.Errorf("update auto-linked content: %w", err)
+	}
+
+	s.removeInLinks(ctx, existing.KnowledgeBaseID, existing.Slug, oldOutLinks)
+	s.updateInLinks(ctx, existing.KnowledgeBaseID, existing.Slug, existing.OutLinks)
+
+	return nil
+}
+
 // GetPageBySlug retrieves a wiki page by its slug
 func (s *wikiPageService) GetPageBySlug(ctx context.Context, kbID string, slug string) (*types.WikiPage, error) {
 	return s.repo.GetBySlug(ctx, kbID, slug)
@@ -573,7 +600,7 @@ func (s *wikiPageService) InjectCrossLinks(ctx context.Context, kbID string, aff
 			continue
 		}
 		p.Content = newContent
-		if _, err := s.UpdatePage(ctx, p); err != nil {
+		if err := s.UpdateAutoLinkedContent(ctx, p); err != nil {
 			logger.Warnf(ctx, "wiki: cross-link injection failed for %s: %v", p.Slug, err)
 			continue
 		}

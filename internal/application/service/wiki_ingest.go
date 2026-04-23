@@ -460,7 +460,7 @@ func (s *wikiIngestService) cleanDeadLinks(ctx context.Context, kbID string) {
 
 		if changed {
 			p.Content = content
-			if _, err := s.wikiService.UpdatePage(ctx, p); err != nil {
+			if err := s.wikiService.UpdateAutoLinkedContent(ctx, p); err != nil {
 				logger.Warnf(ctx, "wiki: failed to clean dead links in page %s: %v", p.Slug, err)
 			} else {
 				cleaned++
@@ -509,7 +509,7 @@ func (s *wikiIngestService) injectCrossLinks(ctx context.Context, kbID string, a
 			continue
 		}
 		p.Content = newContent
-		if _, err := s.wikiService.UpdatePage(ctx, p); err != nil {
+		if err := s.wikiService.UpdateAutoLinkedContent(ctx, p); err != nil {
 			logger.Warnf(ctx, "wiki ingest: cross-link injection failed for %s: %v", p.Slug, err)
 			continue
 		}

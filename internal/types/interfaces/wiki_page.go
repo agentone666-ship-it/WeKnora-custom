@@ -27,6 +27,15 @@ type WikiPageService interface {
 	// ref changes driven by internal reconciliation.
 	UpdatePageMeta(ctx context.Context, page *types.WikiPage) error
 
+	// UpdateAutoLinkedContent persists content changes that come from
+	// machine-only link decoration — cross-link injection and dead-link
+	// cleanup — without bumping `version`. Out-links are re-parsed from the
+	// new body and bidirectional in-link references on target pages are
+	// refreshed. Conceptually the body still represents the same revision
+	// the user saw before, just with wiki-link markup added or stripped, so
+	// surfacing a version bump to end users is misleading.
+	UpdateAutoLinkedContent(ctx context.Context, page *types.WikiPage) error
+
 	// GetPageBySlug retrieves a wiki page by its slug within a knowledge base.
 	GetPageBySlug(ctx context.Context, kbID string, slug string) (*types.WikiPage, error)
 
@@ -102,6 +111,13 @@ type WikiPageRepository interface {
 	// touching `version`. Safe for link maintenance, re-ingest with an
 	// unchanged body, and status-only transitions.
 	UpdateMeta(ctx context.Context, page *types.WikiPage) error
+
+	// UpdateAutoLinkedContent rewrites `content`, `out_links` and
+	// `updated_at` in place while leaving `version` untouched. Intended for
+	// machine-only link markup changes (cross-link injection / dead-link
+	// cleanup) so the first-ingest page doesn't jump to v2 just because the
+	// post-processor added a `[[...]]` wrapper.
+	UpdateAutoLinkedContent(ctx context.Context, page *types.WikiPage) error
 
 	// GetByID retrieves a wiki page by its unique ID.
 	GetByID(ctx context.Context, id string) (*types.WikiPage, error)

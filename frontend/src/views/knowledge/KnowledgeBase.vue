@@ -69,11 +69,16 @@ const onWikiStatusChange = (payload: { pendingTasks: number; isActive: boolean; 
 }
 
 let wikiStatusTimer: ReturnType<typeof setInterval> | null = null
+let wikiStatusProbeTimers: Array<ReturnType<typeof setTimeout>> = []
 const stopWikiStatusPolling = () => {
   if (wikiStatusTimer) {
     clearInterval(wikiStatusTimer)
     wikiStatusTimer = null
   }
+}
+const clearWikiStatusProbes = () => {
+  wikiStatusProbeTimers.forEach(t => clearTimeout(t))
+  wikiStatusProbeTimers = []
 }
 const fetchWikiStatusOnce = async () => {
   if (!kbId.value || !isWiki.value) return
@@ -96,14 +101,31 @@ const fetchWikiStatusOnce = async () => {
     }
   } catch (_) { /* ignore */ }
 }
+// 用户刚触发了一个上传 / reparse / URL 导入之类的动作后，后台通常要过
+// 一小段时间才会把 wiki 任务真正塞进队列；如果这时空闲轮询刚好停了，
+// 面包屑的"索引中"会延迟很久才亮起。所以这里安排几次退避重试，
+// 主动把面包屑的 loading 尽快点亮，一旦探测到任务就会走正常的 5s 轮询。
+const scheduleWikiStatusProbes = () => {
+  if (!kbId.value || !isWiki.value) return
+  clearWikiStatusProbes()
+  const delays = [500, 2000, 5000, 10000]
+  delays.forEach(delay => {
+    const timer = setTimeout(() => { fetchWikiStatusOnce() }, delay)
+    wikiStatusProbeTimers.push(timer)
+  })
+}
 watch([kbId, isWiki], ([newKbId, newIsWiki]) => {
   stopWikiStatusPolling()
+  clearWikiStatusProbes()
   wikiStatus.value = { pendingTasks: 0, isActive: false, pendingIssues: 0 }
   if (newKbId && newIsWiki) {
     fetchWikiStatusOnce()
   }
 }, { immediate: true })
-onUnmounted(stopWikiStatusPolling)
+onUnmounted(() => {
+  stopWikiStatusPolling()
+  clearWikiStatusProbes()
+})
 const missingStorageEngine = computed(() => {
   if (!kbInfo.value || isFAQ.value) return false
   const spc = kbInfo.value.storage_provider_config
@@ -737,6 +759,8 @@ const handleFileUploaded = (event: CustomEvent) => {
     page = 1; // Reset page counter when reloading files after upload
     loadKnowledgeFiles(uploadedKbId);
     loadTags(uploadedKbId);
+    // 启动几次探测，尽快让面包屑的"索引中"亮起。
+    scheduleWikiStatusProbes();
   }
 };
 
@@ -1541,6 +1565,8 @@ const rebuildConfirm = async () => {
     MessagePlugin.success(t('knowledgeBase.rebuildSubmitted'));
     page = 1; // Reset page counter when reloading files after reparse
     loadKnowledgeFiles(kbId.value);
+    // reparse 同样会触发 wiki 重入队，探测一下让面包屑尽快亮起。
+    scheduleWikiStatusProbes();
   } catch (error: any) {
     MessagePlugin.error(error?.message || t('knowledgeBase.rebuildFailed'));
   }

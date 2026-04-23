@@ -2140,6 +2140,27 @@ onUnmounted(() => {
   color: var(--td-text-color-primary);
 }
 
+.wiki-reader-aliases {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  margin: 0 0 10px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.wiki-alias-label {
+  color: var(--td-text-color-placeholder);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.wiki-alias-tag {
+  // Slight vertical nudge so the tag baseline lines up with the label.
+  vertical-align: middle;
+}
+
 .wiki-reader-meta {
   display: flex;
   align-items: center;
