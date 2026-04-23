@@ -2555,6 +2555,7 @@ onUnmounted(() => {
   align-items: center;
   gap: 6px;
   font-size: 11px;
+  line-height: 14px;
   color: var(--td-text-color-secondary);
   cursor: pointer;
   user-select: none;
@@ -2576,10 +2577,21 @@ onUnmounted(() => {
 }
 
 .legend-action-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
   font-size: 13px;
-  font-family: monospace;
+  line-height: 1;
   color: var(--td-text-color-placeholder);
   transition: color 0.15s;
+
+  .t-icon {
+    font-size: 13px;
+    line-height: 1;
+  }
 }
 
 @keyframes node-active-pulse {
