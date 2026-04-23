@@ -1297,7 +1297,7 @@ func (s *knowledgeService) cleanupWikiOnKnowledgeDelete(ctx context.Context, kno
 	// wiki_ingest task that wakes up between here and the retract enqueue
 	// below sees "knowledge gone" and bails out.
 	s.markKnowledgeDeletedForWiki(ctx, kbID, knowledgeID)
-	s.scrubWikiPendingIngest(ctx, kbID, knowledgeID)
+	s.scrubWikiPendingIngest(ctx, kbID, knowledgeID, "cleanup")
 
 	// Pull title/summary from the knowledge itself — do NOT read them from
 	// existing wiki pages. In the race window wiki pages may not exist yet,
@@ -1398,14 +1398,19 @@ func (s *knowledgeService) markKnowledgeDeletedForWiki(ctx context.Context, kbID
 }
 
 // scrubWikiPendingIngest removes queued WikiOpIngest entries for a knowledge
-// from the debounced pending list, so the next batch doesn't re-ingest a
-// document we're about to soft-delete. Retract entries stay put — the wiki
-// still needs them to unlink referencing pages.
+// from the debounced pending list. Used by both the delete path (we're about
+// to soft-delete the doc, no point ingesting it) and the reparse path (the
+// old chunks are about to vanish, so any pending ingest would either race
+// with the cleanup or no-op on an empty chunk set — and the post-process
+// task will enqueue a fresh ingest once new chunks land anyway).
+//
+// Retract entries stay put — delete still needs them to unlink referencing
+// pages, and reparse never enqueues retracts for the doc being reparsed.
 //
 // We use LREM against JSON-encoded entries plus a best-effort raw-UUID
 // fallback for backward compatibility with the legacy format documented in
 // peekPendingList.
-func (s *knowledgeService) scrubWikiPendingIngest(ctx context.Context, kbID, knowledgeID string) {
+func (s *knowledgeService) scrubWikiPendingIngest(ctx context.Context, kbID, knowledgeID, reason string) {
 	if s.redisClient == nil || kbID == "" || knowledgeID == "" {
 		return
 	}
@@ -1417,7 +1422,7 @@ func (s *knowledgeService) scrubWikiPendingIngest(ctx context.Context, kbID, kno
 	// is safe.
 	items, err := s.redisClient.LRange(ctx, pendingKey, 0, -1).Result()
 	if err != nil {
-		logger.Warnf(ctx, "wiki cleanup: failed to read pending list %s: %v", pendingKey, err)
+		logger.Warnf(ctx, "wiki %s: failed to read pending list %s: %v", reason, pendingKey, err)
 		return
 	}
 	removed := 0
@@ -1444,8 +1449,36 @@ func (s *knowledgeService) scrubWikiPendingIngest(ctx context.Context, kbID, kno
 		}
 	}
 	if removed > 0 {
-		logger.Infof(ctx, "wiki cleanup: scrubbed %d pending ingest ops for knowledge %s", removed, knowledgeID)
+		logger.Infof(ctx, "wiki %s: scrubbed %d pending ingest ops for knowledge %s", reason, removed, knowledgeID)
 	}
+}
+
+// prepareWikiForReparse is the reparse counterpart to
+// cleanupWikiOnKnowledgeDelete. It aligns reparse with the same "pending
+// queue hygiene" the delete path already enforces, without taking any
+// destructive action against existing pages.
+//
+// Why no retract / tombstone here: reparse is not a "K is gone" event, it's
+// a "K's contribution is about to be swapped for a new version" event. The
+// actual swap happens asynchronously inside mapOneDocument (see its
+// oldPageSlugs handling) — that's where we have both the old page set and
+// the freshly extracted candidate slugs, which is exactly the information
+// the WikiPageModifyPrompt needs to do a correct replace-not-append.
+//
+// So the only thing worth doing synchronously at reparse time is keeping
+// the Redis pending list clean so the re-ingest enqueued by
+// KnowledgePostProcess doesn't race with a stale ingest op that would
+// fire mid-flight against zero chunks.
+func (s *knowledgeService) prepareWikiForReparse(ctx context.Context, knowledge *types.Knowledge) {
+	if knowledge == nil {
+		return
+	}
+	kbID := knowledge.KnowledgeBaseID
+	knowledgeID := knowledge.ID
+	if kbID == "" || knowledgeID == "" {
+		return
+	}
+	s.scrubWikiPendingIngest(ctx, kbID, knowledgeID, "reparse")
 }
 
 // removeSourceRef removes entries from source_refs that match a knowledge ID.
@@ -3074,6 +3107,16 @@ func (s *knowledgeService) ReparseKnowledge(ctx context.Context, knowledgeID str
 	if err != nil {
 		logger.Errorf(ctx, "Failed to get knowledge base for reparse: %v", err)
 		return nil, err
+	}
+
+	// Keep wiki's pending queue consistent across both manual and non-manual
+	// paths. The destructive work (swapping old wiki contributions for new)
+	// happens asynchronously inside mapOneDocument — see its oldPageSlugs
+	// handling — once post-process re-enqueues wiki ingest. All we need to
+	// do here is stop any stale pending ingest op from firing against the
+	// pre-reparse chunk set.
+	if kb != nil && kb.IsWikiEnabled() {
+		s.prepareWikiForReparse(ctx, existing)
 	}
 
 	// For manual knowledge, use async manual processing (cleanup + re-indexing in worker)

@@ -653,32 +653,76 @@ func (s *wikiIngestService) mapOneDocument(
 		}
 	}
 
-	// Stale Pages
+	// Reconcile old page set against new extraction.
+	//
+	// Three cases:
+	//
+	//  (a) oldSlug ∉ new  → "retractStale": the doc no longer mentions this
+	//      page's subject, so strip its ref (and possibly delete the page
+	//      if this was the only source). Passes the NEW content as the
+	//      retract context — if the LLM finds matching facts it trims
+	//      them, otherwise the retract is a near no-op, which is fine.
+	//
+	//  (b) oldSlug ∈ new AND slug is an entity/concept page  → reparse
+	//      swap: emit BOTH a "retract" (carrying the doc's PRIOR summary
+	//      body as the old-version signal) AND the normal addition. The
+	//      reduce stage sees HasAdditions=1 + HasRetractions=1 and the
+	//      WikiPageModifyPrompt correctly tells the editor model to
+	//      remove the old K section and add the new K section in one
+	//      pass — giving us replace-not-append semantics that "append
+	//      new K on top of old K" would otherwise violate.
+	//
+	//  (c) oldSlug ∈ new AND slug is a summary page (summary/...) →
+	//      nothing to do here. reduceSlugUpdates' summary branch
+	//      unconditionally overwrites the whole page from the new
+	//      SummaryBody, so emitting an extra retract would just be
+	//      dead weight that the summary branch discards anyway.
+	//
+	// priorContribution is the doc's LAST summary body snapshotted at the
+	// start of this batch (from allPages scan). Empty on first-ever ingest
+	// — in that case oldPageSlugs is also empty, so we never consult it.
+	priorContribution := batchCtx.SummaryContentByKnowledgeID[knowledgeID]
+
+	newSlugSet := make(map[string]bool, len(extractedPages))
+	for _, ns := range extractedPages {
+		newSlugSet[ns] = true
+	}
+
+	var reparseOverlap, staleCount int
 	for oldSlug := range oldPageSlugs {
-		found := false
-		for _, newSlug := range extractedPages {
-			if oldSlug == newSlug {
-				found = true
-				break
+		if newSlugSet[oldSlug] {
+			// Skip summary slugs — they're overwritten wholesale by the
+			// summary update, retract would be ignored downstream.
+			if strings.HasPrefix(oldSlug, "summary/") {
+				continue
 			}
-		}
-		if !found {
+			reparseOverlap++
 			updates = append(updates, SlugUpdate{
 				Slug:              oldSlug,
-				Type:              "retractStale",
-				RetractDocContent: content,
+				Type:              "retract",
+				RetractDocContent: priorContribution,
 				DocTitle:          docTitle,
 				KnowledgeID:       knowledgeID,
 				Language:          lang,
 			})
+			continue
 		}
+		staleCount++
+		updates = append(updates, SlugUpdate{
+			Slug:              oldSlug,
+			Type:              "retractStale",
+			RetractDocContent: content,
+			DocTitle:          docTitle,
+			KnowledgeID:       knowledgeID,
+			Language:          lang,
+		})
 	}
 
 	logger.Infof(ctx,
-		"wiki ingest: mapped knowledge %s title=%q candidates=%d chunks=%d batches=%d cited_chunks=%d uncited_slugs=%d new_slugs=%d updates=%d pass0_fallback=%v elapsed=%s",
+		"wiki ingest: mapped knowledge %s title=%q candidates=%d chunks=%d batches=%d cited_chunks=%d uncited_slugs=%d new_slugs=%d updates=%d reparse_slugs=%d stale_slugs=%d pass0_fallback=%v elapsed=%s",
 		knowledgeID, previewText(docTitle, 80),
 		len(slugItems), len(chunks), batchCount, len(citedChunkSet), uncited, len(newSlugs),
-		len(updates), pass0Failed,
+		len(updates), reparseOverlap, staleCount, pass0Failed,
 		time.Since(docStartedAt).Round(time.Millisecond),
 	)
 
