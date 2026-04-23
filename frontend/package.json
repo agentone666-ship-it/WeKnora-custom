@@ -23,7 +23,7 @@
     "katex": "^0.16.45",
     "marked": "^17.0.5",
     "marked-katex-extension": "^5.1.8",
-    "mermaid": "^11.4.1",
+    "mermaid": "^11.14.0",
     "pagefind": "^1.1.1",
     "papaparse": "^5.5.3",
     "pinia": "^3.0.1",
