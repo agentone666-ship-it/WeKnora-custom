@@ -398,6 +398,23 @@ const hasFiles = ref(false)
 const initialStorageProvider = ref<string>('')
 const initialIndexingStrategy = ref<any>(null)
 const dsCount = ref(0)
+// 用户是否在分块设置中手动改过任何值。一旦为 true，就不再根据索引策略自动调整默认分块参数。
+const chunkingDirty = ref(false)
+
+// 仅 Wiki 索引模式下的分块预设：更大 chunk、无 overlap、关闭父子分块。
+// 该预设只在「创建模式」下、且用户尚未手动调整分块参数时生效，避免覆盖既有 KB 的配置。
+const WIKI_ONLY_CHUNKING_PRESET = {
+  chunkSize: 2048,
+  chunkOverlap: 0,
+  enableParentChild: false,
+} as const
+
+// 非 Wiki-only 场景下回落到的默认值（与 initFormData 保持一致）。
+const DEFAULT_CHUNKING_PRESET = {
+  chunkSize: 512,
+  chunkOverlap: 100,
+  enableParentChild: true,
+} as const
 
 const navItems = computed(() => {
   const items: { key: string; icon: string; label: string; badge?: number }[] = [
@@ -683,8 +700,30 @@ const toggleWikiIndexing = () => {
 const handleChunkingConfigUpdate = (config: any) => {
   if (formData.value) {
     formData.value.chunkingConfig = { ...config }
+    // 用户已经手动触达分块设置，后续索引策略切换不再覆盖这些值
+    chunkingDirty.value = true
   }
 }
+
+// 判断当前是否为「仅 Wiki 索引」：只开了 Wiki，关了向量/关键词检索
+const isWikiOnlyStrategy = computed(() => {
+  const s = formData.value?.indexingStrategy
+  if (!s) return false
+  return !!s.wikiEnabled && !s.vectorEnabled && !s.keywordEnabled
+})
+
+// 仅在创建模式、用户未改过分块设置时，随索引策略自动应用/撤销 Wiki-only 预设。
+// 编辑模式严格保持后端已有配置不变，避免误改。
+watch(isWikiOnlyStrategy, (wikiOnly) => {
+  if (props.mode !== 'create') return
+  if (!formData.value) return
+  if (chunkingDirty.value) return
+  const preset = wikiOnly ? WIKI_ONLY_CHUNKING_PRESET : DEFAULT_CHUNKING_PRESET
+  formData.value.chunkingConfig = {
+    ...formData.value.chunkingConfig,
+    ...preset,
+  }
+})
 
 const handleParserEngineRulesUpdate = (rules: any[]) => {
   if (formData.value) {
@@ -1061,6 +1100,7 @@ const resetState = () => {
   initialIndexingStrategy.value = null
   saving.value = false
   loading.value = false
+  chunkingDirty.value = false
 }
 
 // 关闭弹窗
