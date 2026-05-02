@@ -2021,6 +2021,7 @@ func (s *knowledgeService) processChunks(ctx context.Context,
 			KnowledgeID:     knowledge.ID,
 			KnowledgeBaseID: knowledge.KnowledgeBaseID,
 			Content:         chunkData.Content,
+			ContextHeader:   chunkData.ContextHeader,
 			ChunkIndex:      int(chunkData.Seq),
 			IsEnabled:       true,
 			CreatedAt:       time.Now(),
@@ -2102,7 +2103,10 @@ func (s *knowledgeService) processChunks(ctx context.Context,
 			titlePrefix = t + "\n"
 		}
 		for _, chunk := range textChunks {
-			indexContent := titlePrefix + chunk.Content
+			// chunk.EmbeddingContent prepends ContextHeader (heading breadcrumb)
+			// when the chunker populated it during Tier-1 splitting; falls back
+			// to plain Content otherwise. Title prefix sits outermost.
+			indexContent := titlePrefix + chunk.EmbeddingContent()
 			indexInfoList = append(indexInfoList, &types.IndexInfo{
 				Content:         indexContent,
 				SourceID:        chunk.ID,
@@ -7494,11 +7498,12 @@ func (s *knowledgeService) triggerManualProcessing(ctx context.Context,
 		parsed = make([]types.ParsedChunk, len(pcResult.Children))
 		for i, c := range pcResult.Children {
 			parsed[i] = types.ParsedChunk{
-				Content:     c.Content,
-				Seq:         c.Seq,
-				Start:       c.Start,
-				End:         c.End,
-				ParentIndex: c.ParentIndex,
+				Content:       c.Content,
+				ContextHeader: c.ContextHeader,
+				Seq:           c.Seq,
+				Start:         c.Start,
+				End:           c.End,
+				ParentIndex:   c.ParentIndex,
 			}
 		}
 		parentChunks := make([]types.ParsedParentChunk, len(pcResult.Parents))
@@ -7511,10 +7516,11 @@ func (s *knowledgeService) triggerManualProcessing(ctx context.Context,
 		parsed = make([]types.ParsedChunk, len(splitChunks))
 		for i, c := range splitChunks {
 			parsed[i] = types.ParsedChunk{
-				Content: c.Content,
-				Seq:     c.Seq,
-				Start:   c.Start,
-				End:     c.End,
+				Content:       c.Content,
+				ContextHeader: c.ContextHeader,
+				Seq:           c.Seq,
+				Start:         c.Start,
+				End:           c.End,
 			}
 		}
 	}
@@ -8350,11 +8356,12 @@ func (s *knowledgeService) ProcessDocument(ctx context.Context, t *asynq.Task) e
 		chunks = make([]types.ParsedChunk, len(pcResult.Children))
 		for i, c := range pcResult.Children {
 			chunks[i] = types.ParsedChunk{
-				Content:     c.Content,
-				Seq:         c.Seq,
-				Start:       c.Start,
-				End:         c.End,
-				ParentIndex: c.ParentIndex,
+				Content:       c.Content,
+				ContextHeader: c.ContextHeader,
+				Seq:           c.Seq,
+				Start:         c.Start,
+				End:           c.End,
+				ParentIndex:   c.ParentIndex,
 			}
 		}
 		parentChunks := make([]types.ParsedParentChunk, len(pcResult.Parents))
@@ -8369,10 +8376,11 @@ func (s *knowledgeService) ProcessDocument(ctx context.Context, t *asynq.Task) e
 		chunks = make([]types.ParsedChunk, len(splitChunks))
 		for i, c := range splitChunks {
 			chunks[i] = types.ParsedChunk{
-				Content: c.Content,
-				Seq:     c.Seq,
-				Start:   c.Start,
-				End:     c.End,
+				Content:       c.Content,
+				ContextHeader: c.ContextHeader,
+				Seq:           c.Seq,
+				Start:         c.Start,
+				End:           c.End,
 			}
 		}
 		logger.Infof(ctx, "Split document into %d chunks for knowledge %s", len(chunks), knowledge.ID)
