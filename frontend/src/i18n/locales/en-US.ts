@@ -1958,6 +1958,7 @@ export default {
         sampleLabel: 'Sample text',
         samplePlaceholder: 'Paste a Markdown / plain-text snippet to see how the current configuration would chunk it…',
         runButton: 'Run preview',
+        loading: 'Running chunker on sample…',
         errorPrefix: 'Preview failed',
         selectedTier: 'Selected strategy',
         rejected: 'Rejected tiers',
