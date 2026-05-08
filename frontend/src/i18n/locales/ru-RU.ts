@@ -1906,6 +1906,8 @@ export default {
       tabWiki: 'Wiki',
       tabGraph: 'Граф',
       searchPlaceholder: 'Поиск Wiki-страниц...',
+      searchNoResults: 'Страницы не найдены',
+      loadMore: 'Загрузить ещё (осталось {remaining})',
       filterAll: 'Все типы',
       filterSummary: 'Резюме',
       filterEntity: 'Сущности',

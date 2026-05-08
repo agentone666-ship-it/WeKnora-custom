@@ -1684,6 +1684,8 @@ export default {
       tabWiki: 'Wiki',
       tabGraph: 'Graph',
       searchPlaceholder: 'Search wiki pages...',
+      searchNoResults: 'No matching pages found',
+      loadMore: 'Load more ({remaining} remaining)',
       filterAll: 'All Types',
       filterSummary: 'Summaries',
       filterEntity: 'Entities',
