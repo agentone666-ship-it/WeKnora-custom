@@ -6,7 +6,7 @@ require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/JohannesKaufmann/html-to-markdown/v2 v2.5.0
 	github.com/PuerkitoBio/goquery v1.10.3
-	github.com/aliyun/alibabacloud-oss-go-sdk-v2 v1.4.1
+	github.com/aliyun/alibabacloud-oss-go-sdk-v2 v1.5.1
 	github.com/asg017/sqlite-vec-go-bindings v0.1.6
 	github.com/aws/aws-sdk-go-v2 v1.41.7
 	github.com/aws/aws-sdk-go-v2/config v1.29.14
