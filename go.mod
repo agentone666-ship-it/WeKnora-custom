@@ -55,7 +55,7 @@ require (
 	github.com/swaggo/swag v1.16.6
 	github.com/tencentyun/cos-go-sdk-v5 v0.7.65
 	github.com/tiktoken-go/tokenizer v0.7.0
-	github.com/volcengine/ve-tos-golang-sdk/v2 v2.7.23
+	github.com/volcengine/ve-tos-golang-sdk/v2 v2.9.4
 	github.com/wailsapp/wails/v2 v2.12.0
 	github.com/weaviate/weaviate v1.33.0-rc.1
 	github.com/weaviate/weaviate-go-client/v5 v5.5.0
