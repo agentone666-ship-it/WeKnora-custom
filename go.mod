@@ -45,7 +45,7 @@ require (
 	github.com/qdrant/go-client v1.16.1
 	github.com/redis/go-redis/v9 v9.14.0
 	github.com/robfig/cron/v3 v3.0.1
-	github.com/sashabaranov/go-openai v1.40.5
+	github.com/sashabaranov/go-openai v1.41.2
 	github.com/sirupsen/logrus v1.9.3
 	github.com/slack-go/slack v0.18.0-rc2
 	github.com/spf13/viper v1.20.1
