@@ -91,6 +91,9 @@ func (t *wikiWritePageTool) Execute(ctx context.Context, args json.RawMessage) (
 	if params.Title == "" || params.PageType == "" || params.Content == "" || params.Summary == "" {
 		return &types.ToolResult{Success: false, Error: "title, summary, content, and page_type are required for write action"}, nil
 	}
+	if params.PageType == types.WikiPageTypeCard {
+		return &types.ToolResult{Success: false, Error: "Governed card pages must be submitted through the Wiki ChangeSet review workflow"}, nil
+	}
 
 	// Try to get the existing page
 	existingPage, err := t.wikiPageService.GetPageBySlug(ctx, kbID, params.Slug)
@@ -102,6 +105,9 @@ func (t *wikiWritePageTool) Execute(ctx context.Context, args json.RawMessage) (
 
 	var action string
 	if existingPage != nil {
+		if existingPage.PageType == types.WikiPageTypeCard {
+			return &types.ToolResult{Success: false, Error: "Governed card pages cannot be overwritten by wiki_write_page; submit a reviewed ChangeSet instead"}, nil
+		}
 		// Update
 		existingPage.Title = params.Title
 		existingPage.Summary = params.Summary

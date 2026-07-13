@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
@@ -42,6 +43,7 @@ func renderIndexOverviewForAgent(resp *types.WikiIndexResponse) string {
 
 	typeLabels := map[string]string{
 		types.WikiPageTypeSummary:    "Summary",
+		types.WikiPageTypeCard:       "Knowledge Card",
 		types.WikiPageTypeEntity:     "Entity",
 		types.WikiPageTypeConcept:    "Concept",
 		types.WikiPageTypeSynthesis:  "Synthesis",
@@ -372,7 +374,7 @@ func (t *wikiReadPageTool) Execute(ctx context.Context, args json.RawMessage) (*
 				// We already injected the summary for this link in this session (within the same KB)
 				descs = append(descs, fmt.Sprintf("[[%s]] (summary omitted, already seen)", s))
 			} else {
-				if linkPage, err := t.wikiService.GetPageBySlug(ctx, kbID, s); err == nil && linkPage != nil {
+				if linkPage, err := t.wikiService.GetPageBySlug(ctx, kbID, s); err == nil && wikiPageAllowedForAnswer(linkPage, time.Now()) {
 					descs = append(descs, fmt.Sprintf("[[%s]] (%s)", s, linkPage.Summary))
 				} else {
 					descs = append(descs, fmt.Sprintf("[[%s]]", s))
@@ -428,8 +430,15 @@ func (t *wikiReadPageTool) Execute(ctx context.Context, args json.RawMessage) (*
 <knowledge_base_id>%s</knowledge_base_id>
 <link>[[%s|%s]]</link>
 <type>%s</type>
+<knowledge_type>%s</knowledge_type>
+<maturity_status>%s</maturity_status>
+<answer_strength>%s</answer_strength>
+<review_status>%s</review_status>
+<applicability>%s</applicability>
+<prohibited_claims>%s</prohibited_claims>
 <aliases>%s</aliases>
 </metadata>
+<answer_policy>%s</answer_policy>
 <relationships>
 <links_to>%s</links_to>
 <linked_from>%s</linked_from>
@@ -446,7 +455,10 @@ func (t *wikiReadPageTool) Execute(ctx context.Context, args json.RawMessage) (*
 </wiki_page>`,
 			kbID,
 			page.Slug, page.Title, page.PageType,
+			page.KnowledgeType, page.MaturityStatus, page.AnswerStrength, page.ReviewStatus,
+			page.Applicability, strings.Join(page.ProhibitedClaims, "; "),
 			strings.Join(page.Aliases, ", "),
+			wikiAnswerPolicy(page),
 			strings.Join(outLinksDesc, ", "),
 			strings.Join(inLinksDesc, ", "),
 			strings.Join(sourcesDesc, "\n"),
@@ -474,6 +486,9 @@ func (t *wikiReadPageTool) Execute(ctx context.Context, args json.RawMessage) (*
 			}
 			page, err := t.wikiService.GetPageBySlug(ctx, kbID, slug)
 			if err != nil || page == nil {
+				continue
+			}
+			if !wikiPageAllowedForAnswer(page, time.Now()) {
 				continue
 			}
 			actualKBID := kbID
@@ -583,7 +598,9 @@ Examples:
 - Prefix matching: "^entity/.*" (finds all entities)
 - Plain text: "engine" (matches anywhere in title/content/slug/summary)
 IMPORTANT — JSON escaping: every backslash in a regex MUST be written as \\ inside the JSON tool arguments (e.g. to search for literal "C++" write "C\\+\\+", NOT "C\+\+"; for "\d+" write "\\d+"). Plain "\+" / "\d" etc. are invalid JSON escapes and will fail to parse.
-Use this to find relevant wiki pages when you don't know the exact slug.`,
+Use this to find relevant wiki pages when you don't know the exact slug.
+Governed cards include knowledge_type, maturity, and answer_strength. A question is not an answer; a hypothesis is unverified; an experiment's expected outcome is not its observed result. Read the page before answering so its applicability and prohibited claims can be enforced.`,
+
 			json.RawMessage(`{
   "type": "object",
   "properties": {
@@ -729,8 +746,8 @@ func (t *wikiSearchTool) Execute(ctx context.Context, args json.RawMessage) (*ty
 				summary = "(summary omitted, already seen in previous search)"
 			}
 			fmt.Fprintf(&sb,
-				"<page>\n<knowledge_base_id>%s</knowledge_base_id>\n<link>[[%s|%s]]</link>\n<type>%s</type>%s\n<summary>%s</summary>%s\n</page>\n",
-				h.kbID, p.Slug, p.Title, p.PageType, aliasesTag, summary, snippetTag,
+				"<page>\n<knowledge_base_id>%s</knowledge_base_id>\n<link>[[%s|%s]]</link>\n<type>%s</type>\n<knowledge_type>%s</knowledge_type>\n<maturity>%s</maturity>\n<answer_strength>%s</answer_strength>%s\n<summary>%s</summary>%s\n</page>\n",
+				h.kbID, p.Slug, p.Title, p.PageType, p.KnowledgeType, p.MaturityStatus, p.AnswerStrength, aliasesTag, summary, snippetTag,
 			)
 		}
 		sb.WriteString("</search_results>")
@@ -744,6 +761,50 @@ func (t *wikiSearchTool) Execute(ctx context.Context, args json.RawMessage) (*ty
 			"found_kbs": foundKBs,
 		},
 	}, nil
+}
+
+func wikiPageAllowedForAnswer(page *types.WikiPage, now time.Time) bool {
+	if page == nil || page.Status == types.WikiPageStatusArchived {
+		return false
+	}
+	if page.PageType != types.WikiPageTypeCard {
+		return true
+	}
+	if page.ReviewStatus != types.WikiReviewApproved {
+		return false
+	}
+	if page.MaturityStatus != types.WikiMaturityVerified && page.MaturityStatus != types.WikiMaturityPartiallyVerified {
+		return false
+	}
+	if page.EffectiveFrom != nil && page.EffectiveFrom.After(now) {
+		return false
+	}
+	if page.EffectiveTo != nil && !page.EffectiveTo.After(now) {
+		return false
+	}
+	return true
+}
+
+func wikiAnswerPolicy(page *types.WikiPage) string {
+	if page == nil || page.PageType != types.WikiPageTypeCard {
+		return "Use this page as contextual wiki material and cite its sources when making factual claims."
+	}
+	switch page.KnowledgeType {
+	case types.WikiKnowledgeTypeQuestion:
+		return "This page records a known question or unresolved problem. Do not invent an answer or present the question itself as a conclusion."
+	case types.WikiKnowledgeTypeHypothesis:
+		return "This is an unverified hypothesis. Label it explicitly as awaiting validation and never state it as fact."
+	case types.WikiKnowledgeTypeExperiment:
+		return "Keep experiment objective, design, status, expected outcome, and observed result separate. Never present an expectation or unfinished experiment as a result."
+	case types.WikiKnowledgeTypeExperience:
+		return "Present this as conditional experience, include its applicability limits, and do not claim it is a universal rule."
+	case types.WikiKnowledgeTypeFailure:
+		return "Use this as a failure lesson or risk warning. Do not generalize it beyond the recorded conditions."
+	case types.WikiKnowledgeTypeRule:
+		return "This may be used as a standard rule only within its effective dates and applicability. Never make any prohibited claim."
+	default:
+		return "Respect maturity, answer strength, applicability, effective dates, and prohibited claims when answering."
+	}
 }
 
 // --- Helper ---

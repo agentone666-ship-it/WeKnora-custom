@@ -49,6 +49,52 @@ Output format:
 // These prompts are used by the wiki ingest pipeline to extract structured
 // knowledge from raw documents and build/update wiki pages.
 
+// WikiScenarioCardPrompt extracts scenario-driven, one-page-one-card business
+// knowledge. It deliberately separates questions, hypotheses, experiments and
+// established knowledge so downstream governance can apply different review
+// and answer policies.
+const WikiScenarioCardPrompt = `You are a business knowledge architect. Extract atomic, scenario-driven wiki cards from the supplied document chunks. A card is the smallest unit an AI can call directly. Do not combine a problem, a hypothesis, an experiment design, and an experiment result into one card.
+
+<chunks>
+{{.ChunksXML}}
+</chunks>
+
+<instructions>
+1. First classify document_nature as exactly one of: official_rule, business_manual, meeting_record, analysis_report, experiment_report, customer_feedback, operational_data, personal_experience, proposal, unknown.
+2. Identify business_lines, scenarios, audiences, affected_metrics and business_actions. Use [] when unknown; never invent them.
+3. Extract only cards explicitly grounded in the chunks. Valid knowledge_type values:
+   knowledge, experience, question, hypothesis, experiment, metric, procedure, failure, case, rule.
+4. A question describes a real unresolved or weakly-solved problem. A hypothesis is a possible explanation or solution and MUST retain uncertainty. An experiment is a design or result used to test a hypothesis. A plan or expected result is never experience or knowledge. A failure requires an observed unsuccessful result. A rule requires an authoritative rule source.
+5. Every card must be atomic. Cite exact chunk UUIDs from the chunks block whenever evidence exists. A valuable unresolved question may use source_chunks: [], but it will remain a draft and cannot become formal knowledge automatically.
+6. answer_strength must be strong, medium, weak, none, or unknown. Questions/hypotheses/unfinished experiments cannot be strong.
+7. applicability states scope/conditions. prohibited_claims lists things the source explicitly says must not be promised or asserted.
+8. relationships may only connect two cards in this output and relation_type must be one of: supports, contradicts, tests, answers, causes, depends_on, applies_to, measures, example_of, mitigates. Supply a reason and confidence from 0 to 1. Use confidence below 0.7 when the evidence does not clearly establish the relation; the application will not create that link.
+9. Use {{.Language}}. Output ONLY valid JSON.
+</instructions>
+
+Output:
+{
+  "context": {
+    "document_nature": "analysis_report",
+    "business_lines": [], "scenarios": [], "audiences": [],
+    "affected_metrics": [], "business_actions": []
+  },
+  "cards": [
+    {
+      "knowledge_type": "question",
+      "title": "...",
+      "statement": "...",
+      "summary": "...",
+      "business_line": "",
+      "scenarios": [], "audience_roles": [], "affected_metrics": [],
+      "answer_strength": "weak",
+      "applicability": {}, "prohibited_claims": [],
+      "source_chunks": ["chunk-uuid"],
+      "relationships": [{"target_title": "...", "relation_type": "tests", "reason": "...", "confidence": 0.9}]
+    }
+  ]
+}`
+
 // WikiSummaryPrompt generates a summary page for a newly ingested document.
 //
 // Filename and title are intentionally NOT passed to the LLM: documents

@@ -62,6 +62,9 @@ func (t *wikiDeletePageTool) Execute(ctx context.Context, args json.RawMessage) 
 	if err != nil {
 		return &types.ToolResult{Success: false, Error: "Failed to fetch page to delete: " + err.Error()}, nil
 	}
+	if existingPage.PageType == types.WikiPageTypeCard {
+		return &types.ToolResult{Success: false, Error: "Governed card pages cannot be deleted outside the ChangeSet review workflow"}, nil
+	}
 	inLinks := make([]string, len(existingPage.InLinks))
 	copy(inLinks, existingPage.InLinks)
 
@@ -97,7 +100,12 @@ func (t *wikiDeletePageTool) Execute(ctx context.Context, args json.RawMessage) 
 			}
 
 			if changed {
-				_, updateErr := t.wikiPageService.UpdatePage(ctx, sourcePage)
+				var updateErr error
+				if sourcePage.PageType == types.WikiPageTypeCard {
+					updateErr = t.wikiPageService.UpdateAutoLinkedContent(ctx, sourcePage)
+				} else {
+					_, updateErr = t.wikiPageService.UpdatePage(ctx, sourcePage)
+				}
 				if updateErr == nil {
 					updatedCount++
 					updatedSlugs = append(updatedSlugs, sourceSlug)
@@ -115,11 +123,11 @@ func (t *wikiDeletePageTool) Execute(ctx context.Context, args json.RawMessage) 
 		Success: true,
 		Output:  outputMsg,
 		Data: map[string]interface{}{
-			"display_type":    "wiki_delete_page",
-			"slug":            params.Slug,
-			"title":           existingPage.Title,
-			"updated_count":   updatedCount,
-			"affected_pages":  updatedSlugs,
+			"display_type":   "wiki_delete_page",
+			"slug":           params.Slug,
+			"title":          existingPage.Title,
+			"updated_count":  updatedCount,
+			"affected_pages": updatedSlugs,
 		},
 	}, nil
 }

@@ -29,6 +29,20 @@ export interface WikiPage {
   in_links: string[];
   out_links: string[];
   page_metadata: Record<string, any>;
+  knowledge_type?: string;
+  maturity_status?: string;
+  answer_strength?: string;
+  review_status?: string;
+  business_line?: string;
+  scenario_ids?: string[];
+  audience_roles?: string[];
+  affected_metrics?: string[];
+  applicability?: Record<string, any>;
+  prohibited_claims?: string[];
+  reviewed_by?: string;
+  reviewed_at?: string;
+  effective_from?: string;
+  effective_to?: string;
   version: number;
   created_at: string;
   updated_at: string;
@@ -322,4 +336,69 @@ export function updateWikiIssueStatus(kbId: string, issueId: string, status: str
 
 export function rebuildWikiLinks(kbId: string) {
   return post(`/api/v1/knowledgebase/${kbId}/wiki/rebuild-links`, {});
+}
+
+export interface WikiChangeItem {
+  id: string;
+  operation: 'create' | 'update' | 'archive';
+  page_id?: string;
+  page_slug: string;
+  expected_version: number;
+  before?: Record<string, any>;
+  after: Record<string, any>;
+  changed_fields: string[];
+  evidence_chunk_ids: string[];
+  evidence_excerpts?: Record<string, string>;
+}
+
+export interface WikiChangeSet {
+  id: string;
+  knowledge_base_id: string;
+  knowledge_id?: string;
+  status: string;
+  review_level: 'L0' | 'L1' | 'L2';
+  reasons: string[];
+  model_id?: string;
+  prompt_version?: string;
+  review_comment?: string;
+  created_at: string;
+  reviewed_at?: string;
+  items: WikiChangeItem[];
+}
+
+export function listWikiChangeSets(kbId: string, params?: {
+  status?: string;
+  review_level?: string;
+  limit?: number;
+  offset?: number;
+}) {
+  const query = new URLSearchParams();
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined && value !== '') query.set(key, String(value));
+  });
+  const qs = query.toString();
+  return get(`/api/v1/knowledgebase/${kbId}/wiki/change-sets${qs ? `?${qs}` : ''}`);
+}
+
+export function getWikiChangeSet(kbId: string, changeSetId: string) {
+  return get(`/api/v1/knowledgebase/${kbId}/wiki/change-sets/${changeSetId}`);
+}
+
+export function reviewWikiChangeSet(
+  kbId: string,
+  changeSetId: string,
+  data: { decision: 'approved' | 'rejected'; comment?: string; merge_into_slug?: string; item_overrides?: Record<string, Record<string, any>> },
+) {
+  return post(`/api/v1/knowledgebase/${kbId}/wiki/change-sets/${changeSetId}/review`, data);
+}
+
+export function batchReviewWikiChangeSets(
+  kbId: string,
+  data: { change_set_ids: string[]; decision: 'approved' | 'rejected'; comment?: string },
+) {
+  return post(`/api/v1/knowledgebase/${kbId}/wiki/change-sets/batch-review`, data);
+}
+
+export function reclassifyLegacyWiki(kbId: string, page = 1, pageSize = 200) {
+  return post(`/api/v1/knowledgebase/${kbId}/wiki/governance/reclassify?page=${page}&page_size=${pageSize}`, {})
 }

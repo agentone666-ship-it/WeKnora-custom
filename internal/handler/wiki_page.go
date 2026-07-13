@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Tencent/WeKnora/internal/application/repository"
 	"github.com/Tencent/WeKnora/internal/application/service"
@@ -19,10 +20,13 @@ import (
 
 // WikiPageHandler handles HTTP requests for wiki page operations
 type WikiPageHandler struct {
-	wikiService     interfaces.WikiPageService
-	kbService       interfaces.KnowledgeBaseService
-	lintService     *service.WikiLintService
-	logEntryService interfaces.WikiLogEntryService
+	wikiService       interfaces.WikiPageService
+	kbService         interfaces.KnowledgeBaseService
+	lintService       *service.WikiLintService
+	logEntryService   interfaces.WikiLogEntryService
+	governanceService interfaces.WikiGovernanceService
+	task              interfaces.TaskEnqueuer
+	pendingRepo       interfaces.TaskPendingOpsRepository
 }
 
 // NewWikiPageHandler creates a new wiki page handler
@@ -31,12 +35,18 @@ func NewWikiPageHandler(
 	kbService interfaces.KnowledgeBaseService,
 	lintService *service.WikiLintService,
 	logEntryService interfaces.WikiLogEntryService,
+	governanceService interfaces.WikiGovernanceService,
+	task interfaces.TaskEnqueuer,
+	pendingRepo interfaces.TaskPendingOpsRepository,
 ) *WikiPageHandler {
 	return &WikiPageHandler{
-		wikiService:     wikiService,
-		kbService:       kbService,
-		lintService:     lintService,
-		logEntryService: logEntryService,
+		wikiService:       wikiService,
+		kbService:         kbService,
+		lintService:       lintService,
+		logEntryService:   logEntryService,
+		governanceService: governanceService,
+		task:              task,
+		pendingRepo:       pendingRepo,
 	}
 }
 
@@ -113,17 +123,21 @@ func (h *WikiPageHandler) ListPages(c *gin.Context) {
 	}
 
 	req := &types.WikiPageListRequest{
-		KnowledgeBaseID: kbID,
-		PageType:        c.Query("page_type"),
-		Status:          c.Query("status"),
-		Query:           c.Query("query"),
-		FolderID:        folderID,
-		CategoryPath:    types.StringArray(categoryPath),
-		CategoryDepth:   categoryDepth,
-		Page:            page,
-		PageSize:        pageSize,
-		SortBy:          c.DefaultQuery("sort_by", "updated_at"),
-		SortOrder:       c.DefaultQuery("sort_order", "desc"),
+		KnowledgeBaseID:   kbID,
+		PageType:          c.Query("page_type"),
+		Status:            c.Query("status"),
+		KnowledgeType:     c.Query("knowledge_type"),
+		ReviewStatus:      c.Query("review_status"),
+		MaturityStatus:    c.Query("maturity_status"),
+		IncludeUnreviewed: false,
+		Query:             c.Query("query"),
+		FolderID:          folderID,
+		CategoryPath:      types.StringArray(categoryPath),
+		CategoryDepth:     categoryDepth,
+		Page:              page,
+		PageSize:          pageSize,
+		SortBy:            c.DefaultQuery("sort_by", "updated_at"),
+		SortOrder:         c.DefaultQuery("sort_order", "desc"),
 	}
 
 	resp, err := h.wikiService.ListPages(c.Request.Context(), req)
@@ -363,6 +377,15 @@ func (h *WikiPageHandler) CreatePage(c *gin.Context) {
 
 	page.KnowledgeBaseID = kbID
 	page.TenantID = tenantID
+	if page.PageType == types.WikiPageTypeCard {
+		set, submitErr := h.governanceService.SubmitCandidate(c.Request.Context(), &page, nil, "", "manual")
+		if submitErr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": submitErr.Error()})
+			return
+		}
+		c.JSON(http.StatusAccepted, gin.H{"change_set": set})
+		return
+	}
 
 	created, err := h.wikiService.CreatePage(c.Request.Context(), &page)
 	if err != nil {
@@ -406,6 +429,17 @@ func (h *WikiPageHandler) GetPage(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	if page.PageType == types.WikiPageTypeCard {
+		now := time.Now()
+		visible := page.ReviewStatus == types.WikiReviewApproved &&
+			(page.MaturityStatus == types.WikiMaturityVerified || page.MaturityStatus == types.WikiMaturityPartiallyVerified) &&
+			(page.EffectiveFrom == nil || !page.EffectiveFrom.After(now)) &&
+			(page.EffectiveTo == nil || page.EffectiveTo.After(now))
+		if !visible {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Wiki page not found"})
+			return
+		}
+	}
 
 	c.JSON(http.StatusOK, page)
 }
@@ -445,6 +479,25 @@ func (h *WikiPageHandler) UpdatePage(c *gin.Context) {
 	page.KnowledgeBaseID = kbID
 	page.TenantID = tenantID
 	page.Slug = slug
+	existing, existingErr := h.wikiService.GetPageBySlug(c.Request.Context(), kbID, slug)
+	if existingErr != nil {
+		if stderrors.Is(existingErr, repository.ErrWikiPageNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Wiki page not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": existingErr.Error()})
+		return
+	}
+	if existing.PageType == types.WikiPageTypeCard {
+		page.PageType = types.WikiPageTypeCard
+		set, submitErr := h.governanceService.SubmitCandidate(c.Request.Context(), &page, existing, "", "manual")
+		if submitErr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": submitErr.Error()})
+			return
+		}
+		c.JSON(http.StatusAccepted, gin.H{"change_set": set})
+		return
+	}
 
 	updated, err := h.wikiService.UpdatePage(c.Request.Context(), &page)
 	if err != nil {
@@ -482,6 +535,24 @@ func (h *WikiPageHandler) DeletePage(c *gin.Context) {
 		return
 	}
 
+	existing, getErr := h.wikiService.GetPageBySlug(c.Request.Context(), kbID, slug)
+	if getErr == nil && existing.PageType == types.WikiPageTypeCard {
+		candidate := *existing
+		candidate.Status = types.WikiPageStatusArchived
+		candidate.MaturityStatus = types.WikiMaturityArchived
+		candidate.ReviewStatus = types.WikiReviewPending
+		set, submitErr := h.governanceService.SubmitCandidate(c.Request.Context(), &candidate, existing, "", "manual")
+		if submitErr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": submitErr.Error()})
+			return
+		}
+		c.JSON(http.StatusAccepted, gin.H{"change_set": set})
+		return
+	}
+	if getErr != nil && !stderrors.Is(getErr, repository.ErrWikiPageNotFound) {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": getErr.Error()})
+		return
+	}
 	if err := h.wikiService.DeletePage(c.Request.Context(), kbID, slug); err != nil {
 		if stderrors.Is(err, repository.ErrWikiPageNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Wiki page not found"})
@@ -895,4 +966,406 @@ func (h *WikiPageHandler) AutoFix(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"fixed": fixed, "message": fmt.Sprintf("Auto-fixed %d issues", fixed)})
+}
+
+func (h *WikiPageHandler) ListChangeSets(c *gin.Context) {
+	kbID, _, err := h.validateWikiKB(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
+	sets, total, err := h.governanceService.ListChangeSets(c.Request.Context(), types.WikiGovernanceListRequest{KnowledgeBaseID: kbID, Status: c.Query("status"), ReviewLevel: c.Query("review_level"), Limit: limit, Offset: offset})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"change_sets": sets, "total": total})
+}
+
+func (h *WikiPageHandler) SubmitCardCandidate(c *gin.Context) {
+	kbID, tenantID, err := h.validateWikiKB(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	var page types.WikiPage
+	if err := c.ShouldBindJSON(&page); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	page.KnowledgeBaseID, page.TenantID, page.PageType = kbID, tenantID, types.WikiPageTypeCard
+	if strings.TrimSpace(page.Slug) == "" || strings.TrimSpace(page.Title) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "slug and title are required"})
+		return
+	}
+	var existing *types.WikiPage
+	if found, findErr := h.wikiService.GetPageBySlug(c.Request.Context(), kbID, page.Slug); findErr == nil {
+		existing = found
+	} else if !stderrors.Is(findErr, repository.ErrWikiPageNotFound) {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": findErr.Error()})
+		return
+	}
+	knowledgeID := ""
+	if len(page.SourceRefs) > 0 {
+		knowledgeID = strings.SplitN(page.SourceRefs[0], "|", 2)[0]
+	}
+	set, err := h.governanceService.SubmitCandidate(c.Request.Context(), &page, existing, knowledgeID, "manual")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusAccepted, gin.H{"change_set": set})
+}
+
+func (h *WikiPageHandler) GetGovernanceStats(c *gin.Context) {
+	kbID, _, err := h.validateWikiKB(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	stats, err := h.governanceService.GetGovernanceStats(c.Request.Context(), kbID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, stats)
+}
+
+func (h *WikiPageHandler) RecordGovernanceMetric(c *gin.Context) {
+	kbID, _, err := h.validateWikiKB(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	var event types.WikiGovernanceMetricEvent
+	if err := c.ShouldBindJSON(&event); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if event.MetricName != "hypothesis_answered_as_fact" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported metric_name"})
+		return
+	}
+	event.KnowledgeBaseID = kbID
+	if err := h.governanceService.RecordGovernanceMetric(c.Request.Context(), &event); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusCreated, event)
+}
+
+// ReclassifyLegacyWiki progressively sends source documents referenced by
+// legacy summary/entity/concept pages through the scenario-card extractor.
+// Every candidate produced by this path is forced to L1/L2 review, so the
+// existing Wiki remains untouched until an owner explicitly approves it.
+func (h *WikiPageHandler) ReclassifyLegacyWiki(c *gin.Context) {
+	kbID, tenantID, err := h.validateWikiKB(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "100"))
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 100
+	}
+	if pageSize > 200 {
+		pageSize = 200
+	}
+	result, err := h.wikiService.ListPages(c.Request.Context(), &types.WikiPageListRequest{
+		KnowledgeBaseID:   kbID,
+		PageType:          strings.Join([]string{types.WikiPageTypeSummary, types.WikiPageTypeEntity, types.WikiPageTypeConcept}, ","),
+		IncludeUnreviewed: true,
+		Page:              page,
+		PageSize:          pageSize,
+		SortBy:            "created_at",
+		SortOrder:         "asc",
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	knowledgeIDs := map[string]struct{}{}
+	for _, wikiPage := range result.Pages {
+		if wikiPage == nil {
+			continue
+		}
+		for _, ref := range wikiPage.SourceRefs {
+			id := strings.TrimSpace(strings.SplitN(ref, "|", 2)[0])
+			if id != "" {
+				knowledgeIDs[id] = struct{}{}
+			}
+		}
+	}
+	queued := 0
+	failures := map[string]string{}
+	for knowledgeID := range knowledgeIDs {
+		if err := service.EnqueueWikiReclassification(c.Request.Context(), h.task, h.pendingRepo, tenantID, kbID, knowledgeID); err != nil {
+			failures[knowledgeID] = err.Error()
+			continue
+		}
+		queued++
+	}
+	status := http.StatusAccepted
+	if queued == 0 && len(failures) > 0 {
+		status = http.StatusServiceUnavailable
+	}
+	c.JSON(status, gin.H{
+		"queued_documents": queued,
+		"failed_documents": failures,
+		"scanned_pages":    len(result.Pages),
+		"page":             page,
+		"total_pages":      result.TotalPages,
+		"has_more":         page < result.TotalPages,
+		"next_page":        page + 1,
+	})
+}
+
+func (h *WikiPageHandler) GetChangeSet(c *gin.Context) {
+	kbID, _, err := h.validateWikiKB(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	set, err := h.governanceService.GetChangeSet(c.Request.Context(), kbID, c.Param("change_set_id"))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+	reviews, _ := h.governanceService.ListReviews(c.Request.Context(), set.ID)
+	c.JSON(http.StatusOK, gin.H{"change_set": set, "reviews": reviews})
+}
+
+func (h *WikiPageHandler) ListCardHistory(c *gin.Context) {
+	kbID, _, err := h.validateWikiKB(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	slug := strings.TrimSpace(c.Query("slug"))
+	if slug == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "slug is required"})
+		return
+	}
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+	sets, err := h.governanceService.ListPageChangeSets(c.Request.Context(), kbID, slug, limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"change_sets": sets})
+}
+
+func (h *WikiPageHandler) ReviewChangeSet(c *gin.Context) {
+	kbID, _, err := h.validateWikiKB(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	var req types.WikiReviewDecision
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if req.Decision != types.WikiReviewApproved && req.Decision != types.WikiReviewRejected {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "decision must be approved or rejected"})
+		return
+	}
+	if err := h.governanceService.ReviewChangeSet(c.Request.Context(), kbID, c.Param("change_set_id"), c.GetString(types.UserIDContextKey.String()), &req); err != nil {
+		status := http.StatusInternalServerError
+		if stderrors.Is(err, repository.ErrWikiChangeSetConflict) {
+			status = http.StatusConflict
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	_ = h.wikiService.RebuildLinks(c.Request.Context(), kbID)
+	c.JSON(http.StatusOK, gin.H{"status": req.Decision})
+}
+
+func (h *WikiPageHandler) BatchReviewChangeSets(c *gin.Context) {
+	kbID, _, err := h.validateWikiKB(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	var req struct {
+		ChangeSetIDs []string `json:"change_set_ids" binding:"required"`
+		Decision     string   `json:"decision" binding:"required"`
+		Comment      string   `json:"comment"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || len(req.ChangeSetIDs) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "change_set_ids and decision are required"})
+		return
+	}
+	if req.Decision != types.WikiReviewApproved && req.Decision != types.WikiReviewRejected {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "decision must be approved or rejected"})
+		return
+	}
+	if len(req.ChangeSetIDs) > 100 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "at most 100 change sets can be reviewed at once"})
+		return
+	}
+	reviewerID := c.GetString(types.UserIDContextKey.String())
+	results := make([]gin.H, 0, len(req.ChangeSetIDs))
+	applied := 0
+	for _, id := range req.ChangeSetIDs {
+		set, getErr := h.governanceService.GetChangeSet(c.Request.Context(), kbID, id)
+		if getErr != nil {
+			results = append(results, gin.H{"id": id, "success": false, "error": getErr.Error()})
+			continue
+		}
+		if set.ReviewLevel != types.WikiReviewLevelL1 {
+			results = append(results, gin.H{"id": id, "success": false, "error": "only L1 change sets support batch review"})
+			continue
+		}
+		decision := &types.WikiReviewDecision{Decision: req.Decision, Comment: req.Comment}
+		if reviewErr := h.governanceService.ReviewChangeSet(c.Request.Context(), kbID, id, reviewerID, decision); reviewErr != nil {
+			results = append(results, gin.H{"id": id, "success": false, "error": reviewErr.Error()})
+			continue
+		}
+		applied++
+		results = append(results, gin.H{"id": id, "success": true})
+	}
+	if applied > 0 && req.Decision == types.WikiReviewApproved {
+		_ = h.wikiService.RebuildLinks(c.Request.Context(), kbID)
+	}
+	c.JSON(http.StatusOK, gin.H{"processed": len(req.ChangeSetIDs), "succeeded": applied, "results": results})
+}
+
+func (h *WikiPageHandler) CreateRollbackChangeSet(c *gin.Context) {
+	kbID, _, err := h.validateWikiKB(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	set, err := h.governanceService.CreateRollbackChangeSet(c.Request.Context(), kbID, c.Param("change_set_id"), c.GetString(types.UserIDContextKey.String()))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{"change_set": set})
+}
+
+func (h *WikiPageHandler) ListPackages(c *gin.Context) {
+	kbID, _, err := h.validateWikiKB(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	items, err := h.governanceService.ListPackages(c.Request.Context(), kbID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"packages": items})
+}
+func (h *WikiPageHandler) CreatePackage(c *gin.Context) {
+	kbID, tenantID, err := h.validateWikiKB(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	var item types.WikiPackage
+	if err := c.ShouldBindJSON(&item); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	item.KnowledgeBaseID = kbID
+	item.TenantID = tenantID
+	if strings.TrimSpace(item.Name) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "name is required"})
+		return
+	}
+	if err := h.governanceService.CreatePackage(c.Request.Context(), &item); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusCreated, item)
+}
+func (h *WikiPageHandler) ListPackagePages(c *gin.Context) {
+	kbID, _, err := h.validateWikiKB(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	pages, err := h.governanceService.ListPackagePages(c.Request.Context(), kbID, c.Param("package_id"))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"pages": pages})
+}
+func (h *WikiPageHandler) SetPackagePages(c *gin.Context) {
+	kbID, _, err := h.validateWikiKB(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	var req struct {
+		PageIDs []string `json:"page_ids"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := h.governanceService.SetPackagePages(c.Request.Context(), kbID, c.Param("package_id"), req.PageIDs); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"page_ids": req.PageIDs})
+}
+func (h *WikiPageHandler) ListScenarios(c *gin.Context) {
+	kbID, _, err := h.validateWikiKB(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	items, err := h.governanceService.ListScenarios(c.Request.Context(), kbID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"scenarios": items})
+}
+func (h *WikiPageHandler) CreateScenario(c *gin.Context) {
+	kbID, tenantID, err := h.validateWikiKB(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	var item types.WikiScenario
+	if err := c.ShouldBindJSON(&item); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	item.KnowledgeBaseID = kbID
+	item.TenantID = tenantID
+	if strings.TrimSpace(item.Name) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "name is required"})
+		return
+	}
+	if err := h.governanceService.CreateScenario(c.Request.Context(), &item); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusCreated, item)
+}
+func (h *WikiPageHandler) ListScenarioPages(c *gin.Context) {
+	kbID, _, err := h.validateWikiKB(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	pages, err := h.governanceService.ListScenarioPages(c.Request.Context(), kbID, c.Param("scenario_id"))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"pages": pages})
 }

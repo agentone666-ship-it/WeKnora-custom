@@ -74,6 +74,11 @@
               <span class="legend-dot" style="background: #d54941"></span>
               {{ $t('knowledgeEditor.wikiBrowser.filterComparison') }}
             </div>
+            <div class="legend-item clickable" :class="{ disabled: !graphFilterTypes.has('card') }"
+              @click="toggleGraphFilterType('card')">
+              <span class="legend-dot" style="background: #7b61ff"></span>
+              知识卡片
+            </div>
           </div>
           <div class="legend-divider"></div>
           <div class="legend-actions">
@@ -177,6 +182,10 @@
                 stats.pending_issues
             }) }}</span>
           </div>
+          <t-button v-if="props.canEdit" variant="outline" block @click="reviewPanelVisible = true">
+            <template #icon><t-icon name="task-checked" /></template>
+            变更审核<span v-if="pendingReviewCount"> ({{ pendingReviewCount }})</span>
+          </t-button>
           <t-input v-model="searchQuery" :placeholder="$t('knowledgeEditor.wikiBrowser.searchPlaceholder')" clearable
             @enter="doSearch" @clear="searchResults = null">
             <template #prefixIcon><t-icon name="search" /></template>
@@ -664,6 +673,9 @@
         :kbIds="[props.knowledgeBaseId]" :embeddedMode="true" />
     </t-drawer>
 
+    <WikiReviewPanel v-if="props.canEdit" v-model="reviewPanelVisible" :knowledge-base-id="props.knowledgeBaseId"
+      @count-change="pendingReviewCount = $event" @published="handleReviewPublished" />
+
     <!-- In-place move confirmation, anchored at the drop point. Confirming runs
          the actual move API; cancelling discards the staged move. -->
     <teleport to="body">
@@ -702,6 +714,7 @@ import { RecycleScroller } from 'vue-virtual-scroller'
 import { hydrateProtectedFileImages, sanitizeMarkdownHTML } from '@/utils/security'
 import picturePreview from '@/components/picture-preview.vue'
 import WikiFolderActions from './WikiFolderActions.vue'
+import WikiReviewPanel from './WikiReviewPanel.vue'
 import { createSessions } from '@/api/chat'
 import ChatView from '@/views/chat/index.vue'
 import {
@@ -847,6 +860,7 @@ let indexObserver: IntersectionObserver | null = null
 // plan's "intro then Summary → Entity → Concept → …" progression.
 const INDEX_SECTION_ORDER = [
   'summary',
+  'card',
   'entity',
   'concept',
   'synthesis',
@@ -885,6 +899,8 @@ const showGlobalIssuesDrawer = ref(false)
 const globalIssues = ref<WikiPageIssue[]>([])
 const currentFixSessionId = ref('')
 const stats = ref<WikiStats | null>(null)
+const reviewPanelVisible = ref(false)
+const pendingReviewCount = ref(0)
 const graphData = ref<WikiGraphData | null>(null)
 const searchQuery = ref('')
 const graphSearchValue = ref('')
@@ -897,7 +913,7 @@ const graphReady = ref(false)
 const showArrows = ref(true)
 
 // Graph filtering
-const graphFilterTypes = ref<Set<string>>(new Set(['summary', 'entity', 'concept', 'synthesis', 'comparison', 'index', 'log']))
+const graphFilterTypes = ref<Set<string>>(new Set(['summary', 'card', 'entity', 'concept', 'synthesis', 'comparison', 'index', 'log']))
 
 // Graph slicing state. The backend caps an overview fetch at 500 nodes —
 // tens-of-thousands-page wikis would otherwise crash the browser trying to
@@ -1056,14 +1072,14 @@ const navFromSystemView = ref<'' | 'index' | 'log'>('')
 // typeOrder drives the order of groups in the sidebar. Keep in sync
 // with WIKI_PAGE_TYPES on the backend; unknown types fall through to
 // the "other" bucket at the bottom of groupedPages.
-const typeOrder = ['summary', 'entity', 'concept', 'synthesis', 'comparison']
+const typeOrder = ['summary', 'card', 'entity', 'concept', 'synthesis', 'comparison']
 
 // Entity and concept pages look and behave alike, so the sidebar merges all
 // non-summary content types under a single "knowledge" tab and distinguishes
 // the individual page types by icon instead. Summary keeps its own tab and is
 // shown after the knowledge tab.
 const KNOWLEDGE_TAB = 'knowledge'
-const KNOWLEDGE_TYPES = ['entity', 'concept', 'synthesis', 'comparison']
+const KNOWLEDGE_TYPES = ['card', 'entity', 'concept', 'synthesis', 'comparison']
 // CONTENT_TABS are the sidebar tabs in display order: the merged knowledge tab
 // first, then summary. Each tab maps to its own bucket keyed by the tab id.
 const CONTENT_TABS = [KNOWLEDGE_TAB, 'summary']
@@ -1822,7 +1838,7 @@ watch([activeTreeRows, treeListRef], () => {
 
 function getTypeTheme(type: string): string {
   const map: Record<string, string> = {
-    summary: 'primary', entity: 'success', concept: 'warning',
+    summary: 'primary', card: 'primary', entity: 'success', concept: 'warning',
     synthesis: 'primary', comparison: 'danger', index: 'default', log: 'default',
   }
   return map[type] || 'default'
@@ -1832,6 +1848,7 @@ function getTypeLabel(type: string): string {
   const map: Record<string, string> = {
     knowledge: t('knowledgeEditor.wikiBrowser.filterKnowledge'),
     summary: t('knowledgeEditor.wikiBrowser.filterSummary'),
+    card: '知识卡片',
     entity: t('knowledgeEditor.wikiBrowser.filterEntity'),
     concept: t('knowledgeEditor.wikiBrowser.filterConcept'),
     synthesis: t('knowledgeEditor.wikiBrowser.filterSynthesis'),
@@ -1847,6 +1864,7 @@ function getTypeLabel(type: string): string {
 function getPageIcon(page: WikiPage): string {
   const map: Record<string, string> = {
     entity: 'tag',
+    card: 'task-checked',
     concept: 'lightbulb',
     synthesis: 'relativity',
     comparison: 'view-module',
@@ -2722,6 +2740,13 @@ async function loadPages() {
 
 let statsTimer: ReturnType<typeof setInterval> | null = null
 
+function handleReviewPublished() {
+  loadStats()
+  loadPages()
+  refreshSelectedPage()
+  if (props.view === 'graph') loadGraph()
+}
+
 async function loadStats() {
   try {
     const res = await getWikiStats(props.knowledgeBaseId)
@@ -3372,7 +3397,7 @@ const graphSelectedSlug = ref<string | null>(null)
 
 // Color map for node types
 const nodeColorMap: Record<string, string> = {
-  summary: '#0052d9', entity: '#2ba471', concept: '#e37318',
+  summary: '#0052d9', card: '#7b61ff', entity: '#2ba471', concept: '#e37318',
   synthesis: '#0594fa', comparison: '#d54941', index: '#8c8c8c', log: '#8c8c8c',
 }
 

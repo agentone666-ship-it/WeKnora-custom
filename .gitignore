@@ -37,6 +37,9 @@ data/files/
 data/weknora.db
 data/weknora.db-wal
 data/weknora.db-shm
+data/weknora-mcp-admin.db
+data/weknora-mcp-admin.db-wal
+data/weknora-mcp-admin.db-shm
 skills-lock.json
 
 web/

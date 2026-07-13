@@ -79,6 +79,9 @@ func (t *wikiReplaceTextTool) Execute(ctx context.Context, args json.RawMessage)
 	if err != nil {
 		return &types.ToolResult{Success: false, Error: fmt.Sprintf("Failed to fetch page %s: %v", params.Slug, err)}, nil
 	}
+	if existingPage.PageType == types.WikiPageTypeCard {
+		return &types.ToolResult{Success: false, Error: "Governed card pages cannot be edited by wiki_replace_text; submit a reviewed ChangeSet instead"}, nil
+	}
 
 	if !strings.Contains(existingPage.Content, params.OldText) {
 		return &types.ToolResult{Success: false, Error: "old_text not found in the current page content. Ensure you copy it exactly as it appears."}, nil

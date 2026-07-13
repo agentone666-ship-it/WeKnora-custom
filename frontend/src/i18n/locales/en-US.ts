@@ -1,5 +1,6 @@
 export default {
   menu: {
+    mcpCallLogs: "MCP Call Logs",
     knowledgeBase: 'Knowledge Base',
     agents: 'Agents',
     integrations: 'Publish & Integrations',

@@ -69,6 +69,9 @@ func (t *wikiRenamePageTool) Execute(ctx context.Context, args json.RawMessage) 
 	if err != nil {
 		return &types.ToolResult{Success: false, Error: fmt.Sprintf("Page %s not found. Cannot rename a non-existent page.", params.Slug)}, nil
 	}
+	if existingPage.PageType == types.WikiPageTypeCard {
+		return &types.ToolResult{Success: false, Error: "Governed card pages cannot be renamed outside the ChangeSet review workflow"}, nil
+	}
 
 	inLinks := make([]string, len(existingPage.InLinks))
 	copy(inLinks, existingPage.InLinks)
@@ -95,7 +98,7 @@ func (t *wikiRenamePageTool) Execute(ctx context.Context, args json.RawMessage) 
 		sourcePage, err := t.wikiPageService.GetPageBySlug(ctx, kbID, sourceSlug)
 		if err == nil {
 			changed := false
-			
+
 			// Replace [[old-slug]] with [[new-slug]]
 			link1 := "[[" + params.Slug + "]]"
 			newLink1 := "[[" + params.NewSlug + "]]"
@@ -103,7 +106,7 @@ func (t *wikiRenamePageTool) Execute(ctx context.Context, args json.RawMessage) 
 				sourcePage.Content = strings.ReplaceAll(sourcePage.Content, link1, newLink1)
 				changed = true
 			}
-			
+
 			// Replace [[old-slug|text]] with [[new-slug|text]]
 			link2 := "[[" + params.Slug + "|"
 			newLink2 := "[[" + params.NewSlug + "|"
@@ -113,7 +116,12 @@ func (t *wikiRenamePageTool) Execute(ctx context.Context, args json.RawMessage) 
 			}
 
 			if changed {
-				_, updateErr := t.wikiPageService.UpdatePage(ctx, sourcePage)
+				var updateErr error
+				if sourcePage.PageType == types.WikiPageTypeCard {
+					updateErr = t.wikiPageService.UpdateAutoLinkedContent(ctx, sourcePage)
+				} else {
+					_, updateErr = t.wikiPageService.UpdatePage(ctx, sourcePage)
+				}
 				if updateErr == nil {
 					updatedCount++
 					updatedSlugs = append(updatedSlugs, sourceSlug)
@@ -143,12 +151,12 @@ func (t *wikiRenamePageTool) Execute(ctx context.Context, args json.RawMessage) 
 		Success: true,
 		Output:  outputMsg,
 		Data: map[string]interface{}{
-			"display_type":    "wiki_rename_page",
-			"old_slug":        params.Slug,
-			"new_slug":        params.NewSlug,
-			"title":           existingPage.Title,
-			"updated_count":   updatedCount,
-			"affected_pages":  updatedSlugs,
+			"display_type":   "wiki_rename_page",
+			"old_slug":       params.Slug,
+			"new_slug":       params.NewSlug,
+			"title":          existingPage.Title,
+			"updated_count":  updatedCount,
+			"affected_pages": updatedSlugs,
 		},
 	}, nil
 }

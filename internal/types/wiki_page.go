@@ -128,6 +128,44 @@ const (
 	// NOT auto-created by ingest — Agent creates these via wiki_write_page tool
 	// when the user asks to compare entities, concepts, or approaches.
 	WikiPageTypeComparison = "comparison"
+	WikiPageTypeCard       = "card"
+	WikiPageTypePackage    = "package"
+	WikiPageTypeScenario   = "scenario"
+)
+
+const (
+	WikiKnowledgeTypeKnowledge  = "knowledge"
+	WikiKnowledgeTypeExperience = "experience"
+	WikiKnowledgeTypeQuestion   = "question"
+	WikiKnowledgeTypeHypothesis = "hypothesis"
+	WikiKnowledgeTypeExperiment = "experiment"
+	WikiKnowledgeTypeMetric     = "metric"
+	WikiKnowledgeTypeProcedure  = "procedure"
+	WikiKnowledgeTypeFailure    = "failure"
+	WikiKnowledgeTypeCase       = "case"
+	WikiKnowledgeTypeRule       = "rule"
+)
+
+const (
+	WikiMaturityDraft             = "draft"
+	WikiMaturityPendingReview     = "pending_review"
+	WikiMaturityVerified          = "verified"
+	WikiMaturityPartiallyVerified = "partially_verified"
+	WikiMaturityDisputed          = "disputed"
+	WikiMaturityOutdated          = "outdated"
+	WikiMaturityUnsupported       = "unsupported"
+	WikiMaturityRejected          = "rejected"
+	WikiMaturityArchived          = "archived"
+
+	WikiReviewPending  = "pending"
+	WikiReviewApproved = "approved"
+	WikiReviewRejected = "rejected"
+
+	WikiAnswerStrengthStrong  = "strong"
+	WikiAnswerStrengthMedium  = "medium"
+	WikiAnswerStrengthWeak    = "weak"
+	WikiAnswerStrengthNone    = "none"
+	WikiAnswerStrengthUnknown = "unknown"
 )
 
 // WikiPageStatus constants
@@ -157,6 +195,21 @@ type WikiPage struct {
 	Title string `json:"title" gorm:"type:varchar(512)"`
 	// Page type: summary, entity, concept, index, log, synthesis, comparison
 	PageType string `json:"page_type" gorm:"type:varchar(32);index"`
+	// KnowledgeType classifies a card's business semantics independently of PageType.
+	KnowledgeType    string      `json:"knowledge_type,omitempty" gorm:"type:varchar(32);index;default:''"`
+	MaturityStatus   string      `json:"maturity_status,omitempty" gorm:"type:varchar(32);index;default:''"`
+	AnswerStrength   string      `json:"answer_strength,omitempty" gorm:"type:varchar(16);default:'unknown'"`
+	ReviewStatus     string      `json:"review_status,omitempty" gorm:"type:varchar(32);index;default:'approved'"`
+	BusinessLine     string      `json:"business_line,omitempty" gorm:"type:varchar(128);index;default:''"`
+	ScenarioIDs      StringArray `json:"scenario_ids,omitempty" gorm:"type:json"`
+	AudienceRoles    StringArray `json:"audience_roles,omitempty" gorm:"type:json"`
+	AffectedMetrics  StringArray `json:"affected_metrics,omitempty" gorm:"type:json"`
+	Applicability    JSON        `json:"applicability,omitempty" gorm:"type:json"`
+	ProhibitedClaims StringArray `json:"prohibited_claims,omitempty" gorm:"type:json"`
+	ReviewedBy       string      `json:"reviewed_by,omitempty" gorm:"type:varchar(36);default:''"`
+	ReviewedAt       *time.Time  `json:"reviewed_at,omitempty"`
+	EffectiveFrom    *time.Time  `json:"effective_from,omitempty"`
+	EffectiveTo      *time.Time  `json:"effective_to,omitempty"`
 	// Page status: draft, published, archived
 	Status string `json:"status" gorm:"type:varchar(32);default:'published'"`
 	// Full markdown content
@@ -443,17 +496,21 @@ func (c *WikiConfig) Scan(value interface{}) error {
 
 // WikiPageListRequest represents a request to list wiki pages with filtering
 type WikiPageListRequest struct {
-	KnowledgeBaseID string      `json:"knowledge_base_id"`
-	PageType        string      `json:"page_type,omitempty"`      // filter by type
-	Status          string      `json:"status,omitempty"`         // filter by status
-	Query           string      `json:"query,omitempty"`          // full-text search
-	FolderID        *string     `json:"folder_id,omitempty"`      // exact folder placement ("" = root)
-	CategoryPath    StringArray `json:"category_path,omitempty"`  // exact directory path
-	CategoryDepth   *int        `json:"category_depth,omitempty"` // exact directory depth, including 0 for root
-	Page            int         `json:"page,omitempty"`           // pagination page (1-based)
-	PageSize        int         `json:"page_size,omitempty"`      // pagination size
-	SortBy          string      `json:"sort_by,omitempty"`        // "updated_at", "created_at", "title"
-	SortOrder       string      `json:"sort_order,omitempty"`     // "asc" or "desc"
+	KnowledgeBaseID   string      `json:"knowledge_base_id"`
+	PageType          string      `json:"page_type,omitempty"` // filter by type
+	Status            string      `json:"status,omitempty"`    // filter by status
+	KnowledgeType     string      `json:"knowledge_type,omitempty"`
+	ReviewStatus      string      `json:"review_status,omitempty"`
+	MaturityStatus    string      `json:"maturity_status,omitempty"`
+	IncludeUnreviewed bool        `json:"include_unreviewed,omitempty"`
+	Query             string      `json:"query,omitempty"`          // full-text search
+	FolderID          *string     `json:"folder_id,omitempty"`      // exact folder placement ("" = root)
+	CategoryPath      StringArray `json:"category_path,omitempty"`  // exact directory path
+	CategoryDepth     *int        `json:"category_depth,omitempty"` // exact directory depth, including 0 for root
+	Page              int         `json:"page,omitempty"`           // pagination page (1-based)
+	PageSize          int         `json:"page_size,omitempty"`      // pagination size
+	SortBy            string      `json:"sort_by,omitempty"`        // "updated_at", "created_at", "title"
+	SortOrder         string      `json:"sort_order,omitempty"`     // "asc" or "desc"
 }
 
 // WikiPageListResponse represents a paginated list of wiki pages
@@ -464,7 +521,6 @@ type WikiPageListResponse struct {
 	PageSize   int         `json:"page_size"`
 	TotalPages int         `json:"total_pages"`
 }
-
 
 // WikiGraphMode enumerates the graph query modes exposed to the API.
 const (
