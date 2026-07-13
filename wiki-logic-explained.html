@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>WeKnora Wiki 生成逻辑解析</title>
+  <style>
+    :root{--bg:#07111f;--panel:#0d1b2d;--panel2:#10233a;--text:#e8f0fa;--muted:#9db0c8;--line:#29425f;--llm:#a78bfa;--rule:#22d3a6;--warn:#fb7185;--blue:#60a5fa}
+    *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:radial-gradient(circle at 80% 0,#142a49 0,transparent 35%),var(--bg);color:var(--text);font:15px/1.75 system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif}
+    main{width:min(1120px,92vw);margin:auto;padding:64px 0 90px}h1{font-size:clamp(36px,6vw,68px);line-height:1.08;margin:12px 0 22px;letter-spacing:-2px}h2{font-size:28px;margin:70px 0 20px}h3{margin:0 0 10px;font-size:18px}p{color:var(--muted)}code{color:#b8d8ff;background:#081525;padding:2px 7px;border-radius:6px}.eyebrow{color:var(--rule);font-weight:750;letter-spacing:.14em}.lead{font-size:19px;max-width:850px}.verdict{margin:32px 0;padding:25px;border:1px solid #365a7f;border-left:5px solid var(--blue);border-radius:14px;background:linear-gradient(120deg,#10253e,#0c1929);font-size:20px}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}.card{background:linear-gradient(145deg,var(--panel2),var(--panel));border:1px solid var(--line);border-radius:15px;padding:20px}.card p{margin-bottom:0}.badge{display:inline-block;padding:3px 9px;border-radius:999px;font-size:12px;font-weight:800}.llm{color:#d8ccff;background:#6d4bc744;border:1px solid #8b6fe1}.rule{color:#a7f3d0;background:#087f5b44;border:1px solid #16a77c}.hybrid{color:#c8e1ff;background:#2264a944;border:1px solid #4387cf}.flow{display:flex;gap:10px;align-items:stretch;overflow:auto;padding:6px 2px 18px}.step{min-width:145px;flex:1;background:var(--panel);border:1px solid var(--line);border-radius:13px;padding:15px}.arrow{align-self:center;color:#5e7b9e;font-size:23px}.step b{display:block;margin-bottom:8px}.link-demo{display:grid;grid-template-columns:1fr auto 1fr;gap:20px;align-items:center}.node{padding:24px;text-align:center;background:var(--panel);border:1px solid var(--line);border-radius:50px}.edge{text-align:center;color:var(--rule);font-weight:800}.edge code{display:block;margin-bottom:7px}table{width:100%;border-collapse:collapse;background:var(--panel);border-radius:14px;overflow:hidden}th,td{text-align:left;padding:13px 15px;border-bottom:1px solid var(--line)}th{color:#bdd5ed;background:#11243a}.alert{border:1px solid #8c3447;background:#361522;padding:22px;border-radius:14px}.alert h3{color:#ff9aad}.formula{padding:22px;border:1px dashed #5184b7;border-radius:14px;background:#0a1828;color:#bedbfa;font-size:17px}ul{color:var(--muted);padding-left:20px}.foot{margin-top:58px;padding-top:20px;border-top:1px solid var(--line);font-size:13px}@media(max-width:760px){main{padding-top:38px}.grid{grid-template-columns:1fr}.link-demo{grid-template-columns:1fr}.edge{transform:rotate(90deg);margin:5px}.flow{flex-direction:column}.arrow{transform:rotate(90deg)}}
+  </style>
+</head>
+<body><main>
+  <div class="eyebrow">WEKNORA · WIKI PIPELINE</div>
+  <h1>Wiki 是怎么被<br>“抽”出来的？</h1>
+  <p class="lead">这份页面根据 WeKnora 源码梳理概念抽取、页面生成、页面连接和置信度的实际机制。</p>
+  <div class="verdict"><strong>一句话结论：</strong>它不是纯靠 LLM，也不是纯固定算法，而是<strong>固定 SOP 编排多个 LLM 语义判断，再用确定性代码校验、落库和维护关系</strong>的混合系统。</div>
+
+  <h2>先看懂这些技术名词</h2>
+  <p>先用一份介绍“腾讯用 RAG 建知识库”的文档举例。系统读完后，可能抽出“腾讯”和“RAG”两个 Wiki 页面。</p>
+  <div class="grid">
+    <article class="card"><h3>Entity（实体）</h3><p><strong>现实中可以明确指出来的具体对象。</strong>例如一个人、公司、产品、地点或事件。“腾讯”“马化腾”“微信”都属于 Entity。可以把它理解为 Wiki 中的“具体名词”。</p></article>
+    <article class="card"><h3>Concept（概念）</h3><p><strong>抽象的知识、方法、理论或主题。</strong>例如“RAG”“机器学习”“向量检索”。它不是某一家具体公司，而是一种可以被解释的方法或思想。</p></article>
+    <article class="card"><h3>Summary（摘要页）</h3><p><strong>一份原始文档的内容简介。</strong>Entity 和 Concept 是围绕某个对象组织知识；Summary 则回答“这整份文档讲了什么”。</p></article>
+    <article class="card"><h3>Slug（页面唯一名）</h3><p><strong>系统给页面使用的稳定地址和唯一标识。</strong>类似人的身份证号或网页路径。例如“腾讯”的标题可以改变，但 slug 可能一直是 <code>entity/tencent</code>，链接靠它找到正确页面。</p></article>
+    <article class="card"><h3>Alias（别名）</h3><p><strong>同一个对象的其他叫法。</strong>例如“腾讯控股”“Tencent”可以是“腾讯”的 Alias。正文命中别名时，也可能自动连接到同一个 Wiki 页面。</p></article>
+    <article class="card"><h3>Chunk（文档切片）</h3><p><strong>把长文档切成的小段文字。</strong>就像把一本书拆成许多带编号的段落。这样系统能指出某条 Wiki 内容具体来自哪一段，而不是只说“来自这本书”。</p></article>
+    <article class="card"><h3>Citation（引用 / 证据）</h3><p><strong>某条内容所依据的原文位置。</strong>当系统说一个 Chunk 支持“RAG”页面，就是在建立证据关系，方便追溯这句话从哪里来。</p></article>
+    <article class="card"><h3>SourceRefs / ChunkRefs</h3><p><strong>页面保存的来源清单。</strong><code>SourceRefs</code> 指向哪几份原始文档；<code>ChunkRefs</code> 更精确，指向文档中的哪些切片。</p></article>
+    <article class="card"><h3>InLinks / OutLinks</h3><p><strong>页面之间的来往连接。</strong>A 页面链接 B，A 就有一条 OutLink（出链）；B 会记录一条来自 A 的 InLink（入链）。</p></article>
+    <article class="card"><h3>Embedding（向量表示）</h3><p><strong>把文字转换成一串数字，让计算机比较语义是否接近。</strong>在这里主要用于筛选可能合适的目录，不会直接决定两个 Wiki 页面必须连接。</p></article>
+    <article class="card"><h3>Reduce（汇总合并阶段）</h3><p><strong>把不同文档抽出的同一主题合并成一个页面。</strong>例如三份文档都提到腾讯，系统会更新同一个腾讯页面，而不是简单生成三份重复页面。</p></article>
+    <article class="card"><h3>Fallback（兜底方案）</h3><p><strong>主要步骤失败时采用的备用内容。</strong>如果没有找到具体证据 Chunk，系统仍可能用候选抽取阶段生成的简短描述来创建页面。</p></article>
+  </div>
+  <div class="formula" style="margin-top:18px"><strong>把它串起来：</strong>长文档被切成 <b>Chunk</b> → LLM 从中识别具体的 <b>Entity</b> 和抽象的 <b>Concept</b> → 每个页面获得稳定的 <b>Slug</b> → 页面用 <b>SourceRefs / ChunkRefs</b> 记录证据 → 页面之间通过 <b>OutLinks / InLinks</b> 形成网络。</div>
+
+  <h2>完整生成流程</h2>
+  <div class="flow">
+    <div class="step"><span class="badge rule">固定规则</span><b>文档与 Chunk</b><small>读取切片、重建正文、截断，并拦截无有效文本的文档。</small></div><div class="arrow">→</div>
+    <div class="step"><span class="badge llm">LLM</span><b>候选抽取</b><small>识别重要 Entity / Concept，生成名称、别名、描述和 slug。</small></div><div class="arrow">→</div>
+    <div class="step"><span class="badge llm">LLM</span><b>证据分类</b><small>判断哪些 Chunk 实质支持每个候选，也允许补充遗漏候选。</small></div><div class="arrow">→</div>
+    <div class="step"><span class="badge hybrid">混合</span><b>页面合并</b><small>代码组织证据，LLM 更新正文、处理冲突与撤回。</small></div><div class="arrow">→</div>
+    <div class="step"><span class="badge hybrid">混合</span><b>目录与连接</b><small>目录候选向量预筛；LLM 分类；规则补链、清理死链。</small></div>
+  </div>
+
+  <h2>抽出了哪些 Wiki 页面？</h2>
+  <div class="grid">
+    <article class="card"><h3>Summary</h3><span class="badge hybrid">规则 + LLM</span><p>每份原始文档对应一个摘要页。正文由 LLM 概括，但 slug 按 Knowledge ID 确定生成：<code>summary/&lt;id&gt;</code>。</p></article>
+    <article class="card"><h3>Entity</h3><span class="badge llm">LLM 判断</span><p>人物、组织、产品、地点、技术、事件等具体对象，slug 采用 <code>entity/*</code>。</p></article>
+    <article class="card"><h3>Concept</h3><span class="badge llm">LLM 判断</span><p>主题、方法论、理论和抽象概念，slug 采用 <code>concept/*</code>。</p></article>
+  </div>
+  <p>LLM 决定“什么值得成为页面”，但 Prompt 和代码固定了边界：不能把简单提及提升成页面；Entity 与 Concept 不得重复；更新文档时应复用旧 slug；输出必须满足 JSON 和类型格式。</p>
+
+  <h2>页面正文如何形成？</h2>
+  <div class="grid">
+    <article class="card"><h3>证据优先</h3><p>引用分类阶段把候选关联到具体 Chunk。页面保存原始文档级 <code>SourceRefs</code> 和切片级 <code>ChunkRefs</code>。</p></article>
+    <article class="card"><h3>增量编辑</h3><p>已有页面不会简单覆盖。LLM 接收旧正文、新证据、删除来源及仍有效来源，然后执行添加、合并、冲突说明和撤回。</p></article>
+    <article class="card"><h3>固定约束</h3><p>新增事实要求引用；不得发明证据外信息；信息必须属于当前主题；链接只能使用合法 slug 白名单。</p></article>
+  </div>
+
+  <h2>Wiki 与 Wiki 为什么会连接？</h2>
+  <div class="verdict"><strong>这里最关键的理解：</strong>WeKnora 当前建立的不是“实体关系图谱”，而是“Wiki 页面引用网络”。它不会专门产出“腾讯—开发了→微信”或“RAG—依赖→向量检索”这样的关系类型；它表达的只是：<strong>A 页正文提到了 B 页代表的对象，所以 A 页链接到 B 页。</strong></div>
+
+  <h3>真正的语义连接条件</h3>
+  <div class="grid">
+    <article class="card"><h3>条件 1：B 已经是候选 Wiki</h3><p>B 必须先被抽取为 Entity 或 Concept，或者本来就是已有页面。只在正文中出现、但没有被抽成 Wiki 的普通词，不会有目标页面可连。</p></article>
+    <article class="card"><h3>条件 2：A 的正文确实提到 B</h3><p>A 页生成后的正文里必须出现 B 的标题或 Alias。例如“腾讯”页正文写到“微信”，并且“微信”已有 Wiki 页，才具备建立连接的条件。</p></article>
+    <article class="card"><h3>条件 3：B 在允许候选范围内</h3><p>系统不会拿整个知识库所有页面做全局语义判断。候选主要来自本批新写入的兄弟页面，以及 A 已有的出链目标；因此历史页面可能漏连。</p></article>
+  </div>
+
+  <h3 style="margin-top:28px">用具体例子理解</h3>
+  <table><thead><tr><th>文档或页面内容</th><th>是否连接</th><th>为什么</th></tr></thead><tbody>
+    <tr><td>“腾讯推出了微信。”且腾讯、微信都已抽成 Entity</td><td><span class="badge rule">会连接</span></td><td>腾讯页面正文出现“微信”，系统建立“腾讯页引用微信页”的边；但边本身不保存“推出了”这个关系类型。</td></tr>
+    <tr><td>“RAG 通常结合向量检索。”且两者都已抽成 Concept</td><td><span class="badge rule">会连接</span></td><td>RAG 页面正文出现“向量检索”，形成普通引用边；不会标记为“依赖关系”。</td></tr>
+    <tr><td>同一份文档分别提到腾讯和阿里，但两者没有出现在彼此页面正文中</td><td><span class="badge llm">不一定连接</span></td><td>仅仅来自同一份文档、同一目录或同一批次，不足以保证连接；必须有页面正文中的实际提及。</td></tr>
+    <tr><td>正文提到“数据库”，但“数据库”没有被抽成 Concept 页面</td><td><span class="badge llm">不连接</span></td><td>没有目标 Wiki 页面和 slug，普通文字不会凭空形成边。</td></tr>
+    <tr><td>两个页面向量很相似，但正文没有互相提及</td><td><span class="badge llm">不连接</span></td><td>Embedding/Qdrant 相似度不是建立 Wiki 边的条件。</td></tr>
+    <tr><td>A 页正文提到 B，但 B 是旧页面且没有进入本轮候选范围</td><td><span class="badge llm">可能漏连</span></td><td>自动补链为了性能只扫描有限候选，并非全知识库全量实体链接。</td></tr>
+  </tbody></table>
+
+  <h3 style="margin-top:28px">两条实际建链路径</h3>
+  <div class="grid">
+    <article class="card"><h3>摘要页中的 LLM 链接</h3><span class="badge llm">LLM 写作</span><p>系统把本文件抽出的 Wiki 清单交给 LLM。Prompt 要求：摘要中只要提到清单里某个页面的标题或别名，就必须写成 Wiki 链接。因此它仍然是“提到就连”，不是让 LLM 输出关系类别。</p></article>
+    <article class="card"><h3>页面生成后的规则补链</h3><span class="badge rule">精确文本规则</span><p>系统检查 A 页正文是否出现候选 B 的标题或别名。出现就把第一次安全命中变成链接；它不理解句子里的“属于、开发、竞争、依赖”等谓词。</p></article>
+    <article class="card"><h3>边表达了什么？</h3><span class="badge hybrid">引用关系</span><p>边只能可靠表达“A 页面提到了/引用了 B 页面”。真正的业务关系仍留在 A 页正文句子中，没有被结构化到边上。</p></article>
+  </div>
+
+  <p>因此，真正形成图连接的不是 Qdrant 相似度，而是正文里的 Wiki 标记：</p>
+  <div class="link-demo">
+    <div class="node">当前 Wiki 页面</div>
+    <div class="edge"><code>[[concept/rag|RAG]]</code>→ OutLinks<br>← InLinks</div>
+    <div class="node">concept/rag</div>
+  </div>
+  <div class="grid" style="margin-top:18px">
+    <article class="card"><h3>来源 A：LLM 写入</h3><span class="badge llm">LLM</span><p>摘要中提到合法清单里的页面名称或别名时，Prompt 强制 LLM 链接；不能发明新目标或自链接。</p></article>
+    <article class="card"><h3>来源 B：自动补链</h3><span class="badge rule">纯规则</span><p>代码扫描候选页面的标题和别名，正文精确命中后，把第一次安全出现转换为 <code>[[slug|原文]]</code>。</p></article>
+    <article class="card"><h3>最终落边</h3><span class="badge rule">纯规则</span><p>解析 <code>[[...]]</code> 得到 OutLinks，再同步目标页 InLinks。边没有 relation_type、语义标签、权重或置信度。</p></article>
+  </div>
+  <p>自动补链还会：优先匹配长名称；每个目标最多补一次；跳过代码块、行内代码、已有链接、Markdown 链接、图片和自链接。死链接则会尝试修复，否则退回普通文本。</p>
+
+  <h2>LLM 与固定 SOP 的分工</h2>
+  <table><thead><tr><th>环节</th><th>执行者</th><th>实际作用</th></tr></thead><tbody>
+    <tr><td>重要概念识别</td><td><span class="badge llm">LLM</span></td><td>判断什么值得成为 Entity / Concept</td></tr>
+    <tr><td>页面 slug 类型与连续性</td><td><span class="badge hybrid">混合</span></td><td>LLM 输出，Prompt 与代码限定格式并复用旧 slug</td></tr>
+    <tr><td>Chunk 证据匹配</td><td><span class="badge llm">LLM</span></td><td>判断候选由哪些具体切片支持</td></tr>
+    <tr><td>正文创建、合并与冲突处理</td><td><span class="badge hybrid">混合</span></td><td>LLM 编辑，固定 Prompt 约束证据和行为</td></tr>
+    <tr><td>目录组织</td><td><span class="badge hybrid">混合</span></td><td>Embedding 预筛候选目录，LLM 最终分配</td></tr>
+    <tr><td>标题/别名自动补链</td><td><span class="badge rule">固定规则</span></td><td>确定性字符串匹配，不调用 LLM</td></tr>
+    <tr><td>OutLinks / InLinks 落库</td><td><span class="badge rule">固定规则</span></td><td>解析 Wiki 标记并维护双向关系</td></tr>
+  </tbody></table>
+
+  <h2>有没有“自信度”？</h2>
+  <div class="alert"><h3>当前没有正式的页面级、事实级或边级 Confidence</h3><p>WikiPage、抽取结果和图节点/边中都没有 confidence 字段；Prompt 也不要求 LLM 返回 confidence。因此每个 Wiki 页面和页面连接都没有一个可供展示、排序或发布拦截的正式置信度。</p></div>
+  <div class="grid" style="margin-top:18px">
+    <article class="card"><h3>Jaccard Score</h3><p>只用于去重候选预筛，把可能重复的旧页面交给 LLM 判断；不存进 Wiki。</p></article>
+    <article class="card"><h3>Cosine Score</h3><p>只用于挑选可能相关的目录候选；不代表页面可信度或连接强度。</p></article>
+    <article class="card"><h3>Health Score</h3><p>衡量整个知识库的孤立页、死链、空页面等健康情况，不是单页 confidence。</p></article>
+  </div>
+  <p><code>ChunkRefs</code> 和 <code>SourceRefs</code> 是证据链，但不是数值置信度。尤其要注意：没有匹配到 Chunk 的候选不会必然淘汰，而可能使用第一阶段生成的 Description / Details 作为 fallback，因此系统目前没有按低置信度阻止页面生成。</p>
+
+  <h2>如果要补置信度，应该怎么做？</h2>
+  <div class="formula"><strong>建议：</strong>Confidence = 证据 Chunk 覆盖 + 来源文档数量 + 实质提及覆盖率 + 重复抽取稳定性 + 来源质量 − fallback 惩罚</div>
+  <ul><li>把分数做到事实级，再聚合成页面级，而不是让 LLM 主观报一个数字。</li><li>页面连接应区分“LLM 显式链接”和“规则文本命中”，并分别计分。</li><li>低分页面可以进入草稿或待审核状态；低分边可以不进入主图展示。</li></ul>
+  <p class="foot">结论基于 WeKnora Wiki ingest、citation、page、linkify、taxonomy 与 dedup 相关源码分析。</p>
+</main></body></html>

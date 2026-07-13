@@ -1,5 +1,6 @@
 export default {
   menu: {
+    mcpCallLogs: "MCP 调用日志",
     knowledgeBase: "知识库",
     agents: "智能体",
     integrations: "发布集成",

@@ -129,6 +129,12 @@ const router = createRouter({
           meta: { requiresInit: true, requiresAuth: true }
         },
         {
+          path: "mcp-logs",
+          name: "mcpCallLogs",
+          component: () => import("../views/mcp/MCPCallLogs.vue"),
+          meta: { requiresInit: true, requiresAuth: true }
+        },
+        {
           path: "integrations",
           redirect: (to) => ({
             path: "/platform/settings",

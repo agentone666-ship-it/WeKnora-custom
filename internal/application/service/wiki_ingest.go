@@ -272,7 +272,8 @@ type WikiPendingOp struct {
 	Op          string `json:"op"`
 	KnowledgeID string `json:"knowledge_id"`
 	// Ingest fields
-	Language string `json:"language,omitempty"`
+	Language    string `json:"language,omitempty"`
+	ForceReview bool   `json:"force_review,omitempty"`
 	// Retract fields
 	DocTitle   string   `json:"doc_title,omitempty"`
 	DocSummary string   `json:"doc_summary,omitempty"`
@@ -281,6 +282,42 @@ type WikiPendingOp struct {
 	// dbID is set by peekPendingList from task_pending_ops.id. Zero in
 	// constructions made outside the queue (e.g. legacy tests).
 	dbID int64 `json:"-"`
+}
+
+// EnqueueWikiReclassification schedules an existing source document through
+// the current card extractor while forcing every resulting candidate through
+// human review. It is used by the gradual legacy-Wiki migration and never
+// changes an existing entity/concept page by itself.
+func EnqueueWikiReclassification(
+	ctx context.Context,
+	task interfaces.TaskEnqueuer,
+	pendingRepo interfaces.TaskPendingOpsRepository,
+	tenantID uint64,
+	kbID, knowledgeID string,
+) error {
+	if task == nil || pendingRepo == nil {
+		return errors.New("wiki reclassification queue is unavailable")
+	}
+	lang, _ := types.LanguageFromContext(ctx)
+	op := WikiPendingOp{Op: WikiOpIngest, KnowledgeID: knowledgeID, Language: lang, ForceReview: true}
+	payloadBytes, err := json.Marshal(op)
+	if err != nil {
+		return err
+	}
+	if err := pendingRepo.Enqueue(ctx, &types.TaskPendingOp{
+		TenantID: tenantID, TaskType: wikiTaskType, Scope: wikiTaskScope,
+		ScopeID: kbID, Op: WikiOpIngest, DedupKey: knowledgeID, Payload: payloadBytes,
+	}); err != nil {
+		return err
+	}
+	trigger := WikiIngestPayload{TenantID: tenantID, KnowledgeBaseID: kbID, Language: lang}
+	langfuse.InjectTracing(ctx, &trigger)
+	triggerBytes, _ := json.Marshal(trigger)
+	t := asynq.NewTask(types.TypeWikiIngest, triggerBytes,
+		asynq.Queue(types.QueueWiki), asynq.MaxRetry(wikiIngestMaxRetry),
+		asynq.Timeout(60*time.Minute), asynq.ProcessIn(wikiIngestDelay))
+	_, err = task.Enqueue(t)
+	return err
 }
 
 // wikiIngestService handles the LLM-powered wiki generation pipeline.
@@ -310,6 +347,7 @@ type wikiIngestService struct {
 	logEntrySvc    interfaces.WikiLogEntryService
 	pendingRepo    interfaces.TaskPendingOpsRepository
 	deadLetterRepo interfaces.TaskDeadLetterRepository
+	governanceSvc  interfaces.WikiGovernanceService
 	redisClient    *redis.Client // nil in Lite mode (no Redis)
 	// spanTracker lets per-document map work surface as a
 	// postprocess.wiki subspan in the knowledge trace tree. Async
@@ -339,6 +377,7 @@ func NewWikiIngestService(
 	logEntrySvc interfaces.WikiLogEntryService,
 	pendingRepo interfaces.TaskPendingOpsRepository,
 	deadLetterRepo interfaces.TaskDeadLetterRepository,
+	governanceSvc interfaces.WikiGovernanceService,
 	redisClient *redis.Client,
 	spanTracker SpanTracker,
 ) interfaces.TaskHandler {
@@ -353,6 +392,7 @@ func NewWikiIngestService(
 		logEntrySvc:    logEntrySvc,
 		pendingRepo:    pendingRepo,
 		deadLetterRepo: deadLetterRepo,
+		governanceSvc:  governanceSvc,
 		redisClient:    redisClient,
 		spanTracker:    spanTracker,
 	}
@@ -1729,6 +1769,7 @@ func formatExistingTaxonomyForPrompt(paths [][]string) string {
 	}
 	return strings.TrimSpace(buf.String())
 }
+
 // getExistingPageSlugsForKnowledge returns all page slugs that currently
 // reference a given knowledge ID in their source_refs. Used to snapshot
 // state before re-ingest so the reduce phase can reconcile additions vs

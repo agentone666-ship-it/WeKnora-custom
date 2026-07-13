@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Tencent/WeKnora/internal/types"
+	secutils "github.com/Tencent/WeKnora/internal/utils"
 	"github.com/sashabaranov/go-openai"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -25,6 +26,42 @@ func newTestRemoteChat(t *testing.T) *RemoteAPIChat {
 	})
 	require.NoError(t, err)
 	return chat
+}
+
+func TestNewRemoteAPIChat_AlgoAgentTokenAuth(t *testing.T) {
+	allowAlgoAgentForTest(t)
+	chat, err := NewRemoteAPIChat(&ChatConfig{
+		BaseURL:   "http://algoagent.zhuaninc.com/algo",
+		ModelName: "Doubao-pro-32k",
+		APIKey:    "token-from-api-key-field",
+	})
+	require.NoError(t, err)
+	assert.Empty(t, chat.apiKey, "algoagent must not emit a Bearer Authorization header")
+	assert.Equal(t, "token-from-api-key-field", headerValue(chat.customHeaders, "token"))
+	assert.Equal(t, "risk_assessment", headerValue(chat.customHeaders, "scene"))
+}
+
+func TestNewRemoteAPIChat_AlgoAgentExplicitTokenWins(t *testing.T) {
+	allowAlgoAgentForTest(t)
+	chat, err := NewRemoteAPIChat(&ChatConfig{
+		BaseURL:   "http://algoagent.zhuaninc.com/algo/chat/completions",
+		ModelName: "Doubao-pro-32k",
+		APIKey:    "fallback-key",
+		CustomHeaders: map[string]string{
+			"Token": "explicit-token",
+		},
+	})
+	require.NoError(t, err)
+	assert.Empty(t, chat.apiKey)
+	assert.Equal(t, "explicit-token", headerValue(chat.customHeaders, "token"))
+	assert.Equal(t, "risk_assessment", headerValue(chat.customHeaders, "scene"))
+}
+
+func allowAlgoAgentForTest(t *testing.T) {
+	t.Helper()
+	t.Setenv("SSRF_WHITELIST_EXTRA", "algoagent.zhuaninc.com")
+	secutils.ResetSSRFWhitelistForTest()
+	t.Cleanup(secutils.ResetSSRFWhitelistForTest)
 }
 
 func TestBuildChatCompletionRequest_ParallelToolCalls(t *testing.T) {

@@ -56,6 +56,9 @@ func newKBRouteTestEngine(
 	guards := &rbacGuards{
 		cfg:       cfg,
 		kbService: kbLookup,
+		wikiKBCreator: func(_ *gin.Context) (string, error) {
+			return "different-owner", nil
+		},
 	}
 
 	r := gin.New()
@@ -193,6 +196,27 @@ func TestWikiWriteRoutesDenyOutOfScopeAPIKeyKB(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(`{}`))
+			req.Header.Set("Content-Type", "application/json")
+			engine.ServeHTTP(rec, req)
+			require.Equal(t, http.StatusForbidden, rec.Code, "body=%s", rec.Body.String())
+		})
+	}
+}
+
+func TestWikiGovernanceApprovalRequiresOwnerOrAdmin(t *testing.T) {
+	engine := newWikiRouteTestEngine(t, 1, tenantKBLookupFixture())
+	cases := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodPost, "/api/v1/knowledgebase/kb-allowed/wiki/change-sets/change-1/review"},
+		{http.MethodPost, "/api/v1/knowledgebase/kb-allowed/wiki/change-sets/batch-review"},
+		{http.MethodPost, "/api/v1/knowledgebase/kb-allowed/wiki/governance/reclassify"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.path, func(t *testing.T) {
 			rec := httptest.NewRecorder()
 			req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(`{}`))
 			req.Header.Set("Content-Type", "application/json")

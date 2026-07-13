@@ -1864,5 +1864,24 @@ func RegisterWikiPageRoutes(r *gin.RouterGroup, wikiHandler *handler.WikiPageHan
 		// Issues
 		wikiRead.GET("/issues", g.Viewer(), g.KBAccessRead("kb_id"), wikiHandler.ListIssues)
 		wiki.PUT("/issues/:issue_id/status", g.OwnedWikiKBOrAdmin(), g.KBAccessWrite("kb_id"), wikiHandler.UpdateIssueStatus)
+
+		// Scenario-driven cards and human review.
+		wiki.GET("/change-sets", g.OwnedWikiKBOrAdmin(), g.KBAccessWrite("kb_id"), wikiHandler.ListChangeSets)
+		wiki.POST("/card-candidates", g.Contributor(), g.KBAccessWrite("kb_id"), wikiHandler.SubmitCardCandidate)
+		wiki.GET("/governance/stats", g.OwnedWikiKBOrAdmin(), g.KBAccessWrite("kb_id"), wikiHandler.GetGovernanceStats)
+		wiki.POST("/governance/metrics", g.OwnedWikiKBOrAdmin(), g.KBAccessWrite("kb_id"), wikiHandler.RecordGovernanceMetric)
+		wiki.POST("/governance/reclassify", g.OwnedWikiKBOrAdmin(), g.KBAccessWrite("kb_id"), wikiHandler.ReclassifyLegacyWiki)
+		wiki.GET("/card-history", g.OwnedWikiKBOrAdmin(), g.KBAccessWrite("kb_id"), wikiHandler.ListCardHistory)
+		wiki.POST("/change-sets/batch-review", g.OwnedWikiKBOrAdmin(), g.KBAccessWrite("kb_id"), wikiHandler.BatchReviewChangeSets)
+		wiki.GET("/change-sets/:change_set_id", g.OwnedWikiKBOrAdmin(), g.KBAccessWrite("kb_id"), wikiHandler.GetChangeSet)
+		wiki.POST("/change-sets/:change_set_id/review", g.OwnedWikiKBOrAdmin(), g.KBAccessWrite("kb_id"), wikiHandler.ReviewChangeSet)
+		wiki.POST("/change-sets/:change_set_id/rollback", g.OwnedWikiKBOrAdmin(), g.KBAccessWrite("kb_id"), wikiHandler.CreateRollbackChangeSet)
+		wikiRead.GET("/packages", g.Viewer(), g.KBAccessRead("kb_id"), wikiHandler.ListPackages)
+		wiki.POST("/packages", g.OwnedWikiKBOrAdmin(), g.KBAccessWrite("kb_id"), wikiHandler.CreatePackage)
+		wikiRead.GET("/packages/:package_id/pages", g.Viewer(), g.KBAccessRead("kb_id"), wikiHandler.ListPackagePages)
+		wiki.PUT("/packages/:package_id/pages", g.OwnedWikiKBOrAdmin(), g.KBAccessWrite("kb_id"), wikiHandler.SetPackagePages)
+		wikiRead.GET("/scenarios", g.Viewer(), g.KBAccessRead("kb_id"), wikiHandler.ListScenarios)
+		wiki.POST("/scenarios", g.OwnedWikiKBOrAdmin(), g.KBAccessWrite("kb_id"), wikiHandler.CreateScenario)
+		wikiRead.GET("/scenarios/:scenario_id/pages", g.Viewer(), g.KBAccessRead("kb_id"), wikiHandler.ListScenarioPages)
 	}
 }

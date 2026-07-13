@@ -64,6 +64,20 @@ func (s *wikiPageService) CreatePage(ctx context.Context, page *types.WikiPage) 
 	if page.Version == 0 {
 		page.Version = 1
 	}
+	if page.PageType == types.WikiPageTypeCard {
+		if page.ReviewStatus == "" {
+			page.ReviewStatus = types.WikiReviewPending
+		}
+		if page.MaturityStatus == "" {
+			page.MaturityStatus = types.WikiMaturityDraft
+		}
+		if page.AnswerStrength == "" {
+			page.AnswerStrength = types.WikiAnswerStrengthUnknown
+		}
+	} else if page.ReviewStatus == "" {
+		// Legacy pages remain queryable during gradual migration.
+		page.ReviewStatus = types.WikiReviewApproved
+	}
 
 	// Parse outbound links from content
 	page.OutLinks = s.parseOutLinks(page.Content)
@@ -116,6 +130,20 @@ func (s *wikiPageService) UpdatePage(ctx context.Context, page *types.WikiPage) 
 	existing.Content = page.Content
 	existing.Summary = page.Summary
 	existing.PageType = page.PageType
+	existing.KnowledgeType = page.KnowledgeType
+	existing.MaturityStatus = page.MaturityStatus
+	existing.AnswerStrength = page.AnswerStrength
+	existing.ReviewStatus = page.ReviewStatus
+	existing.BusinessLine = page.BusinessLine
+	existing.ScenarioIDs = page.ScenarioIDs
+	existing.AudienceRoles = page.AudienceRoles
+	existing.AffectedMetrics = page.AffectedMetrics
+	existing.Applicability = page.Applicability
+	existing.ProhibitedClaims = page.ProhibitedClaims
+	existing.ReviewedBy = page.ReviewedBy
+	existing.ReviewedAt = page.ReviewedAt
+	existing.EffectiveFrom = page.EffectiveFrom
+	existing.EffectiveTo = page.EffectiveTo
 	existing.SourceRefs = page.SourceRefs
 	existing.ChunkRefs = page.ChunkRefs
 	existing.PageMetadata = page.PageMetadata
@@ -280,6 +308,7 @@ func (s *wikiPageService) GetIndex(ctx context.Context, kbID string) (*types.Wik
 // bucket.
 var wikiIndexContentPageTypes = []string{
 	types.WikiPageTypeSummary,
+	types.WikiPageTypeCard,
 	types.WikiPageTypeEntity,
 	types.WikiPageTypeConcept,
 	types.WikiPageTypeSynthesis,
@@ -440,7 +469,20 @@ func (s *wikiPageService) GetGraph(ctx context.Context, req *types.WikiGraphRequ
 	if err != nil {
 		return nil, err
 	}
-	return computeGraphSubset(pages, req)
+	now := time.Now()
+	visible := make([]*types.WikiPage, 0, len(pages))
+	for _, page := range pages {
+		if page.PageType == types.WikiPageTypeCard {
+			allowed := page.Status != types.WikiPageStatusArchived && page.ReviewStatus == types.WikiReviewApproved &&
+				(page.MaturityStatus == types.WikiMaturityVerified || page.MaturityStatus == types.WikiMaturityPartiallyVerified) &&
+				(page.EffectiveFrom == nil || !page.EffectiveFrom.After(now)) && (page.EffectiveTo == nil || page.EffectiveTo.After(now))
+			if !allowed {
+				continue
+			}
+		}
+		visible = append(visible, page)
+	}
+	return computeGraphSubset(visible, req)
 }
 
 // computeGraphSubset is the pure I/O-free core of GetGraph. It takes the

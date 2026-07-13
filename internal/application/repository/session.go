@@ -177,6 +177,11 @@ func (r *sessionRepository) QueryPaged(
 			)
 		case "embed":
 			return db.Where("ics.id IS NULL AND s.description LIKE ?", embedPrefix+"%")
+		case "mcp":
+			// MCP adapter sessions are identified by their persisted message
+			// channel. Keep this independent of the display title so localized or
+			// customized MCP adapters remain visible in the operations UI.
+			return db.Where("EXISTS (SELECT 1 FROM messages m WHERE m.session_id = s.id AND m.channel = ? AND m.deleted_at IS NULL)", "mcp")
 		default:
 			if strings.HasPrefix(lower, "embed:") {
 				channelID := strings.TrimSpace(src[len("embed:"):])

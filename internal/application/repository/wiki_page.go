@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
@@ -102,19 +103,33 @@ func (r *wikiPageRepository) UpdateMeta(ctx context.Context, page *types.WikiPag
 		Model(page).
 		Where("id = ?", page.ID).
 		Updates(map[string]interface{}{
-			"in_links":      page.InLinks,
-			"out_links":     page.OutLinks,
-			"status":        page.Status,
-			"source_refs":   page.SourceRefs,
-			"chunk_refs":    page.ChunkRefs,
-			"page_metadata": page.PageMetadata,
-			"parent_slug":   page.ParentSlug,
-			"folder_id":     page.FolderID,
-			"category_path": page.CategoryPath,
-			"wiki_path":     page.WikiPath,
-			"depth":         page.Depth,
-			"sort_order":    page.SortOrder,
-			"updated_at":    page.UpdatedAt,
+			"in_links":          page.InLinks,
+			"out_links":         page.OutLinks,
+			"status":            page.Status,
+			"source_refs":       page.SourceRefs,
+			"chunk_refs":        page.ChunkRefs,
+			"page_metadata":     page.PageMetadata,
+			"knowledge_type":    page.KnowledgeType,
+			"maturity_status":   page.MaturityStatus,
+			"answer_strength":   page.AnswerStrength,
+			"review_status":     page.ReviewStatus,
+			"business_line":     page.BusinessLine,
+			"scenario_ids":      page.ScenarioIDs,
+			"audience_roles":    page.AudienceRoles,
+			"affected_metrics":  page.AffectedMetrics,
+			"applicability":     page.Applicability,
+			"prohibited_claims": page.ProhibitedClaims,
+			"reviewed_by":       page.ReviewedBy,
+			"reviewed_at":       page.ReviewedAt,
+			"effective_from":    page.EffectiveFrom,
+			"effective_to":      page.EffectiveTo,
+			"parent_slug":       page.ParentSlug,
+			"folder_id":         page.FolderID,
+			"category_path":     page.CategoryPath,
+			"wiki_path":         page.WikiPath,
+			"depth":             page.Depth,
+			"sort_order":        page.SortOrder,
+			"updated_at":        page.UpdatedAt,
 		})
 	if result.Error != nil {
 		return result.Error
@@ -163,6 +178,19 @@ func (r *wikiPageRepository) List(ctx context.Context, req *types.WikiPageListRe
 	}
 	if req.Status != "" {
 		query = query.Where("status = ?", req.Status)
+	}
+	if req.KnowledgeType != "" {
+		query = query.Where("knowledge_type = ?", req.KnowledgeType)
+	}
+	if req.ReviewStatus != "" {
+		query = query.Where("review_status = ?", req.ReviewStatus)
+	}
+	if req.MaturityStatus != "" {
+		query = query.Where("maturity_status = ?", req.MaturityStatus)
+	}
+	if !req.IncludeUnreviewed {
+		now := time.Now()
+		query = query.Where("page_type <> ? OR (review_status = ? AND maturity_status IN ? AND status <> ? AND (effective_from IS NULL OR effective_from <= ?) AND (effective_to IS NULL OR effective_to > ?))", types.WikiPageTypeCard, types.WikiReviewApproved, []string{types.WikiMaturityVerified, types.WikiMaturityPartiallyVerified}, types.WikiPageStatusArchived, now, now)
 	}
 	if req.Query != "" {
 		// Use PostgreSQL full-text search + ILIKE for aliases
@@ -282,6 +310,10 @@ func (r *wikiPageRepository) ListByTypeLight(
 		Model(&types.WikiPage{}).
 		Where("knowledge_base_id = ? AND page_type = ? AND status <> ?",
 			kbID, pageType, types.WikiPageStatusArchived)
+	if pageType == types.WikiPageTypeCard {
+		now := time.Now()
+		base = base.Where("review_status = ? AND maturity_status IN ? AND (effective_from IS NULL OR effective_from <= ?) AND (effective_to IS NULL OR effective_to > ?)", types.WikiReviewApproved, []string{types.WikiMaturityVerified, types.WikiMaturityPartiallyVerified}, now, now)
+	}
 
 	var total int64
 	if err := base.Count(&total).Error; err != nil {
@@ -812,11 +844,16 @@ func (r *wikiPageRepository) ListByTypeRecent(
 		limit = 1000
 	}
 	var entries []types.WikiIndexEntry
-	if err := r.db.WithContext(ctx).
+	query := r.db.WithContext(ctx).
 		Model(&types.WikiPage{}).
 		Select("slug", "title", "summary").
 		Where("knowledge_base_id = ? AND page_type = ? AND status <> ?",
-			kbID, pageType, types.WikiPageStatusArchived).
+			kbID, pageType, types.WikiPageStatusArchived)
+	if pageType == types.WikiPageTypeCard {
+		now := time.Now()
+		query = query.Where("review_status = ? AND maturity_status IN ? AND (effective_from IS NULL OR effective_from <= ?) AND (effective_to IS NULL OR effective_to > ?)", types.WikiReviewApproved, []string{types.WikiMaturityVerified, types.WikiMaturityPartiallyVerified}, now, now)
+	}
+	if err := query.
 		Order("updated_at DESC").
 		Limit(limit).
 		Scan(&entries).Error; err != nil {
@@ -997,6 +1034,8 @@ func (r *wikiPageRepository) Search(ctx context.Context, kbID string, query stri
 		Where("knowledge_base_id = ? AND (title ~* ? OR content ~* ? OR summary ~* ? OR slug ~* ?)",
 			kbID, query, query, query, query).
 		Where("status != ?", "archived").
+		Where("page_type <> ? OR (review_status = ? AND maturity_status IN ? AND (effective_from IS NULL OR effective_from <= ?) AND (effective_to IS NULL OR effective_to > ?))",
+			types.WikiPageTypeCard, types.WikiReviewApproved, []string{types.WikiMaturityVerified, types.WikiMaturityPartiallyVerified}, time.Now(), time.Now()).
 		Order("match_rank DESC, updated_at DESC").
 		Limit(limit).
 		Find(&pages).Error; err != nil {

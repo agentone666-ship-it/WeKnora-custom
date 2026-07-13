@@ -1134,9 +1134,16 @@ func (s *wikiIngestService) mapOneDocument(
 	}
 
 	docTitle := knowledgeID
-	if kn, err := s.knowledgeSvc.GetKnowledgeByIDOnly(ctx, knowledgeID); err == nil && kn != nil && kn.Title != "" {
-		docTitle = kn.Title
-	} else {
+	sourceUpdatedAt := ""
+	if kn, err := s.knowledgeSvc.GetKnowledgeByIDOnly(ctx, knowledgeID); err == nil && kn != nil {
+		if kn.Title != "" {
+			docTitle = kn.Title
+		}
+		if !kn.UpdatedAt.IsZero() {
+			sourceUpdatedAt = kn.UpdatedAt.UTC().Format(time.RFC3339)
+		}
+	}
+	if docTitle == knowledgeID {
 		for _, ch := range chunks {
 			if ch.Content != "" {
 				lines := strings.SplitN(ch.Content, "\n", 2)
@@ -1359,6 +1366,13 @@ func (s *wikiIngestService) mapOneDocument(
 	if strings.TrimSpace(docSummary) == "" {
 		docSummary = sumLine
 	}
+	// Scenario-driven cards are submitted through governance. L0 candidates
+	// publish immediately; L1/L2 candidates remain invisible pending review.
+	cardRefs, cardCandidates, cardErr := s.extractAndSubmitScenarioCards(ctx, chatModel, payload, knowledgeID, docTitle, sourceUpdatedAt, lang, chunks, op.ForceReview)
+	if cardErr != nil {
+		logger.Warnf(ctx, "wiki ingest: scenario card extraction failed for %s: %v", knowledgeID, cardErr)
+	}
+	extractedPages = append(extractedPages, cardRefs...)
 	updates = append(updates, SlugUpdate{
 		Slug:        summarySlug,
 		Type:        types.WikiPageTypeSummary,
@@ -1501,6 +1515,7 @@ func (s *wikiIngestService) mapOneDocument(
 		"pass0_fallback":   pass0Failed,
 		"classify_batches": batchCount,
 		"summary_preview":  previewText(docSummaryLine, 160),
+		"card_candidates":  cardCandidates,
 	}
 
 	return &docIngestResult{

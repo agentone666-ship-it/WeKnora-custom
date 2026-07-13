@@ -38,6 +38,30 @@ type RemoteAPIChat struct {
 	thinkingOverride ThinkingStrategy
 }
 
+func isAlgoAgentEndpoint(baseURL string) bool {
+	return strings.Contains(strings.ToLower(baseURL), "algoagent.zhuaninc.com")
+}
+
+func cloneHeaders(headers map[string]string) map[string]string {
+	if len(headers) == 0 {
+		return nil
+	}
+	cloned := make(map[string]string, len(headers))
+	for k, v := range headers {
+		cloned[k] = v
+	}
+	return cloned
+}
+
+func headerValue(headers map[string]string, name string) string {
+	for key, value := range headers {
+		if strings.EqualFold(strings.TrimSpace(key), name) {
+			return value
+		}
+	}
+	return ""
+}
+
 // NewRemoteAPIChat 创建远程 API 聊天实例
 func NewRemoteAPIChat(chatConfig *ChatConfig) (*RemoteAPIChat, error) {
 	if chatConfig.BaseURL != "" {
@@ -46,10 +70,32 @@ func NewRemoteAPIChat(chatConfig *ChatConfig) (*RemoteAPIChat, error) {
 		}
 	}
 
-	apiKey := chatConfig.APIKey
 	providerName := provider.ProviderName(chatConfig.Provider)
 	if providerName == "" {
 		providerName = provider.DetectProvider(chatConfig.BaseURL)
+	}
+
+	// algoagent exposes an OpenAI-compatible endpoint but authenticates with a
+	// plain `token` header instead of Authorization: Bearer.  Keep the normal
+	// model UI/APIKey field usable for this endpoint by translating it here and
+	// clearing the SDK API key so go-openai does not emit a second, invalid
+	// Authorization header.  An explicitly supplied token header wins.
+	apiKey := chatConfig.APIKey
+	customHeaders := cloneHeaders(chatConfig.CustomHeaders)
+	if isAlgoAgentEndpoint(chatConfig.BaseURL) {
+		if strings.TrimSpace(headerValue(customHeaders, "token")) == "" && strings.TrimSpace(apiKey) != "" {
+			if customHeaders == nil {
+				customHeaders = make(map[string]string, 1)
+			}
+			customHeaders["token"] = apiKey
+		}
+		if strings.TrimSpace(headerValue(customHeaders, "scene")) == "" {
+			if customHeaders == nil {
+				customHeaders = make(map[string]string, 2)
+			}
+			customHeaders["scene"] = "risk_assessment"
+		}
+		apiKey = ""
 	}
 
 	var config openai.ClientConfig
@@ -72,12 +118,12 @@ func NewRemoteAPIChat(chatConfig *ChatConfig) (*RemoteAPIChat, error) {
 
 	// 如果指定了 CustomHeaders，则给 SDK 使用的 HTTPClient 挂一层 RoundTripper，
 	// 在每个请求上自动注入这些 header（raw HTTP 路径会在发送前单独处理）。
-	if len(chatConfig.CustomHeaders) > 0 {
+	if len(customHeaders) > 0 {
 		if httpClient, ok := config.HTTPClient.(*http.Client); ok {
-			config.HTTPClient = secutils.WrapHTTPClientWithHeaders(httpClient, chatConfig.CustomHeaders)
+			config.HTTPClient = secutils.WrapHTTPClientWithHeaders(httpClient, customHeaders)
 		} else {
 			// SDK 默认未显式设置时 HTTPClient 为 nil，此时构造一个新的注入了 header 的 client。
-			config.HTTPClient = secutils.WrapHTTPClientWithHeaders(nil, chatConfig.CustomHeaders)
+			config.HTTPClient = secutils.WrapHTTPClientWithHeaders(nil, customHeaders)
 		}
 	}
 
@@ -105,7 +151,7 @@ func NewRemoteAPIChat(chatConfig *ChatConfig) (*RemoteAPIChat, error) {
 		provider:         providerName,
 		appID:            chatConfig.AppID,
 		appSecret:        chatConfig.AppSecret,
-		customHeaders:    chatConfig.CustomHeaders,
+		customHeaders:    customHeaders,
 		adapter:          resolveProvider(providerName, modelName),
 		thinkingOverride: parseThinkingOverride(chatConfig.ExtraConfig),
 	}, nil
