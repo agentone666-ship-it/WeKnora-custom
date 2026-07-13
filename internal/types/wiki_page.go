@@ -278,6 +278,29 @@ func (WikiPage) TableName() string {
 	return "wiki_pages"
 }
 
+// BeforeSave guarantees that newly added governance JSON fields are stored as
+// real empty JSON values rather than SQL NULL. PostgreSQL does not apply a
+// column DEFAULT when GORM explicitly binds NULL, and these columns are
+// intentionally NOT NULL so every legacy/system page has a predictable shape.
+func (p *WikiPage) BeforeSave(_ *gorm.DB) error {
+	if p.ScenarioIDs == nil {
+		p.ScenarioIDs = StringArray{}
+	}
+	if p.AudienceRoles == nil {
+		p.AudienceRoles = StringArray{}
+	}
+	if p.AffectedMetrics == nil {
+		p.AffectedMetrics = StringArray{}
+	}
+	if len(p.Applicability) == 0 || strings.TrimSpace(string(p.Applicability)) == "null" {
+		p.Applicability = JSON(`{}`)
+	}
+	if p.ProhibitedClaims == nil {
+		p.ProhibitedClaims = StringArray{}
+	}
+	return nil
+}
+
 // WikiFolderRootID is the sentinel parent/folder id meaning "the wiki root"
 // (a page or folder directly under the top level, with no parent folder).
 const WikiFolderRootID = ""

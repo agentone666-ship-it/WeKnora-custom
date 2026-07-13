@@ -46,11 +46,11 @@ CREATE TABLE IF NOT EXISTS wiki_pages (
     answer_strength   VARCHAR(16) NOT NULL DEFAULT 'unknown',
     review_status     VARCHAR(32) NOT NULL DEFAULT 'approved',
     business_line     VARCHAR(128) NOT NULL DEFAULT '',
-    scenario_ids      TEXT DEFAULT '[]',
-    audience_roles    TEXT DEFAULT '[]',
-    affected_metrics  TEXT DEFAULT '[]',
-    applicability     TEXT DEFAULT '{}',
-    prohibited_claims TEXT DEFAULT '[]',
+    scenario_ids      TEXT NOT NULL DEFAULT '[]',
+    audience_roles    TEXT NOT NULL DEFAULT '[]',
+    affected_metrics  TEXT NOT NULL DEFAULT '[]',
+    applicability     TEXT NOT NULL DEFAULT '{}',
+    prohibited_claims TEXT NOT NULL DEFAULT '[]',
     reviewed_by       VARCHAR(36) NOT NULL DEFAULT '',
     reviewed_at       DATETIME,
     effective_from    DATETIME,
@@ -121,6 +121,22 @@ func makeCategorizedWikiPage(kbID, slug, pageType, status string, categoryPath .
 		page.Depth = len(categoryPath)
 	}
 	return page
+}
+
+func TestCreateNormalizesWikiGovernanceJSONDefaults(t *testing.T) {
+	db := setupWikiPagesTestDB(t)
+	repo := &wikiPageRepository{db: db}
+	page := makeWikiPage("kb-defaults", "index", types.WikiPageTypeIndex, types.WikiPageStatusPublished)
+
+	require.NoError(t, repo.Create(context.Background(), page))
+
+	var stored types.WikiPage
+	require.NoError(t, db.Where("id = ?", page.ID).First(&stored).Error)
+	assert.JSONEq(t, `{}`, string(stored.Applicability))
+	assert.NotNil(t, stored.ScenarioIDs)
+	assert.NotNil(t, stored.AudienceRoles)
+	assert.NotNil(t, stored.AffectedMetrics)
+	assert.NotNil(t, stored.ProhibitedClaims)
 }
 
 // TestList_WikiPathSortReturnsCategorizedPagesFirst protects the sidebar's
