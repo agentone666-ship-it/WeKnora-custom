@@ -34,6 +34,39 @@ func snapshotForTest(t *testing.T, page *types.WikiPage) types.JSON {
 	return types.JSON(b)
 }
 
+func TestCreateChangeSetNormalizesEmptyJSONFields(t *testing.T) {
+	repo, db := newGovernanceTestRepo(t)
+	now := time.Now()
+	set := &types.WikiChangeSet{
+		ID:              uuid.NewString(),
+		KnowledgeBaseID: "kb-1",
+		Status:          types.WikiChangeSetPending,
+		ReviewLevel:     types.WikiReviewLevelL1,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+		Items: []types.WikiChangeItem{{
+			ID:        uuid.NewString(),
+			Operation: "create",
+			PageSlug:  "card/question-empty-json",
+			CreatedAt: now,
+		}},
+	}
+	if err := repo.CreateChangeSet(context.Background(), set); err != nil {
+		t.Fatal(err)
+	}
+
+	var stored types.WikiChangeItem
+	if err := db.First(&stored, "id = ?", set.Items[0].ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.Before.ToString() != "{}" || stored.After.ToString() != "{}" || stored.EvidenceExcerpts.ToString() != "{}" {
+		t.Fatalf("JSON objects were not normalized: before=%s after=%s evidence=%s", stored.Before, stored.After, stored.EvidenceExcerpts)
+	}
+	if stored.ChangedFields == nil || stored.EvidenceChunkIDs == nil {
+		t.Fatalf("JSON arrays were not normalized: changed=%v evidence=%v", stored.ChangedFields, stored.EvidenceChunkIDs)
+	}
+}
+
 func TestReviewChangeSetPublishesCardAtomically(t *testing.T) {
 	repo, db := newGovernanceTestRepo(t)
 	now := time.Now()
