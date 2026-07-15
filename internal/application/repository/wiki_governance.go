@@ -35,6 +35,24 @@ func (r *wikiGovernanceRepository) CreateChangeSet(ctx context.Context, set *typ
 			if items[i].ID == "" {
 				items[i].ID = uuid.NewString()
 			}
+			// PostgreSQL JSONB defaults are not applied when GORM explicitly
+			// writes a nil driver.Value. Normalize optional snapshots here so a
+			// create item never violates the NOT NULL governance schema.
+			if len(items[i].Before) == 0 {
+				items[i].Before = types.JSON(`{}`)
+			}
+			if len(items[i].After) == 0 {
+				items[i].After = types.JSON(`{}`)
+			}
+			if items[i].ChangedFields == nil {
+				items[i].ChangedFields = types.StringArray{}
+			}
+			if items[i].EvidenceChunkIDs == nil {
+				items[i].EvidenceChunkIDs = types.StringArray{}
+			}
+			if len(items[i].EvidenceExcerpts) == 0 {
+				items[i].EvidenceExcerpts = types.JSON(`{}`)
+			}
 		}
 		if len(items) > 0 {
 			if err := tx.Create(&items).Error; err != nil {
