@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html"
 	"sort"
 	"strings"
 
@@ -45,6 +46,25 @@ type scenarioCardRelationship struct {
 type scenarioCardExtraction struct {
 	Context scenarioCardContext     `json:"context"`
 	Cards   []scenarioCardCandidate `json:"cards"`
+}
+
+type crossPageAssessment struct {
+	RelatedSlug          string  `json:"related_slug"`
+	Relation             string  `json:"relation"`
+	CandidateClaim       string  `json:"candidate_claim"`
+	ExistingClaim        string  `json:"existing_claim"`
+	Reason               string  `json:"reason"`
+	Confidence           float64 `json:"confidence"`
+	ApplicabilityOverlap bool    `json:"applicability_overlap"`
+}
+
+type crossPageAssessmentResult struct {
+	Assessments []crossPageAssessment `json:"assessments"`
+}
+
+var validCrossPageRelations = map[string]bool{
+	"consistent": true, "complementary": true, "conflicting": true,
+	"supersedes": true, "unrelated": true, "uncertain": true,
 }
 
 func mergeCardStrings(a, b types.StringArray) types.StringArray {
@@ -104,6 +124,164 @@ func cardMarkdown(c scenarioCardCandidate, relationships []map[string]any) strin
 		}
 	}
 	return b.String()
+}
+
+func crossPageQuerySignals(card scenarioCardCandidate) []string {
+	statement := card.Statement
+	if strings.TrimSpace(statement) == "" {
+		statement = card.Summary
+	}
+	contextTerms := append([]string(nil), card.AffectedMetrics...)
+	contextTerms = append(contextTerms, card.Scenarios...)
+	values := []string{card.Title, statement, strings.Join(contextTerms, " ")}
+	out := make([]string, 0, 3)
+	seen := map[string]bool{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		runes := []rune(value)
+		if len(runes) > 500 {
+			value = string(runes[:500])
+		}
+		key := strings.ToLower(value)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, value)
+		if len(out) == 3 {
+			break
+		}
+	}
+	return out
+}
+
+func renderRelatedPagesXML(pages []*types.WikiPage) string {
+	var b strings.Builder
+	for _, page := range pages {
+		if page == nil {
+			continue
+		}
+		content := strings.TrimSpace(page.Content)
+		runes := []rune(content)
+		if len(runes) > 3000 {
+			content = string(runes[:3000])
+		}
+		fmt.Fprintf(&b, "<page slug=%q type=%q knowledge_type=%q review_status=%q maturity_status=%q>\n", html.EscapeString(page.Slug), html.EscapeString(page.PageType), html.EscapeString(page.KnowledgeType), html.EscapeString(page.ReviewStatus), html.EscapeString(page.MaturityStatus))
+		fmt.Fprintf(&b, "<title>%s</title>\n<summary>%s</summary>\n<applicability>%s</applicability>\n<content>%s</content>\n</page>\n", html.EscapeString(page.Title), html.EscapeString(page.Summary), html.EscapeString(string(page.Applicability)), html.EscapeString(content))
+	}
+	return b.String()
+}
+
+func normalizeCrossPageAssessments(raw string, related map[string]*types.WikiPage) ([]crossPageAssessment, int, error) {
+	var parsed crossPageAssessmentResult
+	if err := json.Unmarshal([]byte(cleanLLMJSON(raw)), &parsed); err != nil {
+		return nil, len(related), fmt.Errorf("parse cross-page assessments: %w", err)
+	}
+	out := make([]crossPageAssessment, 0, len(parsed.Assessments))
+	seen := map[string]bool{}
+	for _, item := range parsed.Assessments {
+		item.RelatedSlug = strings.TrimSpace(item.RelatedSlug)
+		item.Relation = strings.ToLower(strings.TrimSpace(item.Relation))
+		if related[item.RelatedSlug] == nil || seen[item.RelatedSlug] || !validCrossPageRelations[item.Relation] || item.Confidence < 0 || item.Confidence > 1 {
+			continue
+		}
+		// Two claims with explicitly disjoint applicability cannot conflict.
+		// Preserve the model's explanation but downgrade the relationship.
+		if item.Relation == "conflicting" && !item.ApplicabilityOverlap {
+			item.Relation = "complementary"
+		}
+		seen[item.RelatedSlug] = true
+		out = append(out, item)
+	}
+	return out, len(related) - len(seen), nil
+}
+
+func applyCrossPageReviewMetadata(metadata map[string]any, assessments []crossPageAssessment, missing int, checkErr error) {
+	metadata["cross_page_assessments"] = assessments
+	if checkErr != nil {
+		metadata["cross_page_check_failed"] = true
+		metadata["cross_page_check_error"] = checkErr.Error()
+		return
+	}
+	if missing > 0 {
+		metadata["cross_page_check_incomplete"] = true
+		metadata["cross_page_missing_assessments"] = missing
+	}
+	for _, item := range assessments {
+		switch item.Relation {
+		case "conflicting":
+			if item.ApplicabilityOverlap && item.Confidence >= 0.75 {
+				metadata["cross_page_conflict"] = true
+			}
+		case "uncertain":
+			if item.ApplicabilityOverlap && item.Confidence >= 0.65 {
+				metadata["cross_page_uncertain"] = true
+			}
+		case "supersedes":
+			if item.Confidence >= 0.75 {
+				metadata["cross_page_supersedes"] = true
+			}
+		}
+	}
+}
+
+func (s *wikiIngestService) assessCrossPageRelations(ctx context.Context, model chat.Chat, payload WikiIngestPayload, slug, lang string, card scenarioCardCandidate) ([]crossPageAssessment, map[string]any, int, bool, error) {
+	pageBySlug := map[string]*types.WikiPage{}
+	for _, signal := range crossPageQuerySignals(card) {
+		pages, err := s.wikiService.FindRelatedPages(ctx, payload.KnowledgeBaseID, slug, signal, []string{types.WikiPageTypeCard, types.WikiPageTypeEntity, types.WikiPageTypeConcept}, 6)
+		if err != nil {
+			return nil, nil, 0, true, fmt.Errorf("find related wiki pages: %w", err)
+		}
+		for _, page := range pages {
+			if page != nil && page.Slug != "" && page.Slug != slug {
+				pageBySlug[page.Slug] = page
+			}
+		}
+		if len(pageBySlug) >= 12 {
+			break
+		}
+	}
+	if len(pageBySlug) == 0 {
+		return nil, nil, 0, false, nil
+	}
+	pages := make([]*types.WikiPage, 0, len(pageBySlug))
+	for _, page := range pageBySlug {
+		pages = append(pages, page)
+	}
+	sort.Slice(pages, func(i, j int) bool { return pages[i].Slug < pages[j].Slug })
+	if len(pages) > 12 {
+		pages = pages[:12]
+		pageBySlug = map[string]*types.WikiPage{}
+		for _, page := range pages {
+			pageBySlug[page.Slug] = page
+		}
+	}
+	evidence := make(map[string]any, len(pages))
+	for _, page := range pages {
+		excerpt := []rune(strings.TrimSpace(page.Content))
+		if len(excerpt) > 1000 {
+			excerpt = excerpt[:1000]
+		}
+		evidence[page.Slug] = map[string]any{"title": page.Title, "page_type": page.PageType, "knowledge_type": page.KnowledgeType, "source_refs": page.SourceRefs, "chunk_refs": page.ChunkRefs, "applicability": page.Applicability, "effective_from": page.EffectiveFrom, "effective_to": page.EffectiveTo, "excerpt": string(excerpt)}
+	}
+	candidateJSON, _ := json.Marshal(map[string]any{
+		"slug": slug, "title": card.Title, "knowledge_type": card.KnowledgeType,
+		"statement": card.Statement, "summary": card.Summary, "business_line": card.BusinessLine,
+		"scenarios": card.Scenarios, "affected_metrics": card.AffectedMetrics,
+		"applicability": card.Applicability, "prohibited_claims": card.ProhibitedClaims,
+	})
+	raw, err := s.generateWithTemplate(ctx, model, agent.WikiCrossPageConflictPrompt, map[string]string{"CandidateJSON": string(candidateJSON), "RelatedPagesXML": renderRelatedPagesXML(pages), "Language": lang})
+	if err != nil {
+		return nil, evidence, 0, true, fmt.Errorf("assess cross-page conflicts: %w", err)
+	}
+	assessments, missing, err := normalizeCrossPageAssessments(raw, pageBySlug)
+	if err != nil {
+		return nil, evidence, missing, true, err
+	}
+	return assessments, evidence, missing, true, nil
 }
 
 func (s *wikiIngestService) extractAndSubmitScenarioCards(ctx context.Context, model chat.Chat, payload WikiIngestPayload, knowledgeID, sourceTitle, sourceUpdatedAt, lang string, chunks []*types.Chunk, forceReview bool) ([]types.WikiLogPageRef, int, error) {
@@ -202,6 +380,24 @@ func (s *wikiIngestService) extractAndSubmitScenarioCards(ctx context.Context, m
 					}
 				}
 			}
+		}
+		assessments, relatedEvidence, missingAssessments, attemptedCrossCheck, crossCheckErr := s.assessCrossPageRelations(ctx, model, payload, slug, lang, card)
+		if attemptedCrossCheck {
+			applyCrossPageReviewMetadata(metadata, assessments, missingAssessments, crossCheckErr)
+			if len(relatedEvidence) > 0 {
+				metadata["related_page_evidence"] = relatedEvidence
+			}
+			for _, assessment := range assessments {
+				if assessment.Relation == "unrelated" || assessment.Confidence < 0.7 {
+					continue
+				}
+				related := relatedEvidence[assessment.RelatedSlug]
+				relatedMap, _ := related.(map[string]any)
+				title, _ := relatedMap["title"].(string)
+				outLinks = mergeCardStrings(outLinks, types.StringArray{assessment.RelatedSlug})
+				relationships = append(relationships, map[string]any{"target_title": title, "target_slug": assessment.RelatedSlug, "relation_type": assessment.Relation, "reason": assessment.Reason, "confidence": assessment.Confidence, "applicability_overlap": assessment.ApplicabilityOverlap})
+			}
+			metadata["relationships"] = relationships
 		}
 		metaBytes, _ := json.Marshal(metadata)
 		page := &types.WikiPage{TenantID: payload.TenantID, KnowledgeBaseID: payload.KnowledgeBaseID, Slug: slug, Title: card.Title, PageType: types.WikiPageTypeCard, KnowledgeType: card.KnowledgeType, MaturityStatus: types.WikiMaturityPendingReview, AnswerStrength: card.AnswerStrength, ReviewStatus: types.WikiReviewPending, BusinessLine: card.BusinessLine, ScenarioIDs: scenarioIDs, AudienceRoles: card.AudienceRoles, AffectedMetrics: card.AffectedMetrics, Applicability: types.JSON(appBytes), ProhibitedClaims: card.ProhibitedClaims, Content: cardMarkdown(card, relationships), Summary: card.Summary, SourceRefs: types.StringArray{knowledgeID}, ChunkRefs: evidence, OutLinks: outLinks, PageMetadata: types.JSON(metaBytes), Status: types.WikiPageStatusDraft}

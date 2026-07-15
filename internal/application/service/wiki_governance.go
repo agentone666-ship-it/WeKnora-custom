@@ -100,6 +100,21 @@ func AssessWikiCardChange(candidate, existing *types.WikiPage) WikiReviewAssessm
 	if duplicate, _ := meta["possible_duplicate_slug"].(string); duplicate != "" {
 		escalate(types.WikiReviewLevelL1, "possible_duplicate")
 	}
+	if conflict, _ := meta["cross_page_conflict"].(bool); conflict {
+		escalate(types.WikiReviewLevelL2, "cross_page_claim_conflict")
+	}
+	if uncertain, _ := meta["cross_page_uncertain"].(bool); uncertain {
+		escalate(types.WikiReviewLevelL2, "cross_page_claim_uncertain")
+	}
+	if supersedes, _ := meta["cross_page_supersedes"].(bool); supersedes {
+		escalate(types.WikiReviewLevelL2, "cross_page_claim_supersedes_existing")
+	}
+	if failed, _ := meta["cross_page_check_failed"].(bool); failed {
+		escalate(types.WikiReviewLevelL2, "cross_page_conflict_check_failed")
+	}
+	if incomplete, _ := meta["cross_page_check_incomplete"].(bool); incomplete {
+		escalate(types.WikiReviewLevelL2, "cross_page_conflict_check_incomplete")
+	}
 	if allowed := allowedTypesByNature[nature]; nature != "" && nature != "unknown" && !allowed[candidate.KnowledgeType] {
 		escalate(types.WikiReviewLevelL2, "document_nature_type_mismatch")
 	}

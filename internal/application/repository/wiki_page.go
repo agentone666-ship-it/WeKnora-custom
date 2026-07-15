@@ -914,6 +914,58 @@ func (r *wikiPageRepository) FindSimilarPages(
 	return out, nil
 }
 
+// FindRelatedPages performs content-aware candidate retrieval for cross-page
+// conflict detection. It intentionally searches across page types and slugs:
+// identity/merge matching is handled by FindSimilarPages, while this method
+// answers the independent question "which existing pages make claims about
+// related subject matter?".
+//
+// word_similarity (pg_trgm) is used for the body so a short candidate claim can
+// match one passage inside a much longer page. The body is capped to keep the
+// per-row comparison bounded; title and summary remain uncapped. Callers issue
+// a small number of focused queries and merge the top-K results.
+func (r *wikiPageRepository) FindRelatedPages(
+	ctx context.Context,
+	kbID string,
+	excludeSlug string,
+	query string,
+	pageTypes []string,
+	limit int,
+) ([]*types.WikiPage, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 8
+	}
+	if limit > 20 {
+		limit = 20
+	}
+	if len(pageTypes) == 0 {
+		pageTypes = []string{types.WikiPageTypeCard, types.WikiPageTypeEntity, types.WikiPageTypeConcept}
+	}
+
+	q := strings.ToLower(query)
+	const searchable = "lower(coalesce(title, '') || ' ' || coalesce(summary, '') || ' ' || left(coalesce(content, ''), 8000))"
+	const score = "GREATEST(similarity(lower(coalesce(title, '')), ?), word_similarity(?, " + searchable + "))"
+
+	db := r.db.WithContext(ctx).
+		Model(&types.WikiPage{}).
+		Select("wiki_pages.*, "+score+" AS related_score", q, q).
+		Where("knowledge_base_id = ? AND slug <> ? AND page_type IN ? AND status <> ?", kbID, excludeSlug, pageTypes, types.WikiPageStatusArchived).
+		Where(score+" >= ?", q, q, 0.12).
+		Where("page_type <> ? OR review_status = ?", types.WikiPageTypeCard, types.WikiReviewApproved).
+		Order("related_score DESC, updated_at DESC").
+		Limit(limit)
+
+	var pages []*types.WikiPage
+	if err := db.Find(&pages).Error; err != nil {
+		return nil, err
+	}
+	return pages, nil
+}
+
 // ListAll retrieves all wiki pages in a knowledge base
 func (r *wikiPageRepository) ListAll(ctx context.Context, kbID string) ([]*types.WikiPage, error) {
 	var pages []*types.WikiPage

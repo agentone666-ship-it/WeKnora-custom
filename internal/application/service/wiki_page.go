@@ -880,6 +880,12 @@ func (s *wikiPageService) FindSimilarPages(ctx context.Context, kbID string, que
 	return s.repo.FindSimilarPages(ctx, kbID, query, pageTypes, limit)
 }
 
+// FindRelatedPages performs content-aware retrieval for cross-page conflict
+// detection. It does not imply that any returned page is the same concept.
+func (s *wikiPageService) FindRelatedPages(ctx context.Context, kbID string, excludeSlug string, query string, pageTypes []string, limit int) ([]*types.WikiPage, error) {
+	return s.repo.FindRelatedPages(ctx, kbID, excludeSlug, query, pageTypes, limit)
+}
+
 // ListDistinctCategoryPaths returns the existing wiki folder paths. Used by
 // wiki ingest's taxonomy planner to ground folder reuse.
 func (s *wikiPageService) ListDistinctCategoryPaths(ctx context.Context, kbID string, maxPaths int) ([][]string, error) {
