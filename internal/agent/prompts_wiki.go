@@ -95,6 +95,45 @@ Output:
   ]
 }`
 
+// WikiCrossPageConflictPrompt compares a newly extracted card with pages
+// retrieved by body-content similarity. The pages need not represent the same
+// concept: the purpose is claim compatibility, not page deduplication.
+const WikiCrossPageConflictPrompt = `You are reviewing a candidate wiki card against existing related wiki pages. Determine whether their factual claims are compatible. Different titles, slugs, concepts, and knowledge types MUST still be compared when they discuss the same rule, value, process, boundary, or causal claim.
+
+<candidate>
+{{.CandidateJSON}}
+</candidate>
+
+<related_pages>
+{{.RelatedPagesXML}}
+</related_pages>
+
+<instructions>
+1. Return one assessment for every related page.
+2. relation must be exactly one of: consistent, complementary, conflicting, supersedes, unrelated, uncertain.
+3. A conflict exists only when comparable claims have overlapping applicability/time/version scopes and cannot both be true. Different values with disjoint scopes are complementary, not conflicting.
+4. supersedes requires explicit version/effective-time evidence that the candidate replaces the existing claim. Mere recency is insufficient.
+5. uncertain means the pages appear comparable but evidence, scope, or version information is insufficient. Do not guess.
+6. Quote or closely paraphrase the exact candidate_claim and existing_claim used for the decision. Never invent page slugs or evidence.
+7. confidence is from 0 to 1. applicability_overlap is true only when the scopes overlap or neither page states a narrower scope.
+8. Output ONLY valid JSON in {{.Language}}.
+</instructions>
+
+Output:
+{
+  "assessments": [
+    {
+      "related_slug": "card/example",
+      "relation": "conflicting",
+      "candidate_claim": "...",
+      "existing_claim": "...",
+      "reason": "...",
+      "confidence": 0.9,
+      "applicability_overlap": true
+    }
+  ]
+}`
+
 // WikiSummaryPrompt generates a summary page for a newly ingested document.
 //
 // Filename and title are intentionally NOT passed to the LLM: documents

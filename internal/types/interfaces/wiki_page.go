@@ -156,6 +156,12 @@ type WikiPageService interface {
 	// merge targets server-side.
 	FindSimilarPages(ctx context.Context, kbID string, query string, pageTypes []string, limit int) ([]*types.WikiPageLite, error)
 
+	// FindRelatedPages searches page titles, summaries, and body content for
+	// semantically related pages. Unlike FindSimilarPages it is deliberately
+	// not a merge/dedup lookup: callers use it to compare claims across
+	// different slugs, concepts, and knowledge types.
+	FindRelatedPages(ctx context.Context, kbID string, excludeSlug string, query string, pageTypes []string, limit int) ([]*types.WikiPage, error)
+
 	// ListDistinctCategoryPaths returns the existing wiki folder paths (split
 	// into segments), capped at maxPaths. Used by wiki ingest's taxonomy
 	// planner as the pool of folders to reuse.
@@ -301,6 +307,10 @@ type WikiPageRepository interface {
 	// defaults to entity+concept. Used by the dedup pre-filter to
 	// surface candidate merge targets server-side.
 	FindSimilarPages(ctx context.Context, kbID string, query string, pageTypes []string, limit int) ([]*types.WikiPageLite, error)
+
+	// FindRelatedPages returns full pages ranked by title/summary/content
+	// trigram similarity for cross-page claim comparison.
+	FindRelatedPages(ctx context.Context, kbID string, excludeSlug string, query string, pageTypes []string, limit int) ([]*types.WikiPage, error)
 
 	// ListDistinctCategoryPaths returns the materialized paths of existing
 	// wiki folders (split into segments), capped at maxPaths. Used by the
