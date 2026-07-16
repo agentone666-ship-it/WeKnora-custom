@@ -112,6 +112,16 @@ type WikiChangeItem struct {
 
 func (WikiChangeItem) TableName() string { return "wiki_change_items" }
 
+// WikiPendingGraphCard is a pending card snapshot together with the change
+// item that owns it. Pending cards intentionally do not live in wiki_pages:
+// this projection lets the candidate graph see them without making them
+// visible to normal Wiki/RAG reads.
+type WikiPendingGraphCard struct {
+	ChangeSetID  string    `json:"change_set_id"`
+	ChangeItemID string    `json:"change_item_id"`
+	Page         *WikiPage `json:"page"`
+}
+
 type WikiReview struct {
 	ID              string    `json:"id" gorm:"type:varchar(36);primaryKey"`
 	ChangeSetID     string    `json:"change_set_id" gorm:"type:varchar(36);index"`

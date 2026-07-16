@@ -119,6 +119,49 @@ func TestReviewChangeSetPublishesCardAtomically(t *testing.T) {
 	}
 }
 
+func TestPendingGraphCardStaysIsolatedAndPublishesLatestGraph(t *testing.T) {
+	repo, db := newGovernanceTestRepo(t)
+	now := time.Now()
+	page := &types.WikiPage{TenantID: 1, KnowledgeBaseID: "kb-1", Slug: "card/question-graph", Title: "graph", Content: "# graph\n\nclaim\n", PageType: types.WikiPageTypeCard, KnowledgeType: types.WikiKnowledgeTypeQuestion, Status: types.WikiPageStatusDraft, ReviewStatus: types.WikiReviewPending, MaturityStatus: types.WikiMaturityPendingReview, ChunkRefs: types.StringArray{"chunk-1"}, Version: 1}
+	set := &types.WikiChangeSet{ID: uuid.NewString(), TenantID: 1, KnowledgeBaseID: "kb-1", Status: types.WikiChangeSetPending, ReviewLevel: types.WikiReviewLevelL1, CreatedAt: now, UpdatedAt: now, Items: []types.WikiChangeItem{{ID: uuid.NewString(), Operation: "create", PageSlug: page.Slug, After: snapshotForTest(t, page), CreatedAt: now}}}
+	if err := repo.CreateChangeSet(context.Background(), set); err != nil {
+		t.Fatal(err)
+	}
+
+	var publishedCount int64
+	if err := db.Model(&types.WikiPage{}).Where("knowledge_base_id = ?", "kb-1").Count(&publishedCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if publishedCount != 0 {
+		t.Fatalf("pending candidate leaked into wiki_pages: count=%d", publishedCount)
+	}
+	candidates, err := repo.ListPendingGraphCards(context.Background(), "kb-1", 10)
+	if err != nil || len(candidates) != 1 {
+		t.Fatalf("pending graph candidates=%d err=%v, want 1", len(candidates), err)
+	}
+	graphPage := candidates[0].Page
+	graphPage.Content += "\n## 关联知识\n- [[card/knowledge-target|target]]（answers）\n"
+	graphPage.OutLinks = types.StringArray{"card/knowledge-target"}
+	graphPage.PageMetadata = types.JSON(`{"relationships":[{"target_slug":"card/knowledge-target","relation_type":"answers"}]}`)
+	updated, err := repo.UpdatePendingGraphCard(context.Background(), "kb-1", candidates[0].ChangeItemID, graphPage)
+	if err != nil || !updated {
+		t.Fatalf("update pending graph updated=%v err=%v", updated, err)
+	}
+	if err := repo.ReviewChangeSet(context.Background(), "kb-1", set.ID, "reviewer-1", &types.WikiReviewDecision{Decision: types.WikiReviewApproved}); err != nil {
+		t.Fatal(err)
+	}
+	var stored types.WikiPage
+	if err := db.Where("knowledge_base_id = ? AND slug = ?", "kb-1", page.Slug).First(&stored).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(stored.OutLinks) != 1 || stored.OutLinks[0] != "card/knowledge-target" || !strings.Contains(stored.Content, "关联知识") {
+		t.Fatalf("approval did not publish latest candidate graph: out=%v content=%q", stored.OutLinks, stored.Content)
+	}
+	if updated, err := repo.UpdatePendingGraphCard(context.Background(), "kb-1", candidates[0].ChangeItemID, graphPage); err != nil || updated {
+		t.Fatalf("applied snapshot must reject candidate graph writes: updated=%v err=%v", updated, err)
+	}
+}
+
 func TestReviewChangeSetRejectsStaleVersion(t *testing.T) {
 	repo, db := newGovernanceTestRepo(t)
 	now := time.Now()

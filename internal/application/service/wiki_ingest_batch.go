@@ -974,6 +974,8 @@ func (s *wikiIngestService) ProcessWikiFinalize(ctx context.Context, t *asynq.Ta
 	ids := make([]int64, 0, len(rows))
 	affectedSet := make(map[string]struct{}, len(rows))
 	var affectedSlugs []string
+	graphSet := make(map[string]struct{}, len(rows))
+	var graphSlugs []string
 	var freshRefs []linkRef
 	var changeDesc strings.Builder
 	for _, r := range rows {
@@ -991,6 +993,13 @@ func (s *wikiIngestService) ProcessWikiFinalize(ctx context.Context, t *asynq.Ta
 				fmt.Fprintf(&changeDesc, "<document_removed>\n<title>%s</title>\n<summary>%s</summary>\n</document_removed>\n\n", row.Change.DocTitle, row.Change.DocSummary)
 			} else {
 				fmt.Fprintf(&changeDesc, "<document_added>\n<title>%s</title>\n<summary>%s</summary>\n</document_added>\n\n", row.Change.DocTitle, row.Change.DocSummary)
+			}
+			continue
+		}
+		if row.Graph && row.Slug != "" {
+			if _, ok := graphSet[row.Slug]; !ok {
+				graphSet[row.Slug] = struct{}{}
+				graphSlugs = append(graphSlugs, row.Slug)
 			}
 			continue
 		}
@@ -1049,6 +1058,19 @@ func (s *wikiIngestService) ProcessWikiFinalize(ctx context.Context, t *asynq.Ta
 		s.injectCrossLinks(ctx, payload.KnowledgeBaseID, affectedSlugs, freshRefs, batchCtx)
 	}
 
+	pendingGraphUpdated, publishedGraphUpdated := 0, 0
+	if len(graphSlugs) > 0 && synthesisModelID != "" {
+		chatModel, modelErr := s.modelService.GetChatModel(ctx, synthesisModelID)
+		if modelErr != nil {
+			logger.Warnf(ctx, "wiki graph: get chat model failed: %v", modelErr)
+		} else {
+			pendingGraphUpdated, publishedGraphUpdated, err = s.rebuildGovernedCardGraphs(ctx, chatModel, payload, graphSlugs, lang)
+			if err != nil {
+				logger.Warnf(ctx, "wiki graph: convergence failed: %v", err)
+			}
+		}
+	}
+
 	// Drain the processed rows. Best-effort convergence mirrors the legacy
 	// in-batch behaviour: a failed index rebuild is logged (not retried),
 	// so we delete regardless to avoid re-doing the whole pass forever.
@@ -1063,8 +1085,8 @@ func (s *wikiIngestService) ProcessWikiFinalize(ctx context.Context, t *asynq.Ta
 	}
 
 	logger.Infof(ctx,
-		"wiki finalize: kb=%s rows=%d affected_slugs=%d index_rebuilt=%v rescheduled=%v elapsed=%s",
-		payload.KnowledgeBaseID, len(rows), len(affectedSlugs), indexRebuilt, rescheduled,
+		"wiki finalize: kb=%s rows=%d affected_slugs=%d graph_slugs=%d pending_graph_updated=%d published_graph_updated=%d index_rebuilt=%v rescheduled=%v elapsed=%s",
+		payload.KnowledgeBaseID, len(rows), len(affectedSlugs), len(graphSlugs), pendingGraphUpdated, publishedGraphUpdated, indexRebuilt, rescheduled,
 		time.Since(startedAt).Round(time.Millisecond),
 	)
 	return nil
@@ -1367,7 +1389,7 @@ func (s *wikiIngestService) mapOneDocument(
 		docSummary = sumLine
 	}
 	// Scenario-driven cards are submitted through governance. L0 candidates
-		// publish immediately; L1 candidates remain invisible pending review.
+	// publish immediately; L1 candidates remain invisible pending review.
 	cardRefs, cardCandidates, cardErr := s.extractAndSubmitScenarioCards(ctx, chatModel, payload, knowledgeID, docTitle, sourceUpdatedAt, lang, chunks, op.ForceReview)
 	if cardErr != nil {
 		logger.Warnf(ctx, "wiki ingest: scenario card extraction failed for %s: %v", knowledgeID, cardErr)

@@ -12,6 +12,8 @@ type WikiGovernanceRepository interface {
 	GetChangeSet(ctx context.Context, kbID, id string) (*types.WikiChangeSet, error)
 	ListChangeSets(ctx context.Context, req types.WikiGovernanceListRequest) ([]*types.WikiChangeSet, int64, error)
 	ListPageChangeSets(ctx context.Context, kbID, slug string, limit int) ([]*types.WikiChangeSet, error)
+	ListPendingGraphCards(ctx context.Context, kbID string, limit int) ([]*types.WikiPendingGraphCard, error)
+	UpdatePendingGraphCard(ctx context.Context, kbID, changeItemID string, page *types.WikiPage) (bool, error)
 	ReviewChangeSet(ctx context.Context, kbID, id, reviewerID string, decision *types.WikiReviewDecision) error
 	ListReviews(ctx context.Context, changeSetID string) ([]*types.WikiReview, error)
 	ListPackages(ctx context.Context, kbID string) ([]*types.WikiPackage, error)
@@ -31,6 +33,8 @@ type WikiGovernanceService interface {
 	GetChangeSet(ctx context.Context, kbID, id string) (*types.WikiChangeSet, error)
 	ListChangeSets(ctx context.Context, req types.WikiGovernanceListRequest) ([]*types.WikiChangeSet, int64, error)
 	ListPageChangeSets(ctx context.Context, kbID, slug string, limit int) ([]*types.WikiChangeSet, error)
+	ListPendingGraphCards(ctx context.Context, kbID string, limit int) ([]*types.WikiPendingGraphCard, error)
+	UpdatePendingGraphCard(ctx context.Context, kbID, changeItemID string, page *types.WikiPage) (bool, error)
 	ReviewChangeSet(ctx context.Context, kbID, id, reviewerID string, decision *types.WikiReviewDecision) error
 	ListReviews(ctx context.Context, changeSetID string) ([]*types.WikiReview, error)
 	ListPackages(ctx context.Context, kbID string) ([]*types.WikiPackage, error)

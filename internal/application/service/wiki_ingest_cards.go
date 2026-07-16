@@ -7,11 +7,14 @@ import (
 	"html"
 	"sort"
 	"strings"
+	"sync/atomic"
+	"time"
 
 	"github.com/Tencent/WeKnora/internal/agent"
 	"github.com/Tencent/WeKnora/internal/logger"
 	"github.com/Tencent/WeKnora/internal/models/chat"
 	"github.com/Tencent/WeKnora/internal/types"
+	"golang.org/x/sync/errgroup"
 )
 
 type scenarioCardContext struct {
@@ -65,6 +68,12 @@ type crossPageAssessmentResult struct {
 var validCrossPageRelations = map[string]bool{
 	"consistent": true, "complementary": true, "conflicting": true,
 	"supersedes": true, "unrelated": true, "uncertain": true,
+}
+
+var validSemanticCardRelations = map[string]bool{
+	"supports": true, "contradicts": true, "tests": true, "answers": true,
+	"causes": true, "depends_on": true, "applies_to": true, "measures": true,
+	"example_of": true, "mitigates": true,
 }
 
 func mergeCardStrings(a, b types.StringArray) types.StringArray {
@@ -328,8 +337,32 @@ func (s *wikiIngestService) assessCrossPageRelations(ctx context.Context, model 
 			pageBySlug[page.Slug] = page
 		}
 	}
-	evidence := make(map[string]any, len(pages))
+	return s.assessCrossPageRelationsAgainst(ctx, model, slug, lang, card, pages)
+}
+
+func (s *wikiIngestService) assessCrossPageRelationsAgainst(ctx context.Context, model chat.Chat, slug, lang string, card scenarioCardCandidate, pages []*types.WikiPage) ([]crossPageAssessment, map[string]any, int, bool, error) {
+	pageBySlug := make(map[string]*types.WikiPage, len(pages))
+	filtered := make([]*types.WikiPage, 0, len(pages))
 	for _, page := range pages {
+		if page == nil || page.Slug == "" || page.Slug == slug || pageBySlug[page.Slug] != nil {
+			continue
+		}
+		pageBySlug[page.Slug] = page
+		filtered = append(filtered, page)
+	}
+	if len(filtered) == 0 {
+		return nil, nil, 0, false, nil
+	}
+	sort.Slice(filtered, func(i, j int) bool { return filtered[i].Slug < filtered[j].Slug })
+	if len(filtered) > 12 {
+		filtered = filtered[:12]
+		pageBySlug = map[string]*types.WikiPage{}
+		for _, page := range filtered {
+			pageBySlug[page.Slug] = page
+		}
+	}
+	evidence := make(map[string]any, len(filtered))
+	for _, page := range filtered {
 		excerpt := []rune(strings.TrimSpace(page.Content))
 		if len(excerpt) > 1000 {
 			excerpt = excerpt[:1000]
@@ -342,7 +375,7 @@ func (s *wikiIngestService) assessCrossPageRelations(ctx context.Context, model 
 		"scenarios": card.Scenarios, "affected_metrics": card.AffectedMetrics,
 		"applicability": card.Applicability, "prohibited_claims": card.ProhibitedClaims,
 	})
-	raw, err := s.generateWithTemplate(ctx, model, agent.WikiCrossPageConflictPrompt, map[string]string{"CandidateJSON": string(candidateJSON), "RelatedPagesXML": renderRelatedPagesXML(pages), "Language": lang})
+	raw, err := s.generateWithTemplate(ctx, model, agent.WikiCrossPageConflictPrompt, map[string]string{"CandidateJSON": string(candidateJSON), "RelatedPagesXML": renderRelatedPagesXML(filtered), "Language": lang})
 	if err != nil {
 		return nil, evidence, 0, true, fmt.Errorf("assess cross-page conflicts: %w", err)
 	}
@@ -351,6 +384,274 @@ func (s *wikiIngestService) assessCrossPageRelations(ctx context.Context, model 
 		return nil, evidence, missing, true, err
 	}
 	return assessments, evidence, missing, true, nil
+}
+
+func scenarioCardFromPage(page *types.WikiPage) scenarioCardCandidate {
+	var applicability map[string]any
+	_ = json.Unmarshal(page.Applicability, &applicability)
+	meta, _ := page.PageMetadata.Map()
+	scenarios := metadataStringSlice(meta["scenario_names"])
+	statement := strings.TrimSpace(page.Summary)
+	if statement == "" {
+		body := strings.TrimSpace(strings.TrimPrefix(page.Content, "# "+page.Title))
+		if i := strings.Index(body, "\n## "); i >= 0 {
+			body = body[:i]
+		}
+		statement = strings.TrimSpace(body)
+	}
+	return scenarioCardCandidate{KnowledgeType: page.KnowledgeType, Title: page.Title, Statement: statement, Summary: page.Summary, BusinessLine: page.BusinessLine, Scenarios: scenarios, AudienceRoles: page.AudienceRoles, AffectedMetrics: page.AffectedMetrics, AnswerStrength: page.AnswerStrength, Applicability: applicability, ProhibitedClaims: page.ProhibitedClaims}
+}
+
+func replaceCardRelationshipSection(content string, relationships []map[string]any) string {
+	const heading = "\n## 关联知识\n"
+	if start := strings.Index(content, heading); start >= 0 {
+		rest := content[start+len(heading):]
+		if next := strings.Index(rest, "\n## "); next >= 0 {
+			content = content[:start] + rest[next:]
+		} else {
+			content = strings.TrimRight(content[:start], "\n") + "\n"
+		}
+	}
+	if len(relationships) == 0 {
+		return strings.TrimRight(content, "\n") + "\n"
+	}
+	var b strings.Builder
+	b.WriteString(strings.TrimRight(content, "\n"))
+	b.WriteString(heading)
+	for _, relation := range relationships {
+		fmt.Fprintf(&b, "- [[%s|%s]]（%s）\n", relation["target_slug"], relation["target_title"], relation["relation_type"])
+	}
+	return b.String()
+}
+
+func applyCardGraph(page *types.WikiPage, assessments []crossPageAssessment, evidence map[string]any) error {
+	metadata, _ := page.PageMetadata.Map()
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	for _, key := range []string{"cross_page_assessments", "cross_page_check_failed", "cross_page_check_error", "cross_page_check_incomplete", "cross_page_missing_assessments", "cross_page_conflict", "cross_page_uncertain", "cross_page_supersedes", "related_page_evidence"} {
+		delete(metadata, key)
+	}
+	applyCrossPageReviewMetadata(metadata, assessments, 0, nil)
+	if len(evidence) > 0 {
+		metadata["related_page_evidence"] = evidence
+	}
+	var relationships []map[string]any
+	if raw, ok := metadata["relationships"].([]any); ok {
+		for _, value := range raw {
+			relation, ok := value.(map[string]any)
+			typeName, _ := relation["relation_type"].(string)
+			if ok && validSemanticCardRelations[typeName] {
+				relationships = append(relationships, relation)
+			}
+		}
+	}
+	seen := map[string]bool{}
+	for _, relation := range relationships {
+		if slug, _ := relation["target_slug"].(string); slug != "" {
+			seen[slug] = true
+		}
+	}
+	for _, assessment := range assessments {
+		if assessment.RelatedSlug == page.Slug || assessment.Confidence < 0.7 || assessment.Relation == "unrelated" || assessment.Relation == "uncertain" || seen[assessment.RelatedSlug] {
+			continue
+		}
+		title := assessment.RelatedSlug
+		if related, ok := evidence[assessment.RelatedSlug].(map[string]any); ok {
+			if value, ok := related["title"].(string); ok && value != "" {
+				title = value
+			}
+		}
+		seen[assessment.RelatedSlug] = true
+		relationships = append(relationships, map[string]any{"target_title": title, "target_slug": assessment.RelatedSlug, "relation_type": assessment.Relation, "reason": assessment.Reason, "confidence": assessment.Confidence, "applicability_overlap": assessment.ApplicabilityOverlap, "graph_source": "convergence"})
+	}
+	metadata["relationships"] = relationships
+	metadata["graph_rebuilt_at"] = time.Now().UTC().Format(time.RFC3339Nano)
+	metadataBytes, err := json.Marshal(metadata)
+	if err != nil {
+		return err
+	}
+	page.PageMetadata = types.JSON(metadataBytes)
+	page.Content = replaceCardRelationshipSection(page.Content, relationships)
+	links := make(types.StringArray, 0, len(relationships))
+	for _, relation := range relationships {
+		if slug, _ := relation["target_slug"].(string); slug != "" && slug != page.Slug {
+			links = mergeCardStrings(links, types.StringArray{slug})
+		}
+	}
+	page.OutLinks = links
+	return nil
+}
+
+type scoredGraphPage struct {
+	page  *types.WikiPage
+	score float64
+}
+
+func (s *wikiIngestService) relatedGraphPages(ctx context.Context, kbID string, page *types.WikiPage, pending []*types.WikiPendingGraphCard, includePending bool) ([]*types.WikiPage, error) {
+	card := scenarioCardFromPage(page)
+	bySlug := map[string]*types.WikiPage{}
+	for _, signal := range crossPageQuerySignals(card) {
+		pages, err := s.wikiService.FindRelatedPages(ctx, kbID, page.Slug, signal, []string{types.WikiPageTypeCard}, 6)
+		if err != nil {
+			return nil, err
+		}
+		for _, related := range pages {
+			if related != nil && related.Slug != "" && related.Slug != page.Slug && related.ReviewStatus == types.WikiReviewApproved {
+				bySlug[related.Slug] = related
+			}
+		}
+	}
+	if includePending {
+		candidateText := strings.TrimSpace(page.Title + " " + page.Summary + " " + page.Content)
+		scored := make([]scoredGraphPage, 0, len(pending))
+		latest := map[string]*types.WikiPage{}
+		for _, candidate := range pending {
+			if candidate != nil && candidate.Page != nil {
+				latest[candidate.Page.Slug] = candidate.Page
+			}
+		}
+		for slug, related := range latest {
+			if slug == "" || slug == page.Slug {
+				continue
+			}
+			relatedText := strings.TrimSpace(related.Title + " " + related.Summary + " " + related.Content)
+			score := claimOverlapScore(candidateText, relatedText)
+			if page.BusinessLine != "" && page.BusinessLine == related.BusinessLine {
+				score += 0.08
+			}
+			if score >= 0.12 {
+				scored = append(scored, scoredGraphPage{page: related, score: score})
+			}
+		}
+		sort.SliceStable(scored, func(i, j int) bool { return scored[i].score > scored[j].score })
+		for i, item := range scored {
+			if i >= 12 {
+				break
+			}
+			bySlug[item.page.Slug] = item.page
+		}
+	}
+	out := make([]*types.WikiPage, 0, len(bySlug))
+	for _, related := range bySlug {
+		out = append(out, related)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Slug < out[j].Slug })
+	if len(out) > 12 {
+		out = out[:12]
+	}
+	return out, nil
+}
+
+// rebuildGovernedCardGraphs converges the two graph layers after ingest or a
+// review decision. Pending snapshots may see pending + approved cards, while
+// published pages may only see approved cards. This separation prevents
+// unreviewed claims from leaking into the graph used by ordinary RAG answers.
+func (s *wikiIngestService) rebuildGovernedCardGraphs(ctx context.Context, model chat.Chat, payload WikiIngestPayload, affectedSlugs []string, lang string) (int, int, error) {
+	if s.governanceSvc == nil {
+		return 0, 0, nil
+	}
+	pending, err := s.governanceSvc.ListPendingGraphCards(ctx, payload.KnowledgeBaseID, 2000)
+	if err != nil {
+		return 0, 0, err
+	}
+	// Keep an immutable candidate pool for relation retrieval. Workers mutate
+	// their own page copy, never the page another worker is reading.
+	pendingPool := make([]*types.WikiPendingGraphCard, 0, len(pending))
+	for _, candidate := range pending {
+		if candidate == nil || candidate.Page == nil {
+			continue
+		}
+		pageCopy := *candidate.Page
+		pendingPool = append(pendingPool, &types.WikiPendingGraphCard{ChangeSetID: candidate.ChangeSetID, ChangeItemID: candidate.ChangeItemID, Page: &pageCopy})
+	}
+	var pendingUpdated atomic.Int64
+	// Rebuild all pending snapshots. A rejection can invalidate incoming
+	// candidate edges on cards other than the rejected card itself.
+	var pendingGroup errgroup.Group
+	pendingGroup.SetLimit(4)
+	for _, candidate := range pendingPool {
+		if candidate == nil || candidate.Page == nil {
+			continue
+		}
+		candidate := candidate
+		pendingGroup.Go(func() error {
+			pageCopy := *candidate.Page
+			related, relErr := s.relatedGraphPages(ctx, payload.KnowledgeBaseID, &pageCopy, pendingPool, true)
+			if relErr != nil {
+				logger.Warnf(ctx, "wiki graph: find pending relations for %s failed: %v", pageCopy.Slug, relErr)
+				return nil
+			}
+			assessments, evidence, _, attempted, assessErr := s.assessCrossPageRelationsAgainst(ctx, model, pageCopy.Slug, lang, scenarioCardFromPage(&pageCopy), related)
+			if assessErr != nil {
+				logger.Warnf(ctx, "wiki graph: assess pending relations for %s failed: %v", pageCopy.Slug, assessErr)
+				return nil
+			}
+			if !attempted {
+				assessments, evidence = nil, nil
+			}
+			if err := applyCardGraph(&pageCopy, assessments, evidence); err != nil {
+				return nil
+			}
+			if updated, updateErr := s.governanceSvc.UpdatePendingGraphCard(ctx, payload.KnowledgeBaseID, candidate.ChangeItemID, &pageCopy); updateErr != nil {
+				logger.Warnf(ctx, "wiki graph: update pending snapshot %s failed: %v", pageCopy.Slug, updateErr)
+			} else if updated {
+				pendingUpdated.Add(1)
+			}
+			return nil
+		})
+	}
+	_ = pendingGroup.Wait()
+
+	var publishedUpdated atomic.Int64
+	seen := map[string]bool{}
+	var publishedGroup errgroup.Group
+	publishedGroup.SetLimit(4)
+	for _, slug := range affectedSlugs {
+		if slug == "" || seen[slug] {
+			continue
+		}
+		seen[slug] = true
+		slug := slug
+		publishedGroup.Go(func() error {
+			page, pageErr := s.wikiService.GetPageBySlug(ctx, payload.KnowledgeBaseID, slug)
+			if pageErr != nil || page == nil || page.PageType != types.WikiPageTypeCard || page.ReviewStatus != types.WikiReviewApproved || page.Status == types.WikiPageStatusArchived {
+				return nil
+			}
+			related, relErr := s.relatedGraphPages(ctx, payload.KnowledgeBaseID, page, nil, false)
+			if relErr != nil {
+				logger.Warnf(ctx, "wiki graph: find published relations for %s failed: %v", slug, relErr)
+				return nil
+			}
+			assessments, evidence, _, attempted, assessErr := s.assessCrossPageRelationsAgainst(ctx, model, slug, lang, scenarioCardFromPage(page), related)
+			if assessErr != nil {
+				logger.Warnf(ctx, "wiki graph: assess published relations for %s failed: %v", slug, assessErr)
+				return nil
+			}
+			if !attempted {
+				assessments, evidence = nil, nil
+			}
+			if err := applyCardGraph(page, assessments, evidence); err != nil {
+				return nil
+			}
+			metadata := append([]byte(nil), page.PageMetadata...)
+			if err := s.wikiService.UpdateAutoLinkedContent(ctx, page); err != nil {
+				logger.Warnf(ctx, "wiki graph: update published links for %s failed: %v", slug, err)
+				return nil
+			}
+			fresh, freshErr := s.wikiService.GetPageBySlug(ctx, payload.KnowledgeBaseID, slug)
+			if freshErr == nil && fresh != nil {
+				fresh.PageMetadata = types.JSON(metadata)
+				if metaErr := s.wikiService.UpdatePageMeta(ctx, fresh); metaErr != nil {
+					logger.Warnf(ctx, "wiki graph: update published metadata for %s failed: %v", slug, metaErr)
+				}
+			}
+			publishedUpdated.Add(1)
+			return nil
+		})
+	}
+	_ = publishedGroup.Wait()
+	return int(pendingUpdated.Load()), int(publishedUpdated.Load()), nil
 }
 
 func (s *wikiIngestService) extractAndSubmitScenarioCards(ctx context.Context, model chat.Chat, payload WikiIngestPayload, knowledgeID, sourceTitle, sourceUpdatedAt, lang string, chunks []*types.Chunk, forceReview bool) ([]types.WikiLogPageRef, int, error) {
