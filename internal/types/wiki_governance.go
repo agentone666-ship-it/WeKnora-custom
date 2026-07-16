@@ -29,6 +29,7 @@ const (
 	WikiConflictEditCandidate  = "edit_candidate"
 	WikiConflictSplitScope     = "split_scope"
 	WikiConflictDefer          = "defer"
+	WikiConflictPerClaim       = "per_conflict"
 	WikiCorrectionAutoApplied  = "automatic_correction"
 )
 
@@ -121,6 +122,7 @@ type WikiReview struct {
 	Resolution      string    `json:"resolution,omitempty" gorm:"type:varchar(32)"`
 	RetainedClaim   string    `json:"retained_claim,omitempty" gorm:"type:text"`
 	DiscardedClaims JSON      `json:"discarded_claims,omitempty" gorm:"type:json"`
+	ConflictChoices JSON      `json:"conflict_choices,omitempty" gorm:"type:json"`
 	CreatedAt       time.Time `json:"created_at"`
 }
 
@@ -135,13 +137,20 @@ type WikiGovernanceListRequest struct {
 	Offset          int
 }
 
+type WikiConflictChoice struct {
+	ItemID          string `json:"item_id"`
+	AssessmentIndex int    `json:"assessment_index"`
+	Resolution      string `json:"resolution"`
+}
+
 type WikiReviewDecision struct {
-	Decision      string          `json:"decision" binding:"required"`
-	Comment       string          `json:"comment"`
-	MergeIntoSlug string          `json:"merge_into_slug,omitempty"`
-	ItemOverrides map[string]JSON `json:"item_overrides,omitempty"`
-	Resolution    string          `json:"resolution,omitempty"`
-	RetainedClaim string          `json:"retained_claim,omitempty"`
+	Decision        string               `json:"decision" binding:"required"`
+	Comment         string               `json:"comment"`
+	MergeIntoSlug   string               `json:"merge_into_slug,omitempty"`
+	ItemOverrides   map[string]JSON      `json:"item_overrides,omitempty"`
+	Resolution      string               `json:"resolution,omitempty"`
+	RetainedClaim   string               `json:"retained_claim,omitempty"`
+	ConflictChoices []WikiConflictChoice `json:"conflict_choices,omitempty"`
 }
 
 type WikiGovernanceStats struct {

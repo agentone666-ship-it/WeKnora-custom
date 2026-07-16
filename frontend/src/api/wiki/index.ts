@@ -369,7 +369,12 @@ export interface WikiChangeSet {
 }
 
 export type WikiChangeCategory = 'addition' | 'update' | 'conflict' | 'correction' | 'retirement' | 'merge_duplicate';
-export type WikiConflictResolution = 'keep_existing' | 'adopt_candidate' | 'edit_candidate' | 'split_scope' | 'defer';
+export type WikiConflictResolution = 'keep_existing' | 'adopt_candidate' | 'edit_candidate' | 'split_scope' | 'defer' | 'per_conflict';
+export interface WikiConflictChoice {
+  item_id: string;
+  assessment_index: number;
+  resolution: 'keep_existing' | 'adopt_candidate';
+}
 
 export function listWikiChangeSets(kbId: string, params?: {
   status?: string;
@@ -400,6 +405,7 @@ export function reviewWikiChangeSet(
     item_overrides?: Record<string, Record<string, any>>;
     resolution?: WikiConflictResolution;
     retained_claim?: string;
+    conflict_choices?: WikiConflictChoice[];
   },
 ) {
   return post(`/api/v1/knowledgebase/${kbId}/wiki/change-sets/${changeSetId}/review`, data);

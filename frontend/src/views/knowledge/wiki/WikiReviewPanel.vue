@@ -46,14 +46,26 @@
 
           <section v-if="isConflict" class="conflict-box">
             <div class="section-title">冲突定位与版本取舍</div>
-            <div v-for="assessment in conflictAssessments" :key="assessment.related_slug" class="conflict-assessment">
+            <div v-for="assessment in conflictAssessments" :key="`${activeConflictItemId}:${assessment.assessmentIndex}`" class="conflict-assessment">
               <div class="conflict-head">
                 <strong>{{ assessment.related_slug }}</strong>
                 <t-tag theme="danger" size="small">置信度 {{ formatConfidence(assessment.confidence) }}</t-tag>
               </div>
               <div class="claim-grid">
-                <div><span>候选新说法</span><pre>{{ assessment.candidate_claim || '未提取' }}</pre></div>
-                <div><span>既有说法</span><pre>{{ assessment.existing_claim || '未提取' }}</pre></div>
+                <button type="button" class="claim-option"
+                  :class="{ selected: conflictSelection(assessment.assessmentIndex) === 'adopt_candidate' }"
+                  @click="chooseConflict(assessment.assessmentIndex, 'adopt_candidate')">
+                  <span>候选新说法</span>
+                  <strong v-if="conflictSelection(assessment.assessmentIndex) === 'adopt_candidate'">✓ 保留这个说法</strong>
+                  <pre>{{ assessment.candidate_claim || '未提取' }}</pre>
+                </button>
+                <button type="button" class="claim-option"
+                  :class="{ selected: conflictSelection(assessment.assessmentIndex) === 'keep_existing' }"
+                  @click="chooseConflict(assessment.assessmentIndex, 'keep_existing')">
+                  <span>既有说法</span>
+                  <strong v-if="conflictSelection(assessment.assessmentIndex) === 'keep_existing'">✓ 保留这个说法</strong>
+                  <pre>{{ assessment.existing_claim || '未提取' }}</pre>
+                </button>
               </div>
               <div class="conflict-reason">冲突位置：{{ assessment.reason }}；适用范围{{ assessment.applicability_overlap ? '重叠' : '不重叠' }}</div>
               <details v-if="relatedEvidence[assessment.related_slug]">
@@ -61,14 +73,9 @@
                 <pre>{{ pretty(relatedEvidence[assessment.related_slug]) }}</pre>
               </details>
             </div>
-            <t-radio-group v-model="conflictResolution" class="resolution-options">
-              <t-radio value="keep_existing">保留既有说法，拒绝新候选</t-radio>
-              <t-radio value="adopt_candidate">采用新说法，淘汰冲突旧版本</t-radio>
-              <t-radio value="edit_candidate">人工编辑后采用，并淘汰冲突旧版本</t-radio>
-              <t-radio value="split_scope">适用范围不同，拆分后同时保留</t-radio>
-              <t-radio value="defer">暂不裁决，继续待审核</t-radio>
-            </t-radio-group>
-            <t-textarea v-model="retainedClaim" :autosize="{ minRows: 2, maxRows: 5 }" placeholder="最终保留的标准说法（将写入审核日志）" />
+            <div class="conflict-progress" :class="{ complete: allConflictChoicesSelected }">
+              已选择 {{ selectedConflictCount }}/{{ conflictAssessments.length }} 处；每一处都选择后才能提交
+            </div>
           </section>
           <div class="review-context-grid">
             <div><span>资料性质</span><strong>{{ selected.items?.[0]?.after?.page_metadata?.document_nature || 'unknown' }}</strong></div>
@@ -85,9 +92,6 @@
             <div v-if="overrides[item.id]" class="review-edit-fields">
               <t-select v-model="overrides[item.id].knowledge_type" :options="knowledgeTypeOptions" placeholder="知识类型" />
               <t-select v-model="overrides[item.id].maturity_status" :options="maturityOptions" placeholder="成熟度" />
-              <t-textarea v-if="conflictResolution === 'edit_candidate'" v-model="overrides[item.id].content" class="wide-field" :autosize="{ minRows: 4, maxRows: 10 }" placeholder="人工修订后的正文" />
-              <t-input v-if="conflictResolution === 'edit_candidate'" v-model="overrides[item.id].summary" class="wide-field" placeholder="人工修订后的摘要" />
-              <t-textarea v-if="conflictResolution === 'split_scope'" v-model="overrides[item.id].applicability_text" class="wide-field" :autosize="{ minRows: 3, maxRows: 8 }" placeholder='请输入拆分后的适用范围 JSON，例如 {"scope":"华东区"}' />
             </div>
             <div class="diff-grid">
               <div class="diff-column">
@@ -113,7 +117,8 @@
           <t-textarea v-model="comment" :autosize="{ minRows: 3, maxRows: 6 }" placeholder="审核意见（拒绝时建议必填）" />
           <div class="review-actions">
             <template v-if="isConflict">
-              <t-button variant="outline" :loading="submitting" @click="submitConflict">提交冲突裁决</t-button>
+              <t-button variant="outline" :loading="submitting" @click="deferConflict">暂缓审核</t-button>
+              <t-button theme="primary" :disabled="!allConflictChoicesSelected" :loading="submitting" @click="submitConflict">提交逐项裁决</t-button>
             </template>
             <template v-else>
               <t-button theme="danger" variant="outline" :loading="submitting" @click="submit('rejected')">拒绝</t-button>
@@ -130,8 +135,9 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { MessagePlugin } from 'tdesign-vue-next'
-import { batchReviewWikiChangeSets, getWikiChangeSet, listWikiChangeSets, reviewWikiChangeSet, type WikiChangeCategory, type WikiChangeItem, type WikiChangeSet, type WikiConflictResolution } from '@/api/wiki'
+import { batchReviewWikiChangeSets, getWikiChangeSet, listWikiChangeSets, reviewWikiChangeSet, type WikiChangeCategory, type WikiChangeItem, type WikiChangeSet, type WikiConflictChoice } from '@/api/wiki'
 import { normalizeWikiReviewSelection, toggleAllWikiReviews, toggleWikiReview, wikiReviewBatchSelectionState } from './wikiReviewSelection'
+import { allConflictsSelected, buildConflictChoices, conflictChoiceKey, conflictReviewDecision, type ConflictSelection } from './wikiConflictResolution'
 
 const props = defineProps<{ modelValue: boolean; knowledgeBaseId: string }>()
 const emit = defineEmits<{ (e: 'update:modelValue', value: boolean): void; (e: 'count-change', value: number): void; (e: 'published'): void }>()
@@ -146,8 +152,7 @@ const submitting = ref(false)
 const selectedBatchIds = ref<string[]>([])
 const overrides = ref<Record<string, { knowledge_type: string; maturity_status: string; content: string; summary: string; applicability_text: string }>>({})
 const mergeTargetSlug = ref('')
-const conflictResolution = ref<WikiConflictResolution | ''>('')
-const retainedClaim = ref('')
+const conflictSelections = ref<ConflictSelection>({})
 const categoryOptions: { label: string; value: WikiChangeCategory }[] = [
   { label: '新增', value: 'addition' }, { label: '普通更新', value: 'update' }, { label: '冲突', value: 'conflict' },
   { label: '纠错', value: 'correction' }, { label: '旧版本淘汰', value: 'retirement' }, { label: '合并/重复', value: 'merge_duplicate' },
@@ -179,8 +184,7 @@ async function select(set: WikiChangeSet) {
   try {
     const res: any = await getWikiChangeSet(props.knowledgeBaseId, set.id)
     selected.value = res.change_set
-    conflictResolution.value = ''
-    retainedClaim.value = ''
+    conflictSelections.value = {}
     mergeTargetSlug.value = String(selected.value?.items?.[0]?.after?.page_metadata?.possible_duplicate_slug || '')
     overrides.value = {}
     for (const item of selected.value?.items || []) {
@@ -212,7 +216,6 @@ async function submit(decision: 'approved' | 'rejected', mergeIntoSlug = '') {
       if (value.maturity_status !== String(original?.maturity_status || 'pending_review')) patch.maturity_status = value.maturity_status
       if (value.content !== String(original?.content || '')) patch.content = value.content
       if (value.summary !== String(original?.summary || '')) patch.summary = value.summary
-      if (conflictResolution.value === 'split_scope') patch.applicability = JSON.parse(value.applicability_text || '{}')
       return [id, patch]
     }).filter(([, patch]) => Object.keys(patch).length))
     const itemOverrides = decision === 'approved' && Object.keys(changedOverrides).length ? changedOverrides : undefined
@@ -228,45 +231,37 @@ async function submit(decision: 'approved' | 'rejected', mergeIntoSlug = '') {
 }
 
 async function submitConflict() {
-  if (!selected.value || !conflictResolution.value) {
-    MessagePlugin.warning('请选择冲突的处理方式')
+  if (!selected.value || !activeConflictItemId.value || !allConflictChoicesSelected.value) {
+    MessagePlugin.warning('请为每一处冲突选择要保留的说法')
     return
   }
-  if (conflictResolution.value === 'edit_candidate' && !retainedClaim.value.trim()) {
-    MessagePlugin.warning('请填写最终保留的标准说法')
-    return
-  }
-  if (conflictResolution.value === 'split_scope') {
-    try {
-      for (const item of selected.value.items || []) JSON.parse(overrides.value[item.id]?.applicability_text || '{}')
-    } catch {
-      MessagePlugin.warning('适用范围必须是合法 JSON')
-      return
-    }
-  }
-  const decision = conflictResolution.value === 'keep_existing' ? 'rejected' : conflictResolution.value === 'defer' ? 'deferred' : 'approved'
-  if (decision === 'rejected' && !comment.value.trim()) comment.value = '保留既有有效说法，拒绝当前冲突候选'
+  const choices = buildConflictChoices(activeConflictItemId.value, conflictAssessments.value.length, conflictSelections.value)
+  const decision = conflictReviewDecision(choices)
+  if (decision === 'rejected' && !comment.value.trim()) comment.value = '保留全部既有有效说法，拒绝当前冲突候选'
   submitting.value = true
   try {
-    const itemOverrides: Record<string, Record<string, any>> = {}
-    if (conflictResolution.value === 'edit_candidate' || conflictResolution.value === 'split_scope') {
-      for (const item of selected.value.items || []) {
-        const value = overrides.value[item.id]
-        if (!value) continue
-        if (conflictResolution.value === 'edit_candidate') itemOverrides[item.id] = { content: value.content, summary: value.summary }
-        else itemOverrides[item.id] = { applicability: JSON.parse(value.applicability_text || '{}') }
-      }
-    }
     await reviewWikiChangeSet(props.knowledgeBaseId, selected.value.id, {
-      decision, comment: comment.value.trim(), resolution: conflictResolution.value,
-      retained_claim: retainedClaim.value.trim(), item_overrides: Object.keys(itemOverrides).length ? itemOverrides : undefined,
+      decision, comment: comment.value.trim(), resolution: 'per_conflict', conflict_choices: choices,
     })
-    MessagePlugin.success(decision === 'deferred' ? '已记录暂缓意见' : '冲突裁决已保存并执行')
+    MessagePlugin.success('逐项冲突裁决已保存并执行')
     selected.value = null
     await load()
     if (decision === 'approved') emit('published')
   } catch (error: any) {
     MessagePlugin.error(error?.message || '提交冲突裁决失败')
+  } finally { submitting.value = false }
+}
+
+async function deferConflict() {
+  if (!selected.value) return
+  submitting.value = true
+  try {
+    await reviewWikiChangeSet(props.knowledgeBaseId, selected.value.id, {
+      decision: 'deferred', comment: comment.value.trim(), resolution: 'defer',
+    })
+    MessagePlugin.success('已记录暂缓意见')
+  } catch (error: any) {
+    MessagePlugin.error(error?.message || '暂缓审核失败')
   } finally { submitting.value = false }
 }
 
@@ -310,7 +305,21 @@ function systemSuggestion(set: WikiChangeSet) {
   return '确认分类与场景后可批准'
 }
 const isConflict = computed(() => selected.value?.change_category === 'conflict')
-const conflictAssessments = computed<any[]>(() => selected.value?.items?.[0]?.after?.page_metadata?.cross_page_assessments || [])
+const activeConflictItemId = computed(() => selected.value?.items?.[0]?.id || '')
+const conflictAssessments = computed<any[]>(() => {
+  const assessments = selected.value?.items?.[0]?.after?.page_metadata?.cross_page_assessments || []
+  return assessments
+    .filter((assessment: any) => assessment.relation === 'conflicting' || assessment.relation === 'supersedes')
+    .map((assessment: any, assessmentIndex: number) => ({ ...assessment, assessmentIndex }))
+})
+const selectedConflictCount = computed(() => buildConflictChoices(activeConflictItemId.value, conflictAssessments.value.length, conflictSelections.value).length)
+const allConflictChoicesSelected = computed(() => conflictAssessments.value.length > 0 && allConflictsSelected(activeConflictItemId.value, conflictAssessments.value.length, conflictSelections.value))
+function conflictSelection(assessmentIndex: number): WikiConflictChoice['resolution'] | undefined {
+  return conflictSelections.value[conflictChoiceKey(activeConflictItemId.value, assessmentIndex)]
+}
+function chooseConflict(assessmentIndex: number, resolution: WikiConflictChoice['resolution']) {
+  conflictSelections.value = { ...conflictSelections.value, [conflictChoiceKey(activeConflictItemId.value, assessmentIndex)]: resolution }
+}
 const relatedEvidence = computed<Record<string, any>>(() => selected.value?.items?.[0]?.after?.page_metadata?.related_page_evidence || {})
 function categoryLabel(value: WikiChangeCategory) { return categoryOptions.find(item => item.value === value)?.label || value || '普通更新' }
 function categoryTheme(value: WikiChangeCategory) { return value === 'conflict' ? 'danger' : value === 'addition' ? 'success' : value === 'correction' || value === 'retirement' ? 'warning' : 'primary' }
@@ -343,8 +352,15 @@ function formatConfidence(value: number) { return `${Math.round(Number(value || 
 .conflict-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .claim-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
 .claim-grid span, .conflict-reason { color: var(--td-text-color-secondary); font-size: 12px; }
+.claim-option { position: relative; min-width: 0; padding: 10px; text-align: left; color: inherit; cursor: pointer; border: 2px solid transparent; border-radius: 8px; background: var(--td-bg-color-secondarycontainer); }
+.claim-option:hover { border-color: var(--td-brand-color-light); }
+.claim-option.selected { border-color: var(--td-brand-color); background: var(--td-brand-color-light); }
+.claim-option > span { display: block; margin-bottom: 6px; }
+.claim-option > strong { position: absolute; top: 8px; right: 10px; color: var(--td-brand-color); font-size: 12px; }
+.claim-option pre { padding: 8px 0 0; background: transparent; }
 .conflict-reason { margin: 10px 0; }
-.resolution-options { display: grid; gap: 8px; margin: 14px 0; }
+.conflict-progress { margin-top: 12px; color: var(--td-warning-color); font-size: 13px; }
+.conflict-progress.complete { color: var(--td-success-color); }
 .merge-box { display: grid; grid-template-columns: 1fr auto; gap: 10px; margin: 14px 0; }
 .diff-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .diff-column { min-width: 0; }

@@ -367,11 +367,74 @@ func conflictAssessmentsFromPage(page *types.WikiPage) []governedConflictAssessm
 	return metadata.Assessments
 }
 
-func validateConflictResolution(set *types.WikiChangeSet, decision *types.WikiReviewDecision) error {
+func actionableConflictAssessments(page *types.WikiPage) []governedConflictAssessment {
+	out := make([]governedConflictAssessment, 0)
+	for _, assessment := range conflictAssessmentsFromPage(page) {
+		if assessment.Relation == "conflicting" || assessment.Relation == "supersedes" {
+			out = append(out, assessment)
+		}
+	}
+	return out
+}
+
+func conflictChoiceKey(itemID string, assessmentIndex int) string {
+	return fmt.Sprintf("%s:%d", itemID, assessmentIndex)
+}
+
+func validatedConflictChoices(items []types.WikiChangeItem, decision *types.WikiReviewDecision) (map[string]types.WikiConflictChoice, error) {
+	expected := map[string]bool{}
+	for _, item := range items {
+		page, err := decodePageSnapshot(item.After)
+		if err != nil {
+			return nil, err
+		}
+		for index := range actionableConflictAssessments(page) {
+			expected[conflictChoiceKey(item.ID, index)] = true
+		}
+	}
+	if len(expected) == 0 {
+		return nil, errors.New("conflict change set has no actionable conflict positions")
+	}
+	choices := map[string]types.WikiConflictChoice{}
+	for _, choice := range decision.ConflictChoices {
+		key := conflictChoiceKey(choice.ItemID, choice.AssessmentIndex)
+		if !expected[key] {
+			return nil, fmt.Errorf("unknown conflict position %s", key)
+		}
+		if _, duplicate := choices[key]; duplicate {
+			return nil, fmt.Errorf("duplicate conflict choice for %s", key)
+		}
+		if choice.Resolution != types.WikiConflictKeepExisting && choice.Resolution != types.WikiConflictAdoptCandidate {
+			return nil, fmt.Errorf("invalid per-conflict resolution %q", choice.Resolution)
+		}
+		choices[key] = choice
+	}
+	if len(choices) != len(expected) {
+		return nil, fmt.Errorf("every conflict position must be selected: got %d of %d", len(choices), len(expected))
+	}
+	return choices, nil
+}
+
+func validateConflictResolution(set *types.WikiChangeSet, items []types.WikiChangeItem, decision *types.WikiReviewDecision) error {
 	if set.ChangeCategory != types.WikiChangeCategoryConflict {
 		return nil
 	}
 	switch decision.Resolution {
+	case types.WikiConflictPerClaim:
+		choices, err := validatedConflictChoices(items, decision)
+		if err != nil {
+			return err
+		}
+		anyCandidate := false
+		for _, choice := range choices {
+			anyCandidate = anyCandidate || choice.Resolution == types.WikiConflictAdoptCandidate
+		}
+		if anyCandidate && decision.Decision != types.WikiReviewApproved {
+			return errors.New("selecting any candidate claim requires an approved decision")
+		}
+		if !anyCandidate && decision.Decision != types.WikiReviewRejected {
+			return errors.New("keeping every existing claim requires a rejected decision")
+		}
 	case types.WikiConflictKeepExisting:
 		if decision.Decision != types.WikiReviewRejected {
 			return errors.New("keep_existing requires a rejected decision")
@@ -399,6 +462,8 @@ func validateConflictResolution(set *types.WikiChangeSet, decision *types.WikiRe
 func conflictAuditClaims(items []types.WikiChangeItem, decision *types.WikiReviewDecision) (string, types.JSON) {
 	retained := strings.TrimSpace(decision.RetainedClaim)
 	discarded := make([]map[string]any, 0)
+	choices, _ := validatedConflictChoices(items, decision)
+	retainedClaims := make([]string, 0)
 	for _, item := range items {
 		if decision.Resolution == types.WikiCorrectionAutoApplied {
 			before, err := decodePageSnapshot(item.Before)
@@ -416,20 +481,17 @@ func conflictAuditClaims(items []types.WikiChangeItem, decision *types.WikiRevie
 		if err != nil {
 			continue
 		}
-		for _, assessment := range conflictAssessmentsFromPage(page) {
-			if assessment.Relation != "conflicting" && assessment.Relation != "supersedes" {
-				continue
+		for index, assessment := range actionableConflictAssessments(page) {
+			resolution := decision.Resolution
+			if decision.Resolution == types.WikiConflictPerClaim {
+				resolution = choices[conflictChoiceKey(item.ID, index)].Resolution
 			}
-			switch decision.Resolution {
+			switch resolution {
 			case types.WikiConflictKeepExisting:
-				if retained == "" {
-					retained = assessment.ExistingClaim
-				}
+				retainedClaims = append(retainedClaims, assessment.ExistingClaim)
 				discarded = append(discarded, map[string]any{"claim": assessment.CandidateClaim, "source": item.PageSlug, "reason": assessment.Reason})
 			case types.WikiConflictAdoptCandidate, types.WikiConflictEditCandidate:
-				if retained == "" {
-					retained = assessment.CandidateClaim
-				}
+				retainedClaims = append(retainedClaims, assessment.CandidateClaim)
 				discarded = append(discarded, map[string]any{"claim": assessment.ExistingClaim, "source": assessment.RelatedSlug, "reason": assessment.Reason})
 			case types.WikiCorrectionAutoApplied:
 				if retained == "" {
@@ -439,8 +501,38 @@ func conflictAuditClaims(items []types.WikiChangeItem, decision *types.WikiRevie
 			}
 		}
 	}
+	if retained == "" {
+		retained = strings.Join(retainedClaims, "\n")
+	}
 	raw, _ := json.Marshal(discarded)
 	return retained, types.JSON(raw)
+}
+
+func conflictChoiceAudit(items []types.WikiChangeItem, decision *types.WikiReviewDecision) types.JSON {
+	if decision.Resolution != types.WikiConflictPerClaim {
+		return types.JSON(`[]`)
+	}
+	choices, err := validatedConflictChoices(items, decision)
+	if err != nil {
+		return types.JSON(`[]`)
+	}
+	audit := make([]map[string]any, 0, len(choices))
+	for _, item := range items {
+		page, decodeErr := decodePageSnapshot(item.After)
+		if decodeErr != nil {
+			continue
+		}
+		for index, assessment := range actionableConflictAssessments(page) {
+			choice := choices[conflictChoiceKey(item.ID, index)]
+			audit = append(audit, map[string]any{
+				"item_id": item.ID, "assessment_index": index, "related_slug": assessment.RelatedSlug,
+				"resolution": choice.Resolution, "candidate_claim": assessment.CandidateClaim,
+				"existing_claim": assessment.ExistingClaim, "reason": assessment.Reason,
+			})
+		}
+	}
+	raw, _ := json.Marshal(audit)
+	return types.JSON(raw)
 }
 
 func appendPageMetadata(page *types.WikiPage, values map[string]any) error {
@@ -454,6 +546,100 @@ func appendPageMetadata(page *types.WikiPage, values map[string]any) error {
 	raw, err := json.Marshal(metadata)
 	page.PageMetadata = types.JSON(raw)
 	return err
+}
+
+func replaceReviewedClaim(page *types.WikiPage, from, to string) bool {
+	from, to = strings.TrimSpace(from), strings.TrimSpace(to)
+	if from == "" || to == "" || from == to {
+		return from == to && from != ""
+	}
+	replaced := false
+	if strings.Contains(page.Content, from) {
+		page.Content = strings.ReplaceAll(page.Content, from, to)
+		replaced = true
+	}
+	if strings.Contains(page.Summary, from) {
+		page.Summary = strings.ReplaceAll(page.Summary, from, to)
+		replaced = true
+	}
+	return replaced
+}
+
+// applyPerConflictChoices materializes a mixed human decision. Existing claims
+// selected by the reviewer replace their candidate counterparts in the
+// candidate page. Candidate claims selected by the reviewer replace only the
+// conflicting snippets in related pages, preserving unrelated page content.
+// Every touched related page is added to the same ChangeSet so normal version
+// checks, snapshots, history, and rollback continue to apply atomically.
+func applyPerConflictChoices(tx *gorm.DB, set *types.WikiChangeSet, items []types.WikiChangeItem, decision *types.WikiReviewDecision, now time.Time) ([]types.WikiChangeItem, error) {
+	if set.ChangeCategory != types.WikiChangeCategoryConflict || decision.Resolution != types.WikiConflictPerClaim {
+		return items, nil
+	}
+	choices, err := validatedConflictChoices(items, decision)
+	if err != nil {
+		return nil, err
+	}
+	type selectedAssessment struct {
+		assessment governedConflictAssessment
+		itemSlug   string
+		resolution string
+	}
+	adoptBySlug := map[string][]selectedAssessment{}
+	for itemIndex := range items {
+		page, decodeErr := decodePageSnapshot(items[itemIndex].After)
+		if decodeErr != nil {
+			return nil, decodeErr
+		}
+		audit := make([]map[string]any, 0)
+		for assessmentIndex, assessment := range actionableConflictAssessments(page) {
+			choice := choices[conflictChoiceKey(items[itemIndex].ID, assessmentIndex)]
+			audit = append(audit, map[string]any{"assessment_index": assessmentIndex, "related_slug": assessment.RelatedSlug, "resolution": choice.Resolution})
+			if choice.Resolution == types.WikiConflictKeepExisting {
+				if !replaceReviewedClaim(page, assessment.CandidateClaim, assessment.ExistingClaim) {
+					return nil, fmt.Errorf("candidate claim %q could not be located for conflict %d", assessment.CandidateClaim, assessmentIndex+1)
+				}
+			} else if assessment.RelatedSlug != "" && assessment.RelatedSlug != page.Slug {
+				adoptBySlug[assessment.RelatedSlug] = append(adoptBySlug[assessment.RelatedSlug], selectedAssessment{assessment: assessment, itemSlug: items[itemIndex].PageSlug, resolution: choice.Resolution})
+			}
+		}
+		if err := appendPageMetadata(page, map[string]any{"reviewed_conflict_choices": audit, "conflict_resolution": types.WikiConflictPerClaim}); err != nil {
+			return nil, err
+		}
+		items[itemIndex].After = pageJSONForRepository(page)
+		if err := tx.Model(&types.WikiChangeItem{}).Where("id = ?", items[itemIndex].ID).Update("after", items[itemIndex].After).Error; err != nil {
+			return nil, err
+		}
+	}
+
+	for relatedSlug, selected := range adoptBySlug {
+		var existing types.WikiPage
+		if err := tx.Where("knowledge_base_id = ? AND slug = ? AND status <> ?", set.KnowledgeBaseID, relatedSlug, types.WikiPageStatusArchived).First(&existing).Error; err != nil {
+			return nil, err
+		}
+		before := pageJSONForRepository(&existing)
+		audit := make([]map[string]any, 0, len(selected))
+		for _, selectedClaim := range selected {
+			assessment := selectedClaim.assessment
+			if !replaceReviewedClaim(&existing, assessment.ExistingClaim, assessment.CandidateClaim) {
+				return nil, fmt.Errorf("existing claim %q could not be located in %s", assessment.ExistingClaim, relatedSlug)
+			}
+			audit = append(audit, map[string]any{"old_claim": assessment.ExistingClaim, "retained_claim": assessment.CandidateClaim, "reason": assessment.Reason, "source_candidate": selectedClaim.itemSlug})
+		}
+		if err := appendPageMetadata(&existing, map[string]any{"reviewed_claim_replacements": audit, "corrected_by_change_set_id": set.ID, "corrected_at": now}); err != nil {
+			return nil, err
+		}
+		item := types.WikiChangeItem{
+			ID: uuid.NewString(), ChangeSetID: set.ID, Operation: "update", ChangeCategory: types.WikiChangeCategoryCorrection,
+			PageID: existing.ID, PageSlug: existing.Slug, ExpectedVersion: existing.Version, Before: before, After: pageJSONForRepository(&existing),
+			ChangedFields: types.StringArray{"content", "summary", "page_metadata"}, EvidenceChunkIDs: existing.ChunkRefs,
+			EvidenceExcerpts: types.JSON(`{}`), CreatedAt: now,
+		}
+		if err := tx.Create(&item).Error; err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, nil
 }
 
 // appendConflictRetirementItems turns every overlapping page displaced by an
@@ -548,17 +734,18 @@ func (r *wikiGovernanceRepository) ReviewChangeSet(ctx context.Context, kbID, id
 		if set.Status != types.WikiChangeSetPending {
 			return fmt.Errorf("change set is already %s", set.Status)
 		}
-		if err := validateConflictResolution(&set, decision); err != nil {
-			return err
-		}
 		now := time.Now()
 		var items []types.WikiChangeItem
 		if err := tx.Where("change_set_id = ?", id).Find(&items).Error; err != nil {
 			return err
 		}
+		if err := validateConflictResolution(&set, items, decision); err != nil {
+			return err
+		}
 		retainedClaim, discardedClaims := conflictAuditClaims(items, decision)
+		conflictChoices := conflictChoiceAudit(items, decision)
 		overrideBytes, _ := json.Marshal(decision.ItemOverrides)
-		review := types.WikiReview{ID: uuid.NewString(), ChangeSetID: id, ReviewerID: reviewerID, Decision: decision.Decision, Comment: decision.Comment, ItemOverrides: types.JSON(overrideBytes), Resolution: decision.Resolution, RetainedClaim: retainedClaim, DiscardedClaims: discardedClaims, CreatedAt: now}
+		review := types.WikiReview{ID: uuid.NewString(), ChangeSetID: id, ReviewerID: reviewerID, Decision: decision.Decision, Comment: decision.Comment, ItemOverrides: types.JSON(overrideBytes), Resolution: decision.Resolution, RetainedClaim: retainedClaim, DiscardedClaims: discardedClaims, ConflictChoices: conflictChoices, CreatedAt: now}
 		if err := tx.Create(&review).Error; err != nil {
 			return err
 		}
@@ -575,6 +762,10 @@ func (r *wikiGovernanceRepository) ReviewChangeSet(ctx context.Context, kbID, id
 			return r.mergeChangeSetIntoPage(tx, &set, items, decision.ItemOverrides, kbID, strings.TrimSpace(decision.MergeIntoSlug), reviewerID, now)
 		}
 		var err error
+		items, err = applyPerConflictChoices(tx, &set, items, decision, now)
+		if err != nil {
+			return err
+		}
 		items, err = appendConflictRetirementItems(tx, &set, items, decision, reviewerID, now)
 		if err != nil {
 			return err
@@ -682,7 +873,7 @@ func (r *wikiGovernanceRepository) ReviewChangeSet(ctx context.Context, kbID, id
 			if updateErr := tx.Model(&types.WikiChangeSet{}).Where("knowledge_base_id = ? AND id = ? AND status = ?", kbID, id, types.WikiChangeSetPending).Updates(map[string]any{"status": types.WikiChangeSetConflict, "reviewed_by": reviewerID, "review_comment": "Page version changed during review", "reviewed_at": now, "updated_at": now}).Error; updateErr != nil {
 				return updateErr
 			}
-			return tx.Create(&types.WikiReview{ID: uuid.NewString(), ChangeSetID: id, ReviewerID: reviewerID, Decision: types.WikiChangeSetConflict, Comment: "Page version changed during review", DiscardedClaims: types.JSON(`[]`), CreatedAt: now}).Error
+			return tx.Create(&types.WikiReview{ID: uuid.NewString(), ChangeSetID: id, ReviewerID: reviewerID, Decision: types.WikiChangeSetConflict, Comment: "Page version changed during review", DiscardedClaims: types.JSON(`[]`), ConflictChoices: types.JSON(`[]`), CreatedAt: now}).Error
 		})
 	}
 	return err
