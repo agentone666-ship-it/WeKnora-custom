@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -67,6 +68,22 @@ func TestCreateChangeSetNormalizesEmptyJSONFields(t *testing.T) {
 	}
 }
 
+func TestCreateChangeSetNormalizesLegacyL2ToL1(t *testing.T) {
+	repo, db := newGovernanceTestRepo(t)
+	now := time.Now()
+	set := &types.WikiChangeSet{ID: uuid.NewString(), KnowledgeBaseID: "kb-1", Status: types.WikiChangeSetPending, ReviewLevel: types.WikiReviewLevelL2, CreatedAt: now, UpdatedAt: now}
+	if err := repo.CreateChangeSet(context.Background(), set); err != nil {
+		t.Fatal(err)
+	}
+	var stored types.WikiChangeSet
+	if err := db.First(&stored, "id = ?", set.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.ReviewLevel != types.WikiReviewLevelL1 || stored.ChangeCategory != types.WikiChangeCategoryUpdate {
+		t.Fatalf("legacy change set normalized to level/category=%s/%s, want L1/update", stored.ReviewLevel, stored.ChangeCategory)
+	}
+}
+
 func TestReviewChangeSetPublishesCardAtomically(t *testing.T) {
 	repo, db := newGovernanceTestRepo(t)
 	now := time.Now()
@@ -111,7 +128,7 @@ func TestReviewChangeSetRejectsStaleVersion(t *testing.T) {
 	}
 	candidate := *current
 	candidate.Content = "stale candidate"
-	set := &types.WikiChangeSet{ID: uuid.NewString(), KnowledgeBaseID: "kb-1", Status: types.WikiChangeSetPending, ReviewLevel: types.WikiReviewLevelL2, CreatedAt: now, UpdatedAt: now, Items: []types.WikiChangeItem{{ID: uuid.NewString(), Operation: "update", PageID: current.ID, PageSlug: current.Slug, ExpectedVersion: 1, Before: snapshotForTest(t, current), After: snapshotForTest(t, &candidate), CreatedAt: now}}}
+	set := &types.WikiChangeSet{ID: uuid.NewString(), KnowledgeBaseID: "kb-1", Status: types.WikiChangeSetPending, ReviewLevel: types.WikiReviewLevelL1, CreatedAt: now, UpdatedAt: now, Items: []types.WikiChangeItem{{ID: uuid.NewString(), Operation: "update", PageID: current.ID, PageSlug: current.Slug, ExpectedVersion: 1, Before: snapshotForTest(t, current), After: snapshotForTest(t, &candidate), CreatedAt: now}}}
 	if err := repo.CreateChangeSet(context.Background(), set); err != nil {
 		t.Fatal(err)
 	}
@@ -132,6 +149,128 @@ func TestReviewChangeSetRejectsStaleVersion(t *testing.T) {
 	}
 	if storedSet.Status != types.WikiChangeSetConflict {
 		t.Fatalf("change set status=%s, want conflict", storedSet.Status)
+	}
+}
+
+func TestConflictReviewAdoptsCandidateAndArchivesOldVersionWithAudit(t *testing.T) {
+	repo, db := newGovernanceTestRepo(t)
+	now := time.Now()
+	old := &types.WikiPage{
+		ID: uuid.NewString(), KnowledgeBaseID: "kb-1", Slug: "concept/refund-three-days", Title: "退款三日到账",
+		PageType: types.WikiPageTypeConcept, Status: types.WikiPageStatusPublished, Content: "退款必须在3个工作日到账",
+		ReviewStatus: types.WikiReviewApproved, Version: 2, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := db.Create(old).Error; err != nil {
+		t.Fatal(err)
+	}
+	metadata, _ := json.Marshal(map[string]any{"cross_page_assessments": []map[string]any{{
+		"related_slug": old.Slug, "relation": "conflicting", "candidate_claim": "退款必须在5个工作日到账",
+		"existing_claim": "退款必须在3个工作日到账", "reason": "到账时限不同", "confidence": 0.99, "applicability_overlap": true,
+	}}})
+	candidate := &types.WikiPage{
+		KnowledgeBaseID: "kb-1", Slug: "card/rule-refund-five-days", Title: "退款五日到账", PageType: types.WikiPageTypeCard,
+		KnowledgeType: types.WikiKnowledgeTypeRule, MaturityStatus: types.WikiMaturityPendingReview, ReviewStatus: types.WikiReviewPending,
+		Status: types.WikiPageStatusDraft, Content: "退款必须在5个工作日到账", Summary: "五日到账规则", ChunkRefs: types.StringArray{"chunk-new"},
+		PageMetadata: types.JSON(metadata), Version: 1,
+	}
+	set := &types.WikiChangeSet{
+		ID: uuid.NewString(), KnowledgeBaseID: "kb-1", Status: types.WikiChangeSetPending, ReviewLevel: types.WikiReviewLevelL1,
+		ChangeCategory: types.WikiChangeCategoryConflict, Reasons: types.StringArray{"cross_page_claim_conflict"}, CreatedAt: now, UpdatedAt: now,
+		Items: []types.WikiChangeItem{{ID: uuid.NewString(), Operation: "create", ChangeCategory: types.WikiChangeCategoryConflict, PageSlug: candidate.Slug, After: snapshotForTest(t, candidate), CreatedAt: now}},
+	}
+	if err := repo.CreateChangeSet(context.Background(), set); err != nil {
+		t.Fatal(err)
+	}
+	decision := &types.WikiReviewDecision{Decision: types.WikiReviewApproved, Resolution: types.WikiConflictAdoptCandidate, RetainedClaim: "退款必须在5个工作日到账", Comment: "新制度已生效"}
+	if err := repo.ReviewChangeSet(context.Background(), "kb-1", set.ID, "reviewer-1", decision); err != nil {
+		t.Fatal(err)
+	}
+
+	var archived types.WikiPage
+	if err := db.First(&archived, "id = ?", old.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if archived.Status != types.WikiPageStatusArchived || archived.MaturityStatus != types.WikiMaturityOutdated || archived.EffectiveTo == nil {
+		t.Fatalf("old page was not retired: status=%s maturity=%s effective_to=%v", archived.Status, archived.MaturityStatus, archived.EffectiveTo)
+	}
+	var published types.WikiPage
+	if err := db.First(&published, "knowledge_base_id = ? AND slug = ?", "kb-1", candidate.Slug).Error; err != nil {
+		t.Fatal(err)
+	}
+	if published.Status != types.WikiPageStatusPublished || published.ReviewStatus != types.WikiReviewApproved {
+		t.Fatalf("candidate was not published: status=%s review=%s", published.Status, published.ReviewStatus)
+	}
+	var itemCount int64
+	if err := db.Model(&types.WikiChangeItem{}).Where("change_set_id = ?", set.ID).Count(&itemCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if itemCount != 2 {
+		t.Fatalf("change items=%d, want candidate plus retired version", itemCount)
+	}
+	var review types.WikiReview
+	if err := db.First(&review, "change_set_id = ?", set.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if review.Resolution != types.WikiConflictAdoptCandidate || review.RetainedClaim != decision.RetainedClaim || !strings.Contains(review.DiscardedClaims.ToString(), "3个工作日") {
+		t.Fatalf("incomplete conflict audit: resolution=%s retained=%q discarded=%s", review.Resolution, review.RetainedClaim, review.DiscardedClaims)
+	}
+}
+
+func TestConflictReviewKeepExistingRejectsCandidateAndKeepsOldPage(t *testing.T) {
+	repo, db := newGovernanceTestRepo(t)
+	now := time.Now()
+	old := &types.WikiPage{ID: uuid.NewString(), KnowledgeBaseID: "kb-1", Slug: "card/rule-current", Title: "现行规则", PageType: types.WikiPageTypeCard, KnowledgeType: types.WikiKnowledgeTypeRule, MaturityStatus: types.WikiMaturityVerified, ReviewStatus: types.WikiReviewApproved, Status: types.WikiPageStatusPublished, ChunkRefs: types.StringArray{"chunk-old"}, Version: 1, CreatedAt: now, UpdatedAt: now}
+	if err := db.Create(old).Error; err != nil {
+		t.Fatal(err)
+	}
+	candidate := &types.WikiPage{KnowledgeBaseID: "kb-1", Slug: "card/rule-candidate", Title: "候选规则", PageType: types.WikiPageTypeCard, KnowledgeType: types.WikiKnowledgeTypeRule, PageMetadata: types.JSON(`{"cross_page_assessments":[{"related_slug":"card/rule-current","relation":"conflicting","candidate_claim":"新说法","existing_claim":"旧说法","reason":"直接冲突","confidence":1,"applicability_overlap":true}]}`)}
+	set := &types.WikiChangeSet{ID: uuid.NewString(), KnowledgeBaseID: "kb-1", Status: types.WikiChangeSetPending, ReviewLevel: types.WikiReviewLevelL1, ChangeCategory: types.WikiChangeCategoryConflict, CreatedAt: now, UpdatedAt: now, Items: []types.WikiChangeItem{{ID: uuid.NewString(), Operation: "create", PageSlug: candidate.Slug, After: snapshotForTest(t, candidate), CreatedAt: now}}}
+	if err := repo.CreateChangeSet(context.Background(), set); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.ReviewChangeSet(context.Background(), "kb-1", set.ID, "reviewer-1", &types.WikiReviewDecision{Decision: types.WikiReviewRejected, Resolution: types.WikiConflictKeepExisting, Comment: "旧制度仍有效"}); err != nil {
+		t.Fatal(err)
+	}
+	var stored types.WikiPage
+	if err := db.First(&stored, "id = ?", old.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != types.WikiPageStatusPublished || stored.Version != old.Version {
+		t.Fatalf("existing page changed unexpectedly: status=%s version=%d", stored.Status, stored.Version)
+	}
+}
+
+func TestAutomaticCorrectionReviewPreservesDiscardedClaim(t *testing.T) {
+	repo, db := newGovernanceTestRepo(t)
+	now := time.Now()
+	current := &types.WikiPage{ID: uuid.NewString(), KnowledgeBaseID: "kb-1", Slug: "card/rule-response-time", Title: "响应时限", PageType: types.WikiPageTypeCard, KnowledgeType: types.WikiKnowledgeTypeRule, Content: "响应时限为3个工作日", Summary: "3日响应", Status: types.WikiPageStatusPublished, ReviewStatus: types.WikiReviewApproved, MaturityStatus: types.WikiMaturityVerified, ChunkRefs: types.StringArray{"chunk-old"}, Version: 1, CreatedAt: now, UpdatedAt: now}
+	if err := db.Create(current).Error; err != nil {
+		t.Fatal(err)
+	}
+	candidate := *current
+	candidate.Content, candidate.Summary = "响应时限现更正为5个工作日", "5日响应"
+	candidate.ChunkRefs = types.StringArray{"chunk-new"}
+	set := &types.WikiChangeSet{ID: uuid.NewString(), KnowledgeBaseID: "kb-1", Status: types.WikiChangeSetPending, ReviewLevel: types.WikiReviewLevelL0, ChangeCategory: types.WikiChangeCategoryCorrection, Reasons: types.StringArray{"authoritative_explicit_correction", "card_conclusion_changed"}, CreatedAt: now, UpdatedAt: now, Items: []types.WikiChangeItem{{ID: uuid.NewString(), Operation: "update", ChangeCategory: types.WikiChangeCategoryCorrection, PageID: current.ID, PageSlug: current.Slug, ExpectedVersion: current.Version, Before: snapshotForTest(t, current), After: snapshotForTest(t, &candidate), CreatedAt: now}}}
+	if err := repo.CreateChangeSet(context.Background(), set); err != nil {
+		t.Fatal(err)
+	}
+	decision := &types.WikiReviewDecision{Decision: types.WikiReviewApproved, Resolution: types.WikiCorrectionAutoApplied, RetainedClaim: candidate.Summary, Comment: "automatic correction"}
+	if err := repo.ReviewChangeSet(context.Background(), "kb-1", set.ID, "system", decision); err != nil {
+		t.Fatal(err)
+	}
+	var review types.WikiReview
+	if err := db.First(&review, "change_set_id = ?", set.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if review.ReviewerID != "system" || review.Resolution != types.WikiCorrectionAutoApplied || review.RetainedClaim != "5日响应" || !strings.Contains(review.DiscardedClaims.ToString(), "3日响应") {
+		t.Fatalf("automatic correction audit incomplete: reviewer=%s resolution=%s retained=%q discarded=%s", review.ReviewerID, review.Resolution, review.RetainedClaim, review.DiscardedClaims)
+	}
+	var stored types.WikiPage
+	if err := db.First(&stored, "id = ?", current.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.Version != 2 || stored.Summary != "5日响应" {
+		t.Fatalf("automatic correction not applied: version=%d summary=%q", stored.Version, stored.Summary)
 	}
 }
 
@@ -160,7 +299,7 @@ func TestReviewCreatesScenarioAndManagedPackages(t *testing.T) {
 	now := time.Now()
 	metadata, _ := json.Marshal(map[string]any{"scenario_names": []string{"Checkout recovery"}})
 	page := &types.WikiPage{TenantID: 1, KnowledgeBaseID: "kb-1", Slug: "card/procedure-recovery", Title: "recovery", PageType: types.WikiPageTypeCard, KnowledgeType: types.WikiKnowledgeTypeProcedure, BusinessLine: "commerce", Status: types.WikiPageStatusDraft, ReviewStatus: types.WikiReviewPending, MaturityStatus: types.WikiMaturityPendingReview, ChunkRefs: types.StringArray{"chunk-1"}, PageMetadata: types.JSON(metadata), Version: 1}
-	set := &types.WikiChangeSet{ID: uuid.NewString(), TenantID: 1, KnowledgeBaseID: "kb-1", Status: types.WikiChangeSetPending, ReviewLevel: types.WikiReviewLevelL2, CreatedAt: now, UpdatedAt: now, Items: []types.WikiChangeItem{{ID: uuid.NewString(), Operation: "create", PageSlug: page.Slug, After: snapshotForTest(t, page), CreatedAt: now}}}
+	set := &types.WikiChangeSet{ID: uuid.NewString(), TenantID: 1, KnowledgeBaseID: "kb-1", Status: types.WikiChangeSetPending, ReviewLevel: types.WikiReviewLevelL1, CreatedAt: now, UpdatedAt: now, Items: []types.WikiChangeItem{{ID: uuid.NewString(), Operation: "create", PageSlug: page.Slug, After: snapshotForTest(t, page), CreatedAt: now}}}
 	if err := repo.CreateChangeSet(context.Background(), set); err != nil {
 		t.Fatal(err)
 	}
@@ -236,7 +375,7 @@ func TestRejectedChangeSetDoesNotModifyPublishedPage(t *testing.T) {
 	}
 	candidate := *current
 	candidate.Content = "replacement rule"
-	set := &types.WikiChangeSet{ID: uuid.NewString(), KnowledgeBaseID: "kb-1", Status: types.WikiChangeSetPending, ReviewLevel: types.WikiReviewLevelL2, CreatedAt: now, UpdatedAt: now, Items: []types.WikiChangeItem{{ID: uuid.NewString(), Operation: "update", PageID: current.ID, PageSlug: current.Slug, ExpectedVersion: current.Version, Before: snapshotForTest(t, current), After: snapshotForTest(t, &candidate), CreatedAt: now}}}
+	set := &types.WikiChangeSet{ID: uuid.NewString(), KnowledgeBaseID: "kb-1", Status: types.WikiChangeSetPending, ReviewLevel: types.WikiReviewLevelL1, CreatedAt: now, UpdatedAt: now, Items: []types.WikiChangeItem{{ID: uuid.NewString(), Operation: "update", PageID: current.ID, PageSlug: current.Slug, ExpectedVersion: current.Version, Before: snapshotForTest(t, current), After: snapshotForTest(t, &candidate), CreatedAt: now}}}
 	if err := repo.CreateChangeSet(context.Background(), set); err != nil {
 		t.Fatal(err)
 	}

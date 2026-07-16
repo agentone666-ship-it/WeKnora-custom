@@ -976,7 +976,7 @@ func (h *WikiPageHandler) ListChangeSets(c *gin.Context) {
 	}
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
 	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
-	sets, total, err := h.governanceService.ListChangeSets(c.Request.Context(), types.WikiGovernanceListRequest{KnowledgeBaseID: kbID, Status: c.Query("status"), ReviewLevel: c.Query("review_level"), Limit: limit, Offset: offset})
+	sets, total, err := h.governanceService.ListChangeSets(c.Request.Context(), types.WikiGovernanceListRequest{KnowledgeBaseID: kbID, Status: c.Query("status"), ReviewLevel: c.Query("review_level"), ChangeCategory: c.Query("change_category"), Limit: limit, Offset: offset})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -1172,8 +1172,8 @@ func (h *WikiPageHandler) ReviewChangeSet(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if req.Decision != types.WikiReviewApproved && req.Decision != types.WikiReviewRejected {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "decision must be approved or rejected"})
+	if req.Decision != types.WikiReviewApproved && req.Decision != types.WikiReviewRejected && req.Decision != types.WikiReviewDeferred {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "decision must be approved, rejected, or deferred"})
 		return
 	}
 	if err := h.governanceService.ReviewChangeSet(c.Request.Context(), kbID, c.Param("change_set_id"), c.GetString(types.UserIDContextKey.String()), &req); err != nil {
@@ -1222,6 +1222,10 @@ func (h *WikiPageHandler) BatchReviewChangeSets(c *gin.Context) {
 		}
 		if set.ReviewLevel != types.WikiReviewLevelL1 {
 			results = append(results, gin.H{"id": id, "success": false, "error": "only L1 change sets support batch review"})
+			continue
+		}
+		if set.ChangeCategory == types.WikiChangeCategoryConflict {
+			results = append(results, gin.H{"id": id, "success": false, "error": "conflict change sets require an explicit individual resolution"})
 			continue
 		}
 		decision := &types.WikiReviewDecision{Decision: req.Decision, Comment: req.Comment}

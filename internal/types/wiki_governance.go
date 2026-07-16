@@ -5,13 +5,31 @@ import "time"
 const (
 	WikiReviewLevelL0 = "L0"
 	WikiReviewLevelL1 = "L1"
+	// WikiReviewLevelL2 is retained only for reading pre-migration records.
+	// New change sets must use the two-level L0/L1 policy.
 	WikiReviewLevelL2 = "L2"
+
+	WikiChangeCategoryAddition       = "addition"
+	WikiChangeCategoryUpdate         = "update"
+	WikiChangeCategoryConflict       = "conflict"
+	WikiChangeCategoryCorrection     = "correction"
+	WikiChangeCategoryRetirement     = "retirement"
+	WikiChangeCategoryMergeDuplicate = "merge_duplicate"
 
 	WikiChangeSetPending  = "pending"
 	WikiChangeSetApproved = "approved"
 	WikiChangeSetRejected = "rejected"
 	WikiChangeSetApplied  = "applied"
 	WikiChangeSetConflict = "conflict"
+
+	WikiReviewDeferred = "deferred"
+
+	WikiConflictKeepExisting   = "keep_existing"
+	WikiConflictAdoptCandidate = "adopt_candidate"
+	WikiConflictEditCandidate  = "edit_candidate"
+	WikiConflictSplitScope     = "split_scope"
+	WikiConflictDefer          = "defer"
+	WikiCorrectionAutoApplied  = "automatic_correction"
 )
 
 type WikiPackage struct {
@@ -59,6 +77,7 @@ type WikiChangeSet struct {
 	KnowledgeID          string           `json:"knowledge_id,omitempty" gorm:"type:varchar(36);index"`
 	Status               string           `json:"status" gorm:"type:varchar(32);index"`
 	ReviewLevel          string           `json:"review_level" gorm:"type:varchar(8);index"`
+	ChangeCategory       string           `json:"change_category" gorm:"type:varchar(32);index;default:'update'"`
 	Reasons              StringArray      `json:"reasons" gorm:"type:json"`
 	ModelID              string           `json:"model_id,omitempty" gorm:"type:varchar(64)"`
 	PromptVersion        string           `json:"prompt_version,omitempty" gorm:"type:varchar(32)"`
@@ -78,6 +97,7 @@ type WikiChangeItem struct {
 	ID               string      `json:"id" gorm:"type:varchar(36);primaryKey"`
 	ChangeSetID      string      `json:"change_set_id" gorm:"type:varchar(36);index"`
 	Operation        string      `json:"operation" gorm:"type:varchar(16)"`
+	ChangeCategory   string      `json:"change_category" gorm:"type:varchar(32);index;default:'update'"`
 	PageID           string      `json:"page_id,omitempty" gorm:"type:varchar(36);index"`
 	PageSlug         string      `json:"page_slug" gorm:"type:varchar(255);index"`
 	ExpectedVersion  int         `json:"expected_version"`
@@ -92,13 +112,16 @@ type WikiChangeItem struct {
 func (WikiChangeItem) TableName() string { return "wiki_change_items" }
 
 type WikiReview struct {
-	ID            string    `json:"id" gorm:"type:varchar(36);primaryKey"`
-	ChangeSetID   string    `json:"change_set_id" gorm:"type:varchar(36);index"`
-	ReviewerID    string    `json:"reviewer_id" gorm:"type:varchar(36);index"`
-	Decision      string    `json:"decision" gorm:"type:varchar(16)"`
-	Comment       string    `json:"comment" gorm:"type:text"`
-	ItemOverrides JSON      `json:"item_overrides,omitempty" gorm:"type:json"`
-	CreatedAt     time.Time `json:"created_at"`
+	ID              string    `json:"id" gorm:"type:varchar(36);primaryKey"`
+	ChangeSetID     string    `json:"change_set_id" gorm:"type:varchar(36);index"`
+	ReviewerID      string    `json:"reviewer_id" gorm:"type:varchar(36);index"`
+	Decision        string    `json:"decision" gorm:"type:varchar(16)"`
+	Comment         string    `json:"comment" gorm:"type:text"`
+	ItemOverrides   JSON      `json:"item_overrides,omitempty" gorm:"type:json"`
+	Resolution      string    `json:"resolution,omitempty" gorm:"type:varchar(32)"`
+	RetainedClaim   string    `json:"retained_claim,omitempty" gorm:"type:text"`
+	DiscardedClaims JSON      `json:"discarded_claims,omitempty" gorm:"type:json"`
+	CreatedAt       time.Time `json:"created_at"`
 }
 
 func (WikiReview) TableName() string { return "wiki_reviews" }
@@ -107,6 +130,7 @@ type WikiGovernanceListRequest struct {
 	KnowledgeBaseID string
 	Status          string
 	ReviewLevel     string
+	ChangeCategory  string
 	Limit           int
 	Offset          int
 }
@@ -116,6 +140,8 @@ type WikiReviewDecision struct {
 	Comment       string          `json:"comment"`
 	MergeIntoSlug string          `json:"merge_into_slug,omitempty"`
 	ItemOverrides map[string]JSON `json:"item_overrides,omitempty"`
+	Resolution    string          `json:"resolution,omitempty"`
+	RetainedClaim string          `json:"retained_claim,omitempty"`
 }
 
 type WikiGovernanceStats struct {

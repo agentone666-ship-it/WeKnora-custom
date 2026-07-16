@@ -1367,7 +1367,7 @@ func (s *wikiIngestService) mapOneDocument(
 		docSummary = sumLine
 	}
 	// Scenario-driven cards are submitted through governance. L0 candidates
-	// publish immediately; L1/L2 candidates remain invisible pending review.
+		// publish immediately; L1 candidates remain invisible pending review.
 	cardRefs, cardCandidates, cardErr := s.extractAndSubmitScenarioCards(ctx, chatModel, payload, knowledgeID, docTitle, sourceUpdatedAt, lang, chunks, op.ForceReview)
 	if cardErr != nil {
 		logger.Warnf(ctx, "wiki ingest: scenario card extraction failed for %s: %v", knowledgeID, cardErr)

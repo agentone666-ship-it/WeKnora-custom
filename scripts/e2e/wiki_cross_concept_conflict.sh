@@ -92,15 +92,15 @@ wait_for_cross_page_change_set() {
   local deadline=$(( $(date +%s) + TIMEOUT_SECONDS ))
   local response id
   while (( $(date +%s) < deadline )); do
-    response="$(request_json GET "/knowledgebase/$kb_id/wiki/change-sets?review_level=L2&limit=100")"
-    id="$(jq -r '[.change_sets[] | select(any(.reasons[]?; startswith("cross_page_")))] | first | .id // empty' <<<"$response")"
+    response="$(request_json GET "/knowledgebase/$kb_id/wiki/change-sets?review_level=L1&change_category=conflict&limit=100")"
+    id="$(jq -r '[.change_sets[] | select(.change_category == "conflict" and any(.reasons[]?; startswith("cross_page_")))] | first | .id // empty' <<<"$response")"
     if [[ -n "$id" ]]; then
       printf '%s' "$id"
       return 0
     fi
     sleep 3
   done
-  echo "timed out waiting for a cross-page L2 change set" >&2
+  echo "timed out waiting for a cross-page L1 conflict change set" >&2
   return 1
 }
 
@@ -156,8 +156,36 @@ reasons="$(jq -c '.change_set.reasons' <<<"$detail_response")"
 assessment_count="$(jq '[.change_set.items[]?.after.page_metadata.cross_page_assessments[]?] | length' <<<"$detail_response")"
 related_evidence_count="$(jq '[.change_set.items[]?.after.page_metadata.related_page_evidence // {} | keys[]] | length' <<<"$detail_response")"
 
-if [[ "$review_level" != "L2" ]]; then
-  echo "change set review_level=$review_level, want L2" >&2
+change_category="$(jq -er '.change_set.change_category' <<<"$detail_response")"
+if [[ "$review_level" != "L1" || "$change_category" != "conflict" ]]; then
+  echo "change set level/category=$review_level/$change_category, want L1/conflict" >&2
+  exit 1
+fi
+
+retained_claim='中国大陆电商平台已审批消费者退款，以新制度的5个工作日到账说法为当前有效版本。'
+review_payload="$(jq -n --arg retained "$retained_claim" '{decision:"approved",resolution:"adopt_candidate",retained_claim:$retained,comment:"E2E adopts the new rule and retires conflicting old versions"}')"
+request_json POST "/knowledgebase/$kb_id/wiki/change-sets/$change_set_id/review" "$review_payload" >/dev/null
+
+applied_detail="$(request_json GET "/knowledgebase/$kb_id/wiki/change-sets/$change_set_id")"
+applied_status="$(jq -er '.change_set.status' <<<"$applied_detail")"
+retired_page_count="$(jq '[.change_set.items[]? | select(.operation == "archive" and .change_category == "retirement")] | length' <<<"$applied_detail")"
+audit_count="$(jq --arg retained "$retained_claim" '[.reviews[]? | select(.resolution == "adopt_candidate" and .retained_claim == $retained and ((.discarded_claims // []) | length > 0))] | length' <<<"$applied_detail")"
+if [[ "$applied_status" != "applied" || "$retired_page_count" -eq 0 || "$audit_count" -eq 0 ]]; then
+  echo "approved conflict did not apply retirement/audit closure" >&2
+  exit 1
+fi
+
+retired_slug="$(jq -r '[.change_set.items[]? | select(.operation == "archive")] | first | .page_slug' <<<"$applied_detail")"
+ordinary_pages="$(request_json GET "/knowledgebase/$kb_id/wiki/pages?page=1&page_size=200")"
+if jq -e --arg slug "$retired_slug" 'any(.pages[]?; .slug == $slug)' <<<"$ordinary_pages" >/dev/null; then
+  echo "retired page is still visible to ordinary wiki retrieval" >&2
+  exit 1
+fi
+encoded_slug="$(jq -rn --arg value "$retired_slug" '$value | @uri')"
+history_response="$(request_json GET "/knowledgebase/$kb_id/wiki/card-history?slug=$encoded_slug&limit=20")"
+history_count="$(jq --arg id "$change_set_id" '[.change_sets[]? | select(.id == $id)] | length' <<<"$history_response")"
+if (( history_count == 0 )); then
+  echo "retired page has no traceable change-set history" >&2
   exit 1
 fi
 if ! jq -e 'any(.change_set.reasons[]?; startswith("cross_page_"))' <<<"$detail_response" >/dev/null; then
@@ -182,10 +210,15 @@ jq -n \
   --arg second_status "$second_status" \
   --arg change_set_id "$change_set_id" \
   --arg review_level "$review_level" \
+  --arg change_category "$change_category" \
+  --arg applied_status "$applied_status" \
   --argjson reasons "$reasons" \
   --argjson first_related_page_count "$first_related_page_count" \
   --argjson assessment_count "$assessment_count" \
   --argjson related_evidence_count "$related_evidence_count" \
+  --argjson retired_page_count "$retired_page_count" \
+  --argjson audit_count "$audit_count" \
+  --argjson history_count "$history_count" \
   --argjson duration_seconds "$(( finished_epoch - started_epoch ))" \
   '{
     test:$test,result:$result,started_at:$started_at,duration_seconds:$duration_seconds,
@@ -195,5 +228,7 @@ jq -n \
       {role:"conflicting_update",knowledge_id:$second_knowledge_id,parse_status:$second_status}
     ],
     first_document_related_pages:$first_related_page_count,
-    change_set:{id:$change_set_id,review_level:$review_level,reasons:$reasons,assessment_count:$assessment_count,related_evidence_count:$related_evidence_count}
+    change_set:{id:$change_set_id,review_level:$review_level,change_category:$change_category,reasons:$reasons,
+      assessment_count:$assessment_count,related_evidence_count:$related_evidence_count,status:$applied_status,
+      retired_page_count:$retired_page_count,audit_count:$audit_count,history_count:$history_count}
   }'
