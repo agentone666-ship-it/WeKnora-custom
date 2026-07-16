@@ -240,6 +240,83 @@ func TestConflictReviewKeepExistingRejectsCandidateAndKeepsOldPage(t *testing.T)
 	}
 }
 
+func TestConflictReviewAppliesIndependentChoicesAndKeepsAudit(t *testing.T) {
+	repo, db := newGovernanceTestRepo(t)
+	now := time.Now()
+	existing := &types.WikiPage{
+		ID: uuid.NewString(), KnowledgeBaseID: "kb-1", Slug: "entity/mai-jia", Title: "买家报价时长",
+		PageType: types.WikiPageTypeEntity, Status: types.WikiPageStatusPublished,
+		Content:      "手机商品报价窗口为30分钟；其他多品类商品报价窗口为2小时。",
+		ReviewStatus: types.WikiReviewApproved, Version: 3, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := db.Create(existing).Error; err != nil {
+		t.Fatal(err)
+	}
+	metadata, _ := json.Marshal(map[string]any{"cross_page_assessments": []map[string]any{
+		{"related_slug": existing.Slug, "relation": "conflicting", "candidate_claim": "手机商品报价窗口为8分钟", "existing_claim": "手机商品报价窗口为30分钟", "reason": "手机报价时长不同", "confidence": 1, "applicability_overlap": true},
+		{"related_slug": existing.Slug, "relation": "conflicting", "candidate_claim": "其他多品类商品报价窗口为30分钟", "existing_claim": "其他多品类商品报价窗口为2小时", "reason": "多品类报价时长不同", "confidence": 1, "applicability_overlap": true},
+	}})
+	candidate := &types.WikiPage{
+		KnowledgeBaseID: "kb-1", Slug: "card/rule-quote-window", Title: "报价窗口", PageType: types.WikiPageTypeCard,
+		KnowledgeType: types.WikiKnowledgeTypeRule, MaturityStatus: types.WikiMaturityPendingReview,
+		ReviewStatus: types.WikiReviewPending, Status: types.WikiPageStatusDraft,
+		Content: "手机商品报价窗口为8分钟；其他多品类商品报价窗口为30分钟。", Summary: "报价窗口规则",
+		ChunkRefs: types.StringArray{"chunk-new"}, PageMetadata: types.JSON(metadata), Version: 1,
+	}
+	itemID := uuid.NewString()
+	set := &types.WikiChangeSet{
+		ID: uuid.NewString(), KnowledgeBaseID: "kb-1", Status: types.WikiChangeSetPending, ReviewLevel: types.WikiReviewLevelL1,
+		ChangeCategory: types.WikiChangeCategoryConflict, CreatedAt: now, UpdatedAt: now,
+		Items: []types.WikiChangeItem{{ID: itemID, Operation: "create", ChangeCategory: types.WikiChangeCategoryConflict, PageSlug: candidate.Slug, After: snapshotForTest(t, candidate), CreatedAt: now}},
+	}
+	if err := repo.CreateChangeSet(context.Background(), set); err != nil {
+		t.Fatal(err)
+	}
+	decision := &types.WikiReviewDecision{
+		Decision: types.WikiReviewApproved, Resolution: types.WikiConflictPerClaim, Comment: "逐项选择",
+		ConflictChoices: []types.WikiConflictChoice{
+			{ItemID: itemID, AssessmentIndex: 0, Resolution: types.WikiConflictAdoptCandidate},
+			{ItemID: itemID, AssessmentIndex: 1, Resolution: types.WikiConflictKeepExisting},
+		},
+	}
+	if err := repo.ReviewChangeSet(context.Background(), "kb-1", set.ID, "reviewer-1", decision); err != nil {
+		t.Fatal(err)
+	}
+
+	var published types.WikiPage
+	if err := db.First(&published, "knowledge_base_id = ? AND slug = ?", "kb-1", candidate.Slug).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(published.Content, "手机商品报价窗口为8分钟") || !strings.Contains(published.Content, "其他多品类商品报价窗口为2小时") || strings.Contains(published.Content, "其他多品类商品报价窗口为30分钟") {
+		t.Fatalf("candidate did not reflect mixed choices: %q", published.Content)
+	}
+	var corrected types.WikiPage
+	if err := db.First(&corrected, "id = ?", existing.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if corrected.Status != types.WikiPageStatusPublished || corrected.Version != 4 || !strings.Contains(corrected.Content, "手机商品报价窗口为8分钟") || !strings.Contains(corrected.Content, "其他多品类商品报价窗口为2小时") {
+		t.Fatalf("existing page was not selectively corrected: status=%s version=%d content=%q", corrected.Status, corrected.Version, corrected.Content)
+	}
+	var review types.WikiReview
+	if err := db.First(&review, "change_set_id = ?", set.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(review.ConflictChoices.ToString(), "手机报价时长不同") || !strings.Contains(review.DiscardedClaims.ToString(), "30分钟") {
+		t.Fatalf("per-conflict audit is incomplete: choices=%s discarded=%s", review.ConflictChoices, review.DiscardedClaims)
+	}
+}
+
+func TestConflictReviewRequiresEveryConflictChoice(t *testing.T) {
+	page := &types.WikiPage{PageMetadata: types.JSON(`{"cross_page_assessments":[{"related_slug":"entity/a","relation":"conflicting","candidate_claim":"new-a","existing_claim":"old-a"},{"related_slug":"entity/a","relation":"conflicting","candidate_claim":"new-b","existing_claim":"old-b"}]}`)}
+	items := []types.WikiChangeItem{{ID: "item-1", After: snapshotForTest(t, page)}}
+	set := &types.WikiChangeSet{ChangeCategory: types.WikiChangeCategoryConflict}
+	decision := &types.WikiReviewDecision{Decision: types.WikiReviewApproved, Resolution: types.WikiConflictPerClaim, ConflictChoices: []types.WikiConflictChoice{{ItemID: "item-1", AssessmentIndex: 0, Resolution: types.WikiConflictAdoptCandidate}}}
+	err := validateConflictResolution(set, items, decision)
+	if err == nil || !strings.Contains(err.Error(), "every conflict position must be selected") {
+		t.Fatalf("error=%v, want incomplete-selection validation", err)
+	}
+}
+
 func TestAutomaticCorrectionReviewPreservesDiscardedClaim(t *testing.T) {
 	repo, db := newGovernanceTestRepo(t)
 	now := time.Now()

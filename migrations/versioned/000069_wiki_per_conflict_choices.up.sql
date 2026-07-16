@@ -1,0 +1,2 @@
+ALTER TABLE wiki_reviews
+  ADD COLUMN IF NOT EXISTS conflict_choices JSONB NOT NULL DEFAULT '[]'::JSONB;
