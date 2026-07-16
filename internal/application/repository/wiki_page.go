@@ -33,7 +33,11 @@ func (r *wikiPageRepository) wikiCategoryRankOrder() string {
 	if r.db != nil && r.db.Dialector != nil && r.db.Dialector.Name() == "sqlite" {
 		return "CASE WHEN COALESCE(json_array_length(category_path), 0) > 0 THEN 0 ELSE 1 END ASC"
 	}
-	return "CASE WHEN COALESCE(jsonb_array_length(category_path), 0) > 0 THEN 0 ELSE 1 END ASC"
+	// Historical and governance-created rows may contain {}, null, or another
+	// valid JSON scalar instead of an array. jsonb_array_length raises
+	// SQLSTATE 22023 for those values, so guard it in a nested CASE. The nested
+	// form is intentional: PostgreSQL may reorder boolean AND expressions.
+	return "CASE WHEN jsonb_typeof(category_path) = 'array' THEN CASE WHEN jsonb_array_length(category_path) > 0 THEN 0 ELSE 1 END ELSE 1 END ASC"
 }
 
 // Create inserts a new wiki page record
@@ -190,7 +194,8 @@ func (r *wikiPageRepository) List(ctx context.Context, req *types.WikiPageListRe
 	}
 	if !req.IncludeUnreviewed {
 		now := time.Now()
-		query = query.Where("page_type <> ? OR (review_status = ? AND maturity_status IN ? AND status <> ? AND (effective_from IS NULL OR effective_from <= ?) AND (effective_to IS NULL OR effective_to > ?))", types.WikiPageTypeCard, types.WikiReviewApproved, []string{types.WikiMaturityVerified, types.WikiMaturityPartiallyVerified}, types.WikiPageStatusArchived, now, now)
+		query = query.Where("status <> ?", types.WikiPageStatusArchived).
+			Where("page_type <> ? OR (review_status = ? AND maturity_status IN ? AND (effective_from IS NULL OR effective_from <= ?) AND (effective_to IS NULL OR effective_to > ?))", types.WikiPageTypeCard, types.WikiReviewApproved, []string{types.WikiMaturityVerified, types.WikiMaturityPartiallyVerified}, now, now)
 	}
 	if req.Query != "" {
 		// Use PostgreSQL full-text search + ILIKE for aliases

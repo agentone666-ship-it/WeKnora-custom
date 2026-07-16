@@ -25,6 +25,12 @@ func NewWikiGovernanceRepository(db *gorm.DB) interfaces.WikiGovernanceRepositor
 
 func (r *wikiGovernanceRepository) CreateChangeSet(ctx context.Context, set *types.WikiChangeSet) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if set.ReviewLevel == types.WikiReviewLevelL2 || set.ReviewLevel == "" {
+			set.ReviewLevel = types.WikiReviewLevelL1
+		}
+		if set.ChangeCategory == "" {
+			set.ChangeCategory = types.WikiChangeCategoryUpdate
+		}
 		items := set.Items
 		set.Items = nil
 		if err := tx.Create(set).Error; err != nil {
@@ -34,6 +40,9 @@ func (r *wikiGovernanceRepository) CreateChangeSet(ctx context.Context, set *typ
 			items[i].ChangeSetID = set.ID
 			if items[i].ID == "" {
 				items[i].ID = uuid.NewString()
+			}
+			if items[i].ChangeCategory == "" {
+				items[i].ChangeCategory = set.ChangeCategory
 			}
 			// PostgreSQL JSONB defaults are not applied when GORM explicitly
 			// writes a nil driver.Value. Normalize optional snapshots here so a
@@ -76,6 +85,9 @@ func (r *wikiGovernanceRepository) FindChangeSetByFingerprint(ctx context.Contex
 func (r *wikiGovernanceRepository) GetChangeSet(ctx context.Context, kbID, id string) (*types.WikiChangeSet, error) {
 	var set types.WikiChangeSet
 	err := r.db.WithContext(ctx).Preload("Items").Where("knowledge_base_id = ? AND id = ?", kbID, id).First(&set).Error
+	if set.ReviewLevel == types.WikiReviewLevelL2 {
+		set.ReviewLevel = types.WikiReviewLevelL1
+	}
 	return &set, err
 }
 
@@ -85,7 +97,14 @@ func (r *wikiGovernanceRepository) ListChangeSets(ctx context.Context, req types
 		q = q.Where("status = ?", req.Status)
 	}
 	if req.ReviewLevel != "" {
-		q = q.Where("review_level = ?", req.ReviewLevel)
+		if req.ReviewLevel == types.WikiReviewLevelL1 {
+			q = q.Where("review_level IN ?", []string{types.WikiReviewLevelL1, types.WikiReviewLevelL2})
+		} else {
+			q = q.Where("review_level = ?", req.ReviewLevel)
+		}
+	}
+	if req.ChangeCategory != "" {
+		q = q.Where("change_category = ?", req.ChangeCategory)
 	}
 	var total int64
 	if err := q.Count(&total).Error; err != nil {
@@ -100,6 +119,11 @@ func (r *wikiGovernanceRepository) ListChangeSets(ctx context.Context, req types
 	}
 	var sets []*types.WikiChangeSet
 	err := q.Preload("Items").Order("created_at DESC").Limit(limit).Offset(req.Offset).Find(&sets).Error
+	for _, set := range sets {
+		if set.ReviewLevel == types.WikiReviewLevelL2 {
+			set.ReviewLevel = types.WikiReviewLevelL1
+		}
+	}
 	return sets, total, err
 }
 
@@ -320,6 +344,201 @@ func mergeOverride(raw types.JSON, override types.JSON) (types.JSON, error) {
 	return types.JSON(b), err
 }
 
+type governedConflictAssessment struct {
+	RelatedSlug          string  `json:"related_slug"`
+	Relation             string  `json:"relation"`
+	CandidateClaim       string  `json:"candidate_claim"`
+	ExistingClaim        string  `json:"existing_claim"`
+	Reason               string  `json:"reason"`
+	Confidence           float64 `json:"confidence"`
+	ApplicabilityOverlap bool    `json:"applicability_overlap"`
+}
+
+func conflictAssessmentsFromPage(page *types.WikiPage) []governedConflictAssessment {
+	if page == nil || len(page.PageMetadata) == 0 {
+		return nil
+	}
+	var metadata struct {
+		Assessments []governedConflictAssessment `json:"cross_page_assessments"`
+	}
+	if json.Unmarshal(page.PageMetadata, &metadata) != nil {
+		return nil
+	}
+	return metadata.Assessments
+}
+
+func validateConflictResolution(set *types.WikiChangeSet, decision *types.WikiReviewDecision) error {
+	if set.ChangeCategory != types.WikiChangeCategoryConflict {
+		return nil
+	}
+	switch decision.Resolution {
+	case types.WikiConflictKeepExisting:
+		if decision.Decision != types.WikiReviewRejected {
+			return errors.New("keep_existing requires a rejected decision")
+		}
+	case types.WikiConflictAdoptCandidate, types.WikiConflictEditCandidate, types.WikiConflictSplitScope:
+		if decision.Decision != types.WikiReviewApproved {
+			return errors.New("the selected conflict resolution requires an approved decision")
+		}
+		if decision.Resolution == types.WikiConflictSplitScope && len(decision.ItemOverrides) == 0 {
+			return errors.New("split_scope requires an applicability override")
+		}
+		if decision.Resolution == types.WikiConflictEditCandidate && len(decision.ItemOverrides) == 0 {
+			return errors.New("edit_candidate requires a content override")
+		}
+	case types.WikiConflictDefer:
+		if decision.Decision != types.WikiReviewDeferred {
+			return errors.New("defer resolution requires a deferred decision")
+		}
+	default:
+		return errors.New("a conflict resolution is required")
+	}
+	return nil
+}
+
+func conflictAuditClaims(items []types.WikiChangeItem, decision *types.WikiReviewDecision) (string, types.JSON) {
+	retained := strings.TrimSpace(decision.RetainedClaim)
+	discarded := make([]map[string]any, 0)
+	for _, item := range items {
+		if decision.Resolution == types.WikiCorrectionAutoApplied {
+			before, err := decodePageSnapshot(item.Before)
+			if err == nil {
+				claim := strings.TrimSpace(before.Summary)
+				if claim == "" {
+					claim = strings.TrimSpace(before.Content)
+				}
+				if claim != "" {
+					discarded = append(discarded, map[string]any{"claim": claim, "source": before.Slug, "reason": "replaced_by_authoritative_explicit_correction"})
+				}
+			}
+		}
+		page, err := decodePageSnapshot(item.After)
+		if err != nil {
+			continue
+		}
+		for _, assessment := range conflictAssessmentsFromPage(page) {
+			if assessment.Relation != "conflicting" && assessment.Relation != "supersedes" {
+				continue
+			}
+			switch decision.Resolution {
+			case types.WikiConflictKeepExisting:
+				if retained == "" {
+					retained = assessment.ExistingClaim
+				}
+				discarded = append(discarded, map[string]any{"claim": assessment.CandidateClaim, "source": item.PageSlug, "reason": assessment.Reason})
+			case types.WikiConflictAdoptCandidate, types.WikiConflictEditCandidate:
+				if retained == "" {
+					retained = assessment.CandidateClaim
+				}
+				discarded = append(discarded, map[string]any{"claim": assessment.ExistingClaim, "source": assessment.RelatedSlug, "reason": assessment.Reason})
+			case types.WikiCorrectionAutoApplied:
+				if retained == "" {
+					retained = assessment.CandidateClaim
+				}
+				discarded = append(discarded, map[string]any{"claim": assessment.ExistingClaim, "source": assessment.RelatedSlug, "reason": assessment.Reason})
+			}
+		}
+	}
+	raw, _ := json.Marshal(discarded)
+	return retained, types.JSON(raw)
+}
+
+func appendPageMetadata(page *types.WikiPage, values map[string]any) error {
+	metadata, err := page.PageMetadata.Map()
+	if err != nil {
+		return err
+	}
+	for key, value := range values {
+		metadata[key] = value
+	}
+	raw, err := json.Marshal(metadata)
+	page.PageMetadata = types.JSON(raw)
+	return err
+}
+
+// appendConflictRetirementItems turns every overlapping page displaced by an
+// approved candidate into an explicit archive item. This keeps the old page
+// snapshot in the same ChangeSet, lets normal history/rollback APIs find it,
+// and prevents the obsolete claim from remaining visible to ordinary RAG.
+func appendConflictRetirementItems(tx *gorm.DB, set *types.WikiChangeSet, items []types.WikiChangeItem, decision *types.WikiReviewDecision, reviewerID string, now time.Time) ([]types.WikiChangeItem, error) {
+	manualReplacement := set.ChangeCategory == types.WikiChangeCategoryConflict && (decision.Resolution == types.WikiConflictAdoptCandidate || decision.Resolution == types.WikiConflictEditCandidate)
+	automaticCorrection := set.ChangeCategory == types.WikiChangeCategoryCorrection && decision.Resolution == types.WikiCorrectionAutoApplied
+	if !manualReplacement && !automaticCorrection {
+		return items, nil
+	}
+	if len(items) == 0 {
+		return nil, errors.New("conflict change set has no candidate item")
+	}
+	originalItemCount := len(items)
+	candidateRaw := items[0].After
+	if override, ok := decision.ItemOverrides[items[0].ID]; ok {
+		var err error
+		candidateRaw, err = mergeOverride(candidateRaw, override)
+		if err != nil {
+			return nil, err
+		}
+	}
+	candidate, err := decodePageSnapshot(candidateRaw)
+	if err != nil {
+		return nil, err
+	}
+	assessments := conflictAssessmentsFromPage(candidate)
+	superseded := make([]string, 0)
+	seen := map[string]bool{}
+	for _, assessment := range assessments {
+		if seen[assessment.RelatedSlug] || assessment.RelatedSlug == "" || assessment.RelatedSlug == candidate.Slug {
+			continue
+		}
+		if assessment.Relation != "conflicting" && assessment.Relation != "supersedes" {
+			continue
+		}
+		if assessment.Relation == "conflicting" && (!assessment.ApplicabilityOverlap || assessment.Confidence < 0.75) {
+			continue
+		}
+		var old types.WikiPage
+		if err := tx.Where("knowledge_base_id = ? AND slug = ? AND status <> ?", set.KnowledgeBaseID, assessment.RelatedSlug, types.WikiPageStatusArchived).First(&old).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				continue
+			}
+			return nil, err
+		}
+		seen[old.Slug] = true
+		before := pageJSONForRepository(&old)
+		old.Status = types.WikiPageStatusArchived
+		old.MaturityStatus = types.WikiMaturityOutdated
+		old.ReviewStatus = types.WikiReviewApproved
+		old.ReviewedBy, old.ReviewedAt, old.EffectiveTo = reviewerID, &now, &now
+		old.OutLinks = appendUniqueWikiString(old.OutLinks, candidate.Slug)
+		if err := appendPageMetadata(&old, map[string]any{"superseded_by": candidate.Slug, "superseded_change_set_id": set.ID, "discarded_claim": assessment.ExistingClaim, "discarded_reason": assessment.Reason}); err != nil {
+			return nil, err
+		}
+		items = append(items, types.WikiChangeItem{
+			ID: uuid.NewString(), ChangeSetID: set.ID, Operation: "archive", ChangeCategory: types.WikiChangeCategoryRetirement,
+			PageID: old.ID, PageSlug: old.Slug, ExpectedVersion: old.Version, Before: before, After: pageJSONForRepository(&old),
+			ChangedFields: types.StringArray{"status", "maturity_status", "effective_to", "page_metadata", "out_links"}, EvidenceChunkIDs: old.ChunkRefs,
+			EvidenceExcerpts: types.JSON(`{}`), CreatedAt: now,
+		})
+		superseded = append(superseded, old.Slug)
+	}
+	if len(superseded) == 0 {
+		return items, nil
+	}
+	candidate.OutLinks = mergeWikiStringArrays(candidate.OutLinks, types.StringArray(superseded))
+	if err := appendPageMetadata(candidate, map[string]any{"supersedes": superseded, "conflict_resolution": decision.Resolution}); err != nil {
+		return nil, err
+	}
+	items[0].After = pageJSONForRepository(candidate)
+	if err := tx.Model(&types.WikiChangeItem{}).Where("id = ?", items[0].ID).Update("after", items[0].After).Error; err != nil {
+		return nil, err
+	}
+	for i := originalItemCount; i < len(items); i++ {
+		if err := tx.Create(&items[i]).Error; err != nil {
+			return nil, err
+		}
+	}
+	return items, nil
+}
+
 func (r *wikiGovernanceRepository) ReviewChangeSet(ctx context.Context, kbID, id, reviewerID string, decision *types.WikiReviewDecision) error {
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var set types.WikiChangeSet
@@ -329,24 +548,36 @@ func (r *wikiGovernanceRepository) ReviewChangeSet(ctx context.Context, kbID, id
 		if set.Status != types.WikiChangeSetPending {
 			return fmt.Errorf("change set is already %s", set.Status)
 		}
+		if err := validateConflictResolution(&set, decision); err != nil {
+			return err
+		}
 		now := time.Now()
+		var items []types.WikiChangeItem
+		if err := tx.Where("change_set_id = ?", id).Find(&items).Error; err != nil {
+			return err
+		}
+		retainedClaim, discardedClaims := conflictAuditClaims(items, decision)
 		overrideBytes, _ := json.Marshal(decision.ItemOverrides)
-		review := types.WikiReview{ID: uuid.NewString(), ChangeSetID: id, ReviewerID: reviewerID, Decision: decision.Decision, Comment: decision.Comment, ItemOverrides: types.JSON(overrideBytes), CreatedAt: now}
+		review := types.WikiReview{ID: uuid.NewString(), ChangeSetID: id, ReviewerID: reviewerID, Decision: decision.Decision, Comment: decision.Comment, ItemOverrides: types.JSON(overrideBytes), Resolution: decision.Resolution, RetainedClaim: retainedClaim, DiscardedClaims: discardedClaims, CreatedAt: now}
 		if err := tx.Create(&review).Error; err != nil {
 			return err
+		}
+		if decision.Decision == types.WikiReviewDeferred {
+			return nil
 		}
 		if decision.Decision == types.WikiReviewRejected {
 			return tx.Model(&set).Updates(map[string]any{"status": types.WikiChangeSetRejected, "reviewed_by": reviewerID, "review_comment": decision.Comment, "reviewed_at": now, "updated_at": now}).Error
 		}
 		if decision.Decision != types.WikiReviewApproved {
-			return errors.New("decision must be approved or rejected")
-		}
-		var items []types.WikiChangeItem
-		if err := tx.Where("change_set_id = ?", id).Find(&items).Error; err != nil {
-			return err
+			return errors.New("decision must be approved, rejected, or deferred")
 		}
 		if strings.TrimSpace(decision.MergeIntoSlug) != "" {
 			return r.mergeChangeSetIntoPage(tx, &set, items, decision.ItemOverrides, kbID, strings.TrimSpace(decision.MergeIntoSlug), reviewerID, now)
+		}
+		var err error
+		items, err = appendConflictRetirementItems(tx, &set, items, decision, reviewerID, now)
+		if err != nil {
+			return err
 		}
 		for _, item := range items {
 			after := item.After
@@ -386,11 +617,13 @@ func (r *wikiGovernanceRepository) ReviewChangeSet(ctx context.Context, kbID, id
 				page.Version = item.ExpectedVersion + 1
 				page.UpdatedAt = now
 			}
-			if err := ensureApprovedPageScenarios(tx, page, now); err != nil {
-				return err
-			}
-			if err := validateApprovedCard(page); err != nil {
-				return err
+			if page.PageType == types.WikiPageTypeCard {
+				if err := ensureApprovedPageScenarios(tx, page, now); err != nil {
+					return err
+				}
+				if err := validateApprovedCard(page); err != nil {
+					return err
+				}
 			}
 			if err := tx.Model(&types.WikiChangeItem{}).Where("id = ?", item.ID).Update("after", pageJSONForRepository(page)).Error; err != nil {
 				return err
@@ -420,7 +653,12 @@ func (r *wikiGovernanceRepository) ReviewChangeSet(ctx context.Context, kbID, id
 					return ErrWikiChangeSetConflict
 				}
 			case "archive":
-				result := tx.Model(&types.WikiPage{}).Where("id = ? AND knowledge_base_id = ? AND version = ?", page.ID, kbID, item.ExpectedVersion).Updates(map[string]any{"status": types.WikiPageStatusArchived, "review_status": types.WikiReviewApproved, "reviewed_by": reviewerID, "reviewed_at": now, "version": item.ExpectedVersion + 1, "updated_at": now})
+				result := tx.Model(&types.WikiPage{}).Where("id = ? AND knowledge_base_id = ? AND version = ?", page.ID, kbID, item.ExpectedVersion).Updates(map[string]any{
+					"status": types.WikiPageStatusArchived, "maturity_status": page.MaturityStatus, "review_status": types.WikiReviewApproved,
+					"reviewed_by": reviewerID, "reviewed_at": now, "effective_to": page.EffectiveTo,
+					"page_metadata": page.PageMetadata, "out_links": page.OutLinks,
+					"version": item.ExpectedVersion + 1, "updated_at": now,
+				})
 				if result.Error != nil {
 					return result.Error
 				}
@@ -430,8 +668,10 @@ func (r *wikiGovernanceRepository) ReviewChangeSet(ctx context.Context, kbID, id
 			default:
 				return fmt.Errorf("unsupported change operation %q", item.Operation)
 			}
-			if err := syncGovernedPagePackages(tx, page, now); err != nil {
-				return err
+			if page.PageType == types.WikiPageTypeCard {
+				if err := syncGovernedPagePackages(tx, page, now); err != nil {
+					return err
+				}
 			}
 		}
 		return tx.Model(&set).Updates(map[string]any{"status": types.WikiChangeSetApplied, "reviewed_by": reviewerID, "review_comment": decision.Comment, "reviewed_at": now, "updated_at": now}).Error
@@ -442,7 +682,7 @@ func (r *wikiGovernanceRepository) ReviewChangeSet(ctx context.Context, kbID, id
 			if updateErr := tx.Model(&types.WikiChangeSet{}).Where("knowledge_base_id = ? AND id = ? AND status = ?", kbID, id, types.WikiChangeSetPending).Updates(map[string]any{"status": types.WikiChangeSetConflict, "reviewed_by": reviewerID, "review_comment": "Page version changed during review", "reviewed_at": now, "updated_at": now}).Error; updateErr != nil {
 				return updateErr
 			}
-			return tx.Create(&types.WikiReview{ID: uuid.NewString(), ChangeSetID: id, ReviewerID: reviewerID, Decision: types.WikiChangeSetConflict, Comment: "Page version changed during review", CreatedAt: now}).Error
+			return tx.Create(&types.WikiReview{ID: uuid.NewString(), ChangeSetID: id, ReviewerID: reviewerID, Decision: types.WikiChangeSetConflict, Comment: "Page version changed during review", DiscardedClaims: types.JSON(`[]`), CreatedAt: now}).Error
 		})
 	}
 	return err
@@ -471,7 +711,8 @@ func (r *wikiGovernanceRepository) ListPackagePages(ctx context.Context, kbID, p
 		Joins("JOIN wiki_package_pages ON wiki_package_pages.page_id = wiki_pages.id").
 		Joins("JOIN wiki_packages ON wiki_packages.id = wiki_package_pages.package_id").
 		Where("wiki_packages.id = ? AND wiki_packages.knowledge_base_id = ? AND wiki_pages.knowledge_base_id = ?", packageID, kbID, kbID).
-		Where("wiki_pages.page_type <> ? OR (wiki_pages.review_status = ? AND wiki_pages.maturity_status IN ? AND wiki_pages.status <> ? AND (wiki_pages.effective_from IS NULL OR wiki_pages.effective_from <= ?) AND (wiki_pages.effective_to IS NULL OR wiki_pages.effective_to > ?))", types.WikiPageTypeCard, types.WikiReviewApproved, []string{types.WikiMaturityVerified, types.WikiMaturityPartiallyVerified}, types.WikiPageStatusArchived, now, now).
+		Where("wiki_pages.status <> ?", types.WikiPageStatusArchived).
+		Where("wiki_pages.page_type <> ? OR (wiki_pages.review_status = ? AND wiki_pages.maturity_status IN ? AND (wiki_pages.effective_from IS NULL OR wiki_pages.effective_from <= ?) AND (wiki_pages.effective_to IS NULL OR wiki_pages.effective_to > ?))", types.WikiPageTypeCard, types.WikiReviewApproved, []string{types.WikiMaturityVerified, types.WikiMaturityPartiallyVerified}, now, now).
 		Order("wiki_pages.title ASC").Find(&pages).Error
 	return pages, err
 }
@@ -564,6 +805,10 @@ func (r *wikiGovernanceRepository) GetGovernanceStats(ctx context.Context, kbID 
 	byLevel, err := groupedCounts(db.Model(&types.WikiChangeSet{}).Where("knowledge_base_id = ?", kbID), "review_level")
 	if err != nil {
 		return nil, err
+	}
+	if legacy := byLevel[types.WikiReviewLevelL2]; legacy > 0 {
+		byLevel[types.WikiReviewLevelL1] += legacy
+		delete(byLevel, types.WikiReviewLevelL2)
 	}
 	byStatus, err := groupedCounts(db.Model(&types.WikiChangeSet{}).Where("knowledge_base_id = ?", kbID), "status")
 	if err != nil {
@@ -671,13 +916,13 @@ func (r *wikiGovernanceRepository) CreateRollbackChangeSet(ctx context.Context, 
 			return errors.New("only an applied change set can be rolled back")
 		}
 		now := time.Now()
-		set := &types.WikiChangeSet{ID: uuid.NewString(), TenantID: original.TenantID, KnowledgeBaseID: kbID, KnowledgeID: original.KnowledgeID, Status: types.WikiChangeSetPending, ReviewLevel: types.WikiReviewLevelL2, Reasons: types.StringArray{"rollback_requested", "published_content_will_change"}, ModelID: original.ModelID, PromptVersion: original.PromptVersion, CreatedBy: requestedBy, CreatedAt: now, UpdatedAt: now}
+		set := &types.WikiChangeSet{ID: uuid.NewString(), TenantID: original.TenantID, KnowledgeBaseID: kbID, KnowledgeID: original.KnowledgeID, Status: types.WikiChangeSetPending, ReviewLevel: types.WikiReviewLevelL1, ChangeCategory: types.WikiChangeCategoryCorrection, Reasons: types.StringArray{"rollback_requested", "published_content_will_change"}, ModelID: original.ModelID, PromptVersion: original.PromptVersion, CreatedBy: requestedBy, CreatedAt: now, UpdatedAt: now}
 		for _, item := range original.Items {
 			var current types.WikiPage
 			if err := tx.Where("knowledge_base_id = ? AND slug = ?", kbID, item.PageSlug).First(&current).Error; err != nil {
 				return err
 			}
-			reverse := types.WikiChangeItem{ID: uuid.NewString(), ChangeSetID: set.ID, PageID: current.ID, PageSlug: current.Slug, ExpectedVersion: current.Version, Before: pageJSONForRepository(&current), EvidenceChunkIDs: current.ChunkRefs, CreatedAt: now}
+			reverse := types.WikiChangeItem{ID: uuid.NewString(), ChangeSetID: set.ID, ChangeCategory: types.WikiChangeCategoryCorrection, PageID: current.ID, PageSlug: current.Slug, ExpectedVersion: current.Version, Before: pageJSONForRepository(&current), EvidenceChunkIDs: current.ChunkRefs, EvidenceExcerpts: types.JSON(`{}`), CreatedAt: now}
 			switch item.Operation {
 			case "create":
 				reverse.Operation = "archive"

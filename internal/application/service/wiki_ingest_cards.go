@@ -228,6 +228,75 @@ func applyCrossPageReviewMetadata(metadata map[string]any, assessments []crossPa
 	}
 }
 
+// crossPageCorrectionTarget locates the approved card an authoritative
+// correction candidate should update, even when the LLM emits a different
+// title/slug for the same rule. It returns the target page together with the
+// method used to find it ("cross_page_authoritative_match" or
+// "deterministic_content_match"), so the caller can record the method for the
+// downstream safety gate.
+func (s *wikiIngestService) crossPageCorrectionTarget(ctx context.Context, kbID, candidateSlug string, card scenarioCardCandidate, evidenceText string, assessments []crossPageAssessment) (*types.WikiPage, string) {
+	if !containsAnyFold(evidenceText, explicitCorrectionSignals) || containsAnyFold(card.Title+" "+card.Statement+" "+card.Summary, uncertaintySignals) || containsAnyFold(card.Title+" "+card.Statement+" "+card.Summary, highRiskSignals) {
+		return nil, ""
+	}
+	// Path 1: a high-confidence LLM cross-page assessment explicitly marks the
+	// candidate as conflicting with or superseding an approved card.
+	ordered := append([]crossPageAssessment(nil), assessments...)
+	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].Confidence > ordered[j].Confidence })
+	for _, assessment := range ordered {
+		if (assessment.Relation != "conflicting" && assessment.Relation != "supersedes") || assessment.Confidence < 0.9 || !assessment.ApplicabilityOverlap {
+			continue
+		}
+		page, err := s.wikiService.GetPageBySlug(ctx, kbID, assessment.RelatedSlug)
+		if err != nil || page == nil || page.PageType != types.WikiPageTypeCard || page.ReviewStatus != types.WikiReviewApproved || page.KnowledgeType != card.KnowledgeType {
+			continue
+		}
+		return page, "cross_page_authoritative_match"
+	}
+	// Path 2: deterministic identity match. When the source explicitly states a
+	// correction but the LLM cross-page assessment did not reach the
+	// high-confidence bar — common when the LLM produces a different title/slug
+	// (e.g. a different language) for the same rule — locate the displaced
+	// approved card by content-aware retrieval and accept it only when the
+	// candidate and the existing card describe the same rule: same knowledge
+	// type, overlapping applicability, and strong textual overlap of the
+	// governing claim. Every other safety check is still enforced by
+	// isSafeAutomaticCorrection downstream.
+	candidateClaim := strings.TrimSpace(card.Statement)
+	if candidateClaim == "" {
+		candidateClaim = strings.TrimSpace(card.Summary)
+	}
+	if candidateClaim == "" {
+		return nil, ""
+	}
+	pages, err := s.wikiService.FindRelatedPages(ctx, kbID, candidateSlug, candidateClaim, []string{types.WikiPageTypeCard}, 8)
+	if err != nil {
+		return nil, ""
+	}
+	candidateAppBytes, _ := json.Marshal(card.Applicability)
+	candidateApp := types.JSON(candidateAppBytes)
+	var best *types.WikiPage
+	bestScore := 0.0
+	for _, page := range pages {
+		if page == nil || page.PageType != types.WikiPageTypeCard || page.ReviewStatus != types.WikiReviewApproved || page.KnowledgeType != card.KnowledgeType {
+			continue
+		}
+		if !correctionApplicabilityOverlaps(page.Applicability, candidateApp) {
+			continue
+		}
+		existingText := strings.TrimSpace(page.Title) + " " + strings.TrimSpace(page.Summary) + " " + strings.TrimSpace(page.Content)
+		score := claimOverlapScore(candidateClaim, existingText)
+		if score < correctionClaimOverlapThreshold || score <= bestScore {
+			continue
+		}
+		best = page
+		bestScore = score
+	}
+	if best != nil {
+		return best, "deterministic_content_match"
+	}
+	return nil, ""
+}
+
 func (s *wikiIngestService) assessCrossPageRelations(ctx context.Context, model chat.Chat, payload WikiIngestPayload, slug, lang string, card scenarioCardCandidate) ([]crossPageAssessment, map[string]any, int, bool, error) {
 	pageBySlug := map[string]*types.WikiPage{}
 	for _, signal := range crossPageQuerySignals(card) {
@@ -305,6 +374,27 @@ func (s *wikiIngestService) extractAndSubmitScenarioCards(ctx context.Context, m
 			chunkContent[ch.ID] = ch.Content
 		}
 	}
+	// documentEvidenceText is the whole source document's chunk text. It is used
+	// to detect explicit correction intent even when the LLM splits the
+	// correction instruction into a sibling card whose own evidence excerpt does
+	// not contain the "废止/supersedes" signal. The per-card evidence_excerpts
+	// still gate the actual L0 auto-apply downstream, so this only widens the
+	// target-discovery step.
+	var documentEvidenceText strings.Builder
+	for _, ch := range chunks {
+		if ch == nil {
+			continue
+		}
+		content := strings.TrimSpace(ch.Content)
+		if content == "" {
+			continue
+		}
+		if documentEvidenceText.Len() > 32000 {
+			break
+		}
+		documentEvidenceText.WriteString(content)
+		documentEvidenceText.WriteByte('\n')
+	}
 	scenarioByKey := map[string]string{}
 	if scenarios, listErr := s.governanceSvc.ListScenarios(ctx, payload.KnowledgeBaseID); listErr == nil {
 		for _, scenario := range scenarios {
@@ -356,7 +446,6 @@ func (s *wikiIngestService) extractAndSubmitScenarioCards(ctx context.Context, m
 			relationships = append(relationships, map[string]any{"target_title": targetTitle, "target_slug": targetSlug, "relation_type": relation.RelationType, "reason": relation.Reason, "confidence": relation.Confidence})
 		}
 		metadata := map[string]any{"document_nature": parsed.Context.DocumentNature, "source_title": sourceTitle, "source_updated_at": sourceUpdatedAt, "business_actions": parsed.Context.BusinessActions, "scenario_names": card.Scenarios, "relationships": relationships, "evidence_excerpts": evidenceExcerpts, "force_review": forceReview}
-		appBytes, _ := json.Marshal(card.Applicability)
 		var scenarioIDs types.StringArray
 		for _, name := range card.Scenarios {
 			name = strings.TrimSpace(name)
@@ -387,8 +476,29 @@ func (s *wikiIngestService) extractAndSubmitScenarioCards(ctx context.Context, m
 			if len(relatedEvidence) > 0 {
 				metadata["related_page_evidence"] = relatedEvidence
 			}
+			if existing == nil && (parsed.Context.DocumentNature == "official_rule" || parsed.Context.DocumentNature == "business_manual") {
+				if target, method := s.crossPageCorrectionTarget(ctx, payload.KnowledgeBaseID, slug, card, documentEvidenceText.String(), assessments); target != nil {
+					metadata["correction_target_method"] = method
+					metadata["correction_original_slug"] = slug
+					delete(metadata, "possible_duplicate_slug")
+					delete(metadata, "possible_duplicate_title")
+					existing = target
+					slug = target.Slug
+					// Preserve the reviewed card identity and scope. The automatic
+					// operation is allowed to replace the conclusion and evidence,
+					// not silently rename or broaden the published card.
+					card.Title = target.Title
+					card.BusinessLine = target.BusinessLine
+					card.AnswerStrength = target.AnswerStrength
+					card.ProhibitedClaims = append([]string(nil), target.ProhibitedClaims...)
+					var reviewedApplicability map[string]any
+					if json.Unmarshal(target.Applicability, &reviewedApplicability) == nil {
+						card.Applicability = reviewedApplicability
+					}
+				}
+			}
 			for _, assessment := range assessments {
-				if assessment.Relation == "unrelated" || assessment.Confidence < 0.7 {
+				if assessment.RelatedSlug == slug || assessment.Relation == "unrelated" || assessment.Confidence < 0.7 {
 					continue
 				}
 				related := relatedEvidence[assessment.RelatedSlug]
@@ -399,6 +509,7 @@ func (s *wikiIngestService) extractAndSubmitScenarioCards(ctx context.Context, m
 			}
 			metadata["relationships"] = relationships
 		}
+		appBytes, _ := json.Marshal(card.Applicability)
 		metaBytes, _ := json.Marshal(metadata)
 		page := &types.WikiPage{TenantID: payload.TenantID, KnowledgeBaseID: payload.KnowledgeBaseID, Slug: slug, Title: card.Title, PageType: types.WikiPageTypeCard, KnowledgeType: card.KnowledgeType, MaturityStatus: types.WikiMaturityPendingReview, AnswerStrength: card.AnswerStrength, ReviewStatus: types.WikiReviewPending, BusinessLine: card.BusinessLine, ScenarioIDs: scenarioIDs, AudienceRoles: card.AudienceRoles, AffectedMetrics: card.AffectedMetrics, Applicability: types.JSON(appBytes), ProhibitedClaims: card.ProhibitedClaims, Content: cardMarkdown(card, relationships), Summary: card.Summary, SourceRefs: types.StringArray{knowledgeID}, ChunkRefs: evidence, OutLinks: outLinks, PageMetadata: types.JSON(metaBytes), Status: types.WikiPageStatusDraft}
 		if existing != nil {

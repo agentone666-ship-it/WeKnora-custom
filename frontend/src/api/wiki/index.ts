@@ -341,6 +341,7 @@ export function rebuildWikiLinks(kbId: string) {
 export interface WikiChangeItem {
   id: string;
   operation: 'create' | 'update' | 'archive';
+  change_category: WikiChangeCategory;
   page_id?: string;
   page_slug: string;
   expected_version: number;
@@ -356,7 +357,8 @@ export interface WikiChangeSet {
   knowledge_base_id: string;
   knowledge_id?: string;
   status: string;
-  review_level: 'L0' | 'L1' | 'L2';
+  review_level: 'L0' | 'L1';
+  change_category: WikiChangeCategory;
   reasons: string[];
   model_id?: string;
   prompt_version?: string;
@@ -366,9 +368,13 @@ export interface WikiChangeSet {
   items: WikiChangeItem[];
 }
 
+export type WikiChangeCategory = 'addition' | 'update' | 'conflict' | 'correction' | 'retirement' | 'merge_duplicate';
+export type WikiConflictResolution = 'keep_existing' | 'adopt_candidate' | 'edit_candidate' | 'split_scope' | 'defer';
+
 export function listWikiChangeSets(kbId: string, params?: {
   status?: string;
   review_level?: string;
+  change_category?: WikiChangeCategory | '';
   limit?: number;
   offset?: number;
 }) {
@@ -387,7 +393,14 @@ export function getWikiChangeSet(kbId: string, changeSetId: string) {
 export function reviewWikiChangeSet(
   kbId: string,
   changeSetId: string,
-  data: { decision: 'approved' | 'rejected'; comment?: string; merge_into_slug?: string; item_overrides?: Record<string, Record<string, any>> },
+  data: {
+    decision: 'approved' | 'rejected' | 'deferred';
+    comment?: string;
+    merge_into_slug?: string;
+    item_overrides?: Record<string, Record<string, any>>;
+    resolution?: WikiConflictResolution;
+    retained_claim?: string;
+  },
 ) {
   return post(`/api/v1/knowledgebase/${kbId}/wiki/change-sets/${changeSetId}/review`, data);
 }

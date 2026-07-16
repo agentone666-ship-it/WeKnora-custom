@@ -6,10 +6,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/driver/postgres"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -86,6 +88,19 @@ func setupWikiPagesTestDB(t *testing.T) *gorm.DB {
 	require.NoError(t, db.Exec(wikiPagesTestDDL).Error)
 	require.NoError(t, db.Exec(wikiFoldersTestDDL).Error)
 	return db
+}
+
+func TestWikiCategoryRankOrderGuardsNonArrayPostgresJSON(t *testing.T) {
+	sqlDB, _, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	db, err := gorm.Open(postgres.New(postgres.Config{Conn: sqlDB}), &gorm.Config{DisableAutomaticPing: true})
+	require.NoError(t, err)
+
+	order := (&wikiPageRepository{db: db}).wikiCategoryRankOrder()
+	assert.Contains(t, order, "jsonb_typeof(category_path) = 'array'")
+	assert.Contains(t, order, "THEN CASE WHEN jsonb_array_length(category_path) > 0")
+	assert.NotContains(t, order, "COALESCE(jsonb_array_length")
 }
 
 // makeWikiPage builds a minimal WikiPage suitable for insert. Title is
