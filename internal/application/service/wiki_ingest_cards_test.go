@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/Tencent/WeKnora/internal/types"
@@ -69,6 +70,23 @@ func TestCrossPageAssessmentMetadataIsJSONSerializable(t *testing.T) {
 	}
 	if value, _ := metadata["cross_page_check_incomplete"].(bool); !value {
 		t.Fatalf("missing assessment must mark the check incomplete")
+	}
+}
+
+func TestApplyCardGraphBuildsAndClearsRelationshipSection(t *testing.T) {
+	page := &types.WikiPage{Slug: "card/question-a", Title: "A", Content: "# A\n\n问题描述\n", PageMetadata: types.JSON(`{"relationships":null}`)}
+	evidence := map[string]any{"card/knowledge-b": map[string]any{"title": "B"}}
+	if err := applyCardGraph(page, []crossPageAssessment{{RelatedSlug: "card/knowledge-b", Relation: "complementary", Reason: "B answers A", Confidence: 0.92, ApplicabilityOverlap: true}}, evidence); err != nil {
+		t.Fatal(err)
+	}
+	if len(page.OutLinks) != 1 || page.OutLinks[0] != "card/knowledge-b" || !strings.Contains(page.Content, "[[card/knowledge-b|B]]") {
+		t.Fatalf("graph edge was not rendered: out=%v content=%q", page.OutLinks, page.Content)
+	}
+	if err := applyCardGraph(page, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(page.OutLinks) != 0 || strings.Contains(page.Content, "## 关联知识") {
+		t.Fatalf("stale graph edge was not cleared: out=%v content=%q", page.OutLinks, page.Content)
 	}
 }
 

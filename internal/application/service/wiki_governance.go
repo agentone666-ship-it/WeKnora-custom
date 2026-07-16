@@ -14,16 +14,48 @@ import (
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/Tencent/WeKnora/internal/types/interfaces"
 	"github.com/google/uuid"
+	"github.com/hibiken/asynq"
 )
 
 const wikiCardPromptVersion = "scenario-cards-v1"
 
 type wikiGovernanceService struct {
-	repo interfaces.WikiGovernanceRepository
+	repo        interfaces.WikiGovernanceRepository
+	task        interfaces.TaskEnqueuer
+	pendingRepo interfaces.TaskPendingOpsRepository
 }
 
-func NewWikiGovernanceService(repo interfaces.WikiGovernanceRepository) interfaces.WikiGovernanceService {
-	return &wikiGovernanceService{repo: repo}
+func NewWikiGovernanceService(repo interfaces.WikiGovernanceRepository, task interfaces.TaskEnqueuer, pendingRepo interfaces.TaskPendingOpsRepository) interfaces.WikiGovernanceService {
+	return &wikiGovernanceService{repo: repo, task: task, pendingRepo: pendingRepo}
+}
+
+func (s *wikiGovernanceService) requestGraphRefresh(ctx context.Context, tenantID uint64, kbID string, slugs []string) {
+	if s.task == nil || s.pendingRepo == nil || kbID == "" {
+		return
+	}
+	seen := map[string]bool{}
+	for _, slug := range slugs {
+		slug = strings.TrimSpace(slug)
+		if slug == "" || seen[slug] {
+			continue
+		}
+		seen[slug] = true
+		rowBytes, _ := json.Marshal(wikiFinalizeRow{Slug: slug, Graph: true})
+		_ = s.pendingRepo.Enqueue(ctx, &types.TaskPendingOp{TenantID: tenantID, TaskType: wikiFinalizeTaskType, Scope: wikiTaskScope, ScopeID: kbID, Op: wikiFinalizeOpGraph, DedupKey: slug, Payload: rowBytes})
+	}
+	if len(seen) == 0 {
+		return
+	}
+	lang, _ := types.LanguageFromContext(ctx)
+	payload := WikiIngestPayload{TenantID: tenantID, KnowledgeBaseID: kbID, Language: lang}
+	b, _ := json.Marshal(payload)
+	task := asynq.NewTask(types.TypeWikiFinalize, b, asynq.Queue(types.QueueWiki), asynq.MaxRetry(wikiIngestMaxRetry), asynq.Timeout(30*time.Minute), asynq.ProcessIn(wikiFinalizeDelay), asynq.TaskID("wiki-finalize-"+kbID))
+	if _, err := s.task.Enqueue(task); err != nil && !errors.Is(err, asynq.ErrTaskIDConflict) && !errors.Is(err, asynq.ErrDuplicateTask) {
+		// The durable row remains queued; the next Wiki update/finalize trigger
+		// will pick it up. Governance must not fail after its DB commit merely
+		// because the asynchronous convergence trigger was unavailable.
+		return
+	}
 }
 
 var validKnowledgeTypes = map[string]bool{
@@ -646,6 +678,7 @@ func (s *wikiGovernanceService) SubmitCandidate(ctx context.Context, candidate, 
 		}
 		set.Status = types.WikiChangeSetApplied
 	}
+	s.requestGraphRefresh(ctx, candidate.TenantID, candidate.KnowledgeBaseID, []string{candidate.Slug})
 	return set, nil
 }
 
@@ -658,8 +691,26 @@ func (s *wikiGovernanceService) ListChangeSets(ctx context.Context, req types.Wi
 func (s *wikiGovernanceService) ListPageChangeSets(ctx context.Context, kbID, slug string, limit int) ([]*types.WikiChangeSet, error) {
 	return s.repo.ListPageChangeSets(ctx, kbID, slug, limit)
 }
+func (s *wikiGovernanceService) ListPendingGraphCards(ctx context.Context, kbID string, limit int) ([]*types.WikiPendingGraphCard, error) {
+	return s.repo.ListPendingGraphCards(ctx, kbID, limit)
+}
+func (s *wikiGovernanceService) UpdatePendingGraphCard(ctx context.Context, kbID, changeItemID string, page *types.WikiPage) (bool, error) {
+	return s.repo.UpdatePendingGraphCard(ctx, kbID, changeItemID, page)
+}
 func (s *wikiGovernanceService) ReviewChangeSet(ctx context.Context, kbID, id, reviewerID string, d *types.WikiReviewDecision) error {
-	return s.repo.ReviewChangeSet(ctx, kbID, id, reviewerID, d)
+	set, err := s.repo.GetChangeSet(ctx, kbID, id)
+	if err != nil {
+		return err
+	}
+	if err := s.repo.ReviewChangeSet(ctx, kbID, id, reviewerID, d); err != nil {
+		return err
+	}
+	slugs := make([]string, 0, len(set.Items))
+	for _, item := range set.Items {
+		slugs = append(slugs, item.PageSlug)
+	}
+	s.requestGraphRefresh(ctx, set.TenantID, kbID, slugs)
+	return nil
 }
 func (s *wikiGovernanceService) ListReviews(ctx context.Context, id string) ([]*types.WikiReview, error) {
 	return s.repo.ListReviews(ctx, id)

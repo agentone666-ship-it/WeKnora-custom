@@ -180,6 +180,9 @@ const (
 	// wikiFinalizeOpSlug rows carry one affected page slug (+ its fresh title
 	// when this batch wrote it) for the dead-link / cross-link passes.
 	wikiFinalizeOpSlug = "slug"
+	// wikiFinalizeOpGraph requests candidate/published card graph convergence.
+	// It shares the finalize lane so rapid ingest and review bursts coalesce.
+	wikiFinalizeOpGraph = "graph"
 	// wikiFinalizeOpChange rows carry a doc-level add/remove change entry for
 	// the index-intro change description.
 	wikiFinalizeOpChange = "change"
@@ -216,6 +219,7 @@ type wikiFinalizeChange struct {
 type wikiFinalizeRow struct {
 	Slug   string              `json:"slug,omitempty"`
 	Title  string              `json:"title,omitempty"`
+	Graph  bool                `json:"graph,omitempty"`
 	Change *wikiFinalizeChange `json:"change,omitempty"`
 }
 

@@ -91,6 +91,76 @@ func (r *wikiGovernanceRepository) GetChangeSet(ctx context.Context, kbID, id st
 	return &set, err
 }
 
+func (r *wikiGovernanceRepository) ListPendingGraphCards(ctx context.Context, kbID string, limit int) ([]*types.WikiPendingGraphCard, error) {
+	if limit <= 0 {
+		limit = 500
+	}
+	if limit > 2000 {
+		limit = 2000
+	}
+	var items []types.WikiChangeItem
+	err := r.db.WithContext(ctx).Table("wiki_change_items").
+		Select("wiki_change_items.*").
+		Joins("JOIN wiki_change_sets ON wiki_change_sets.id = wiki_change_items.change_set_id").
+		Where("wiki_change_sets.knowledge_base_id = ? AND wiki_change_sets.status = ?", kbID, types.WikiChangeSetPending).
+		Where("wiki_change_items.operation IN ?", []string{"create", "update"}).
+		Order("wiki_change_items.created_at ASC").Limit(limit).Find(&items).Error
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*types.WikiPendingGraphCard, 0, len(items))
+	for i := range items {
+		page, decodeErr := decodePageSnapshot(items[i].After)
+		if decodeErr != nil || page == nil || page.PageType != types.WikiPageTypeCard {
+			continue
+		}
+		out = append(out, &types.WikiPendingGraphCard{ChangeSetID: items[i].ChangeSetID, ChangeItemID: items[i].ID, Page: page})
+	}
+	return out, nil
+}
+
+// UpdatePendingGraphCard updates only graph-owned fields in the latest
+// candidate snapshot. Locking the owning change set serializes this write with
+// ReviewChangeSet, so an approval can never publish a stale pre-graph snapshot.
+func (r *wikiGovernanceRepository) UpdatePendingGraphCard(ctx context.Context, kbID, changeItemID string, page *types.WikiPage) (bool, error) {
+	if page == nil {
+		return false, errors.New("pending graph card is nil")
+	}
+	updated := false
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var item types.WikiChangeItem
+		// Read the owner id first, then lock in the same set -> items order as
+		// ReviewChangeSet. Keeping one lock order avoids approval/graph-update
+		// deadlocks under a busy review queue.
+		if err := tx.Select("id", "change_set_id").Where("id = ?", changeItemID).First(&item).Error; err != nil {
+			return err
+		}
+		var set types.WikiChangeSet
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND knowledge_base_id = ?", item.ChangeSetID, kbID).First(&set).Error; err != nil {
+			return err
+		}
+		if set.Status != types.WikiChangeSetPending {
+			return nil
+		}
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", changeItemID).First(&item).Error; err != nil {
+			return err
+		}
+		current, err := decodePageSnapshot(item.After)
+		if err != nil {
+			return err
+		}
+		current.Content = page.Content
+		current.OutLinks = page.OutLinks
+		current.PageMetadata = page.PageMetadata
+		if err := tx.Model(&types.WikiChangeItem{}).Where("id = ?", item.ID).Update("after", pageJSONForRepository(current)).Error; err != nil {
+			return err
+		}
+		updated = true
+		return nil
+	})
+	return updated, err
+}
+
 func (r *wikiGovernanceRepository) ListChangeSets(ctx context.Context, req types.WikiGovernanceListRequest) ([]*types.WikiChangeSet, int64, error) {
 	q := r.db.WithContext(ctx).Model(&types.WikiChangeSet{}).Where("knowledge_base_id = ?", req.KnowledgeBaseID)
 	if req.Status != "" {
@@ -728,7 +798,7 @@ func appendConflictRetirementItems(tx *gorm.DB, set *types.WikiChangeSet, items 
 func (r *wikiGovernanceRepository) ReviewChangeSet(ctx context.Context, kbID, id, reviewerID string, decision *types.WikiReviewDecision) error {
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var set types.WikiChangeSet
-		if err := tx.Where("knowledge_base_id = ? AND id = ?", kbID, id).First(&set).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("knowledge_base_id = ? AND id = ?", kbID, id).First(&set).Error; err != nil {
 			return err
 		}
 		if set.Status != types.WikiChangeSetPending {
@@ -736,7 +806,7 @@ func (r *wikiGovernanceRepository) ReviewChangeSet(ctx context.Context, kbID, id
 		}
 		now := time.Now()
 		var items []types.WikiChangeItem
-		if err := tx.Where("change_set_id = ?", id).Find(&items).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("change_set_id = ?", id).Find(&items).Error; err != nil {
 			return err
 		}
 		if err := validateConflictResolution(&set, items, decision); err != nil {
