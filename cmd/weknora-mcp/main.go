@@ -20,11 +20,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
 
 type apiClient struct {
+	store           *adminStore
 	baseURL         string
 	apiKey          string
 	wikiAgentID     string
@@ -51,6 +53,7 @@ type manualKnowledgeRequest struct {
 type authRoleKey struct{}
 type authMemberKey struct{}
 type requestMetaKey struct{}
+type toolRequestIDKey struct{}
 
 type requestMeta struct {
 	ClientIP  string
@@ -87,6 +90,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("open MCP admin database: %v", err)
 	}
+	client.store = store
 	if err := store.bootstrapLegacy("默认只读成员", strings.TrimSpace(*authToken), false); err != nil {
 		log.Fatalf("bootstrap MCP reader: %v", err)
 	}
@@ -97,16 +101,31 @@ func main() {
 	}
 	s := server.NewMCPServer("weknora-wiki", "0.1.0", server.WithToolCapabilities(true))
 	s.AddTool(mcp.NewTool("ask_wiki",
-		mcp.WithDescription("Ask a WeKnora Wiki knowledge base through its Wiki Agent."),
+		mcp.WithDescription("Ask a WeKnora Wiki knowledge base through its Wiki Agent. Returns the answer plus request_id, session_id, knowledge_base_id, and the exact recalled node IDs required for later feedback traceability."),
 		mcp.WithString("question", mcp.Required(), mcp.Description("Question to answer.")),
 		mcp.WithString("knowledge_base_id", mcp.Description("Optional knowledge base ID. Omit it when this MCP server is bound to a default knowledge base.")),
 		mcp.WithString("agent_id", mcp.Description("Optional Wiki Agent ID; defaults to WEKNORA_WIKI_AGENT_ID.")),
+		mcp.WithOutputSchema[knowledgeAnswer](),
 	), auditTool(store, "ask_wiki", client.askWiki))
 	s.AddTool(mcp.NewTool("ask_rag",
-		mcp.WithDescription("Ask a WeKnora knowledge base using the normal RAG pipeline."),
+		mcp.WithDescription("Ask a WeKnora knowledge base using the normal RAG pipeline. Returns the answer plus request_id, session_id, knowledge_base_id, and the exact recalled node IDs required for later feedback traceability."),
 		mcp.WithString("question", mcp.Required(), mcp.Description("Question to answer.")),
 		mcp.WithString("knowledge_base_id", mcp.Description("Optional knowledge base ID. Omit it when this MCP server is bound to a default knowledge base.")),
+		mcp.WithOutputSchema[knowledgeAnswer](),
 	), auditTool(store, "ask_rag", client.askRAG))
+	s.AddTool(mcp.NewTool("submit_knowledge_feedback",
+		mcp.WithDescription("Record a user's natural-language feedback about a WeKnora answer or its evidence. Agents SHOULD call this tool whenever the user says an answer is wrong, outdated, incomplete, irrelevant, cites the wrong evidence, misses knowledge, or supplies a correction/improvement. feedback_text is the only required field. When feedback follows ask_wiki/ask_rag, pass related_request_id and recalled_node_ids from that result; pass target_node_ids only for the subset the user clearly identifies as wrong—never guess target nodes. Missing optional context must not block submission. This tool only records feedback and never changes formal knowledge."),
+		mcp.WithString("feedback_text", mcp.Required(), mcp.Description("The user's feedback in their own words.")),
+		mcp.WithString("original_question", mcp.Description("Original question, when available.")),
+		mcp.WithString("answer_excerpt", mcp.Description("Relevant answer excerpt, when available.")),
+		mcp.WithString("suggested_correction", mcp.Description("User-provided correction or improved wording, when available.")),
+		mcp.WithString("feedback_type", mcp.Description("One of: incorrect, outdated, incomplete, irrelevant, wrong_reference, missing_knowledge, suggestion, other."), mcp.Enum("incorrect", "outdated", "incomplete", "irrelevant", "wrong_reference", "missing_knowledge", "suggestion", "other")),
+		mcp.WithString("related_request_id", mcp.Description("request_id returned by ask_wiki/ask_rag. The server uses it to verify and auto-fill the recall snapshot.")),
+		mcp.WithString("knowledge_base_id", mcp.Description("Knowledge base ID, when available.")),
+		mcp.WithArray("recalled_node_ids", mcp.Description("All node IDs returned in recalled_nodes for the related answer."), mcp.WithStringItems()),
+		mcp.WithArray("target_node_ids", mcp.Description("Only the recalled node IDs specifically identified as wrong. Omit when unclear; never guess."), mcp.WithStringItems()),
+		mcp.WithOutputSchema[feedbackReceipt](),
+	), auditTool(store, "submit_knowledge_feedback", store.feedbackTool))
 	s.AddTool(mcp.NewTool("update_knowledge",
 		mcp.WithDescription("Add a Markdown knowledge entry. Requires a writer-authorized MCP token."),
 		mcp.WithString("knowledge_base_id", mcp.Description("Optional target knowledge base ID. Omit it when this MCP server is bound to a default knowledge base.")),
@@ -206,6 +225,11 @@ func clientIP(r *http.Request) string {
 func auditTool(store *adminStore, tool string, next server.ToolHandlerFunc) server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		started := time.Now()
+		requestID := strings.TrimSpace(request.Header.Get("X-Request-ID"))
+		if requestID == "" {
+			requestID = uuid.NewString()
+		}
+		ctx = context.WithValue(ctx, toolRequestIDKey{}, requestID)
 		result, err := next(ctx, request)
 		status := "success"
 		errorMessage := ""
@@ -216,7 +240,7 @@ func auditTool(store *adminStore, tool string, next server.ToolHandlerFunc) serv
 			status = "failed"
 			errorMessage = toolResultText(result)
 		}
-		row := &mcpCallLog{RequestID: request.Header.Get("X-Request-ID"), Tool: tool, Status: status, ErrorMessage: errorMessage, KnowledgeBaseID: request.GetString("knowledge_base_id", ""), Subject: auditSubject(tool, request), DurationMS: time.Since(started).Milliseconds()}
+		row := &mcpCallLog{RequestID: requestID, Tool: tool, Status: status, ErrorMessage: errorMessage, KnowledgeBaseID: request.GetString("knowledge_base_id", ""), Subject: auditSubject(tool, request), DurationMS: time.Since(started).Milliseconds()}
 		if member, ok := ctx.Value(authMemberKey{}).(*mcpMember); ok {
 			row.MemberID, row.MemberName = &member.ID, member.Name
 		}
@@ -234,6 +258,9 @@ func auditSubject(tool string, request mcp.CallToolRequest) string {
 	}
 	if tool == "upload_knowledge_file" {
 		return request.GetString("file_name", "")
+	}
+	if tool == "submit_knowledge_feedback" {
+		return request.GetString("feedback_text", "")
 	}
 	return request.GetString("title", "")
 }
@@ -294,6 +321,9 @@ func (c *apiClient) request(ctx context.Context, method, path string, body any) 
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	req.Header.Set("X-API-Key", c.apiKey)
 	req.Header.Set("Content-Type", "application/json")
+	if requestID, _ := ctx.Value(toolRequestIDKey{}).(string); requestID != "" {
+		req.Header.Set("X-Request-ID", requestID)
+	}
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return nil, "", err
@@ -370,46 +400,106 @@ func (c *apiClient) createSession(ctx context.Context) (string, error) {
 	return "", errors.New("WeKnora did not return a session id")
 }
 
-func (c *apiClient) ask(ctx context.Context, path string, req chatRequest) (string, error) {
+func (c *apiClient) ask(ctx context.Context, path string, req chatRequest, knowledgeBaseID string) (knowledgeAnswer, error) {
+	requestID, _ := ctx.Value(toolRequestIDKey{}).(string)
+	if requestID == "" {
+		requestID = uuid.NewString()
+		ctx = context.WithValue(ctx, toolRequestIDKey{}, requestID)
+	}
 	sessionID, err := c.createSession(ctx)
 	if err != nil {
-		return "", err
+		return knowledgeAnswer{}, err
 	}
 	data, contentType, err := c.request(ctx, http.MethodPost, path+"/"+sessionID, req)
 	if err != nil {
-		return "", err
+		return knowledgeAnswer{}, err
 	}
+	result := knowledgeAnswer{RequestID: requestID, SessionID: sessionID, KnowledgeBaseID: knowledgeBaseID, RecalledNodes: []recalledNode{}}
 	if !strings.Contains(contentType, "text/event-stream") {
-		return strings.TrimSpace(string(data)), nil
+		result.Answer = strings.TrimSpace(string(data))
+	} else {
+		result = parseSSEResult(data, result)
 	}
-	return parseSSEText(data), nil
+	if c.store != nil {
+		if err := c.store.saveRecallSnapshot(result); err != nil {
+			return knowledgeAnswer{}, fmt.Errorf("save recall snapshot: %w", err)
+		}
+	}
+	return result, nil
 }
 
-func parseSSEText(data []byte) string {
+func parseSSEResult(data []byte, result knowledgeAnswer) knowledgeAnswer {
 	var out strings.Builder
+	seenNodes := map[string]bool{}
 	scanner := bufio.NewScanner(bytes.NewReader(data))
+	buffer := make([]byte, 64*1024)
+	scanner.Buffer(buffer, 10*1024*1024)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if !strings.HasPrefix(line, "data:") {
 			continue
 		}
 		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		var event map[string]any
+		if payload == "" || payload == "[DONE]" {
+			continue
+		}
+		var event struct {
+			ID                  string `json:"id"`
+			ResponseType        string `json:"response_type"`
+			Content             string `json:"content"`
+			Text                string `json:"text"`
+			Answer              string `json:"answer"`
+			SessionID           string `json:"session_id"`
+			KnowledgeReferences []struct {
+				ID              string   `json:"id"`
+				Content         string   `json:"content"`
+				KnowledgeID     string   `json:"knowledge_id"`
+				KnowledgeBaseID string   `json:"knowledge_base_id"`
+				ParentChunkID   string   `json:"parent_chunk_id"`
+				SubChunkID      []string `json:"sub_chunk_id"`
+				KnowledgeTitle  string   `json:"knowledge_title"`
+				Score           float64  `json:"score"`
+				MatchType       string   `json:"match_type"`
+			} `json:"knowledge_references"`
+			Data map[string]any `json:"data"`
+		}
 		if json.Unmarshal([]byte(payload), &event) != nil {
 			continue
 		}
-		for _, key := range []string{"content", "text", "answer"} {
-			if value, ok := event[key].(string); ok {
+		if result.RequestID == "" && event.ID != "" {
+			result.RequestID = event.ID
+		}
+		if event.SessionID != "" {
+			result.SessionID = event.SessionID
+		}
+		if event.ResponseType != "references" {
+			out.WriteString(event.Content)
+			out.WriteString(event.Text)
+			out.WriteString(event.Answer)
+			if value, ok := event.Data["content"].(string); ok {
 				out.WriteString(value)
 			}
 		}
-		if nested, ok := event["data"].(map[string]any); ok {
-			if value, ok := nested["content"].(string); ok {
-				out.WriteString(value)
+		for _, ref := range event.KnowledgeReferences {
+			if ref.ID == "" || seenNodes[ref.ID] {
+				continue
 			}
+			seenNodes[ref.ID] = true
+			kbID := ref.KnowledgeBaseID
+			if kbID == "" {
+				kbID = result.KnowledgeBaseID
+			}
+			result.RecalledNodes = append(result.RecalledNodes, recalledNode{
+				NodeID: ref.ID, KnowledgeID: ref.KnowledgeID, KnowledgeBaseID: kbID,
+				ParentNodeID: ref.ParentChunkID, SubNodeIDs: ref.SubChunkID,
+				KnowledgeTitle: ref.KnowledgeTitle, Rank: len(result.RecalledNodes) + 1,
+				Score: ref.Score, MatchType: ref.MatchType,
+				ContentExcerpt: contentExcerpt(ref.Content, 500), ContentHash: contentHash(ref.Content),
+			})
 		}
 	}
-	return strings.TrimSpace(out.String())
+	result.Answer = strings.TrimSpace(out.String())
+	return result
 }
 
 func (c *apiClient) askWiki(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -428,11 +518,11 @@ func (c *apiClient) askWiki(ctx context.Context, request mcp.CallToolRequest) (*
 	if agentID == "" {
 		return mcp.NewToolResultError("agent_id is required for ask_wiki (or set WEKNORA_WIKI_AGENT_ID)"), nil
 	}
-	answer, err := c.ask(ctx, "/agent-chat", chatRequest{Query: question, KnowledgeBaseIDs: []string{kb}, AgentEnabled: true, AgentID: agentID, DisableTitle: true, Channel: "mcp"})
+	answer, err := c.ask(ctx, "/agent-chat", chatRequest{Query: question, KnowledgeBaseIDs: []string{kb}, AgentEnabled: true, AgentID: agentID, DisableTitle: true, Channel: "mcp"}, kb)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
-	return mcp.NewToolResultText(answer), nil
+	return mcp.NewToolResultStructured(answer, answer.Answer), nil
 }
 
 func (c *apiClient) askRAG(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -444,11 +534,11 @@ func (c *apiClient) askRAG(ctx context.Context, request mcp.CallToolRequest) (*m
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
-	answer, err := c.ask(ctx, "/knowledge-chat", chatRequest{Query: question, KnowledgeBaseIDs: []string{kb}, DisableTitle: true, Channel: "mcp"})
+	answer, err := c.ask(ctx, "/knowledge-chat", chatRequest{Query: question, KnowledgeBaseIDs: []string{kb}, DisableTitle: true, Channel: "mcp"}, kb)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
-	return mcp.NewToolResultText(answer), nil
+	return mcp.NewToolResultStructured(answer, answer.Answer), nil
 }
 
 func (c *apiClient) updateKnowledge(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {

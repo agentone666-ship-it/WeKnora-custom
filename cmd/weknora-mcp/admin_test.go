@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -78,5 +79,33 @@ func TestAdminAPIAndLogs(t *testing.T) {
 	mux.ServeHTTP(logRec, logReq)
 	if logRec.Code != http.StatusOK || !bytes.Contains(logRec.Body.Bytes(), []byte("测试问题")) {
 		t.Fatalf("logs status=%d body=%s", logRec.Code, logRec.Body.String())
+	}
+}
+
+func TestAdminFeedbackAPIIncludesTraceDetail(t *testing.T) {
+	store := newTestAdminStore(t)
+	seedRecallSnapshot(t, store)
+	receipt, err := store.submitFeedback(context.Background(), feedbackInput{FeedbackText: "引用过时", FeedbackType: "outdated", RelatedRequestID: "req-1", TargetNodeIDs: []string{"node-1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin := &adminHTTP{store: store, token: "admin-secret"}
+	mux := http.NewServeMux()
+	admin.register(mux)
+
+	listReq := httptest.NewRequest(http.MethodGet, "/admin/api/feedback?trace_status=verified", nil)
+	listReq.Header.Set("Authorization", "Bearer admin-secret")
+	listRec := httptest.NewRecorder()
+	mux.ServeHTTP(listRec, listReq)
+	if listRec.Code != http.StatusOK || !bytes.Contains(listRec.Body.Bytes(), []byte(receipt.FeedbackID)) {
+		t.Fatalf("feedback list status=%d body=%s", listRec.Code, listRec.Body.String())
+	}
+
+	detailReq := httptest.NewRequest(http.MethodGet, "/admin/api/feedback/"+receipt.FeedbackID, nil)
+	detailReq.Header.Set("Authorization", "Bearer admin-secret")
+	detailRec := httptest.NewRecorder()
+	mux.ServeHTTP(detailRec, detailReq)
+	if detailRec.Code != http.StatusOK || !bytes.Contains(detailRec.Body.Bytes(), []byte(`"node_id":"node-1"`)) || !bytes.Contains(detailRec.Body.Bytes(), []byte(`"content_hash":"sha256:`)) {
+		t.Fatalf("feedback detail status=%d body=%s", detailRec.Code, detailRec.Body.String())
 	}
 }

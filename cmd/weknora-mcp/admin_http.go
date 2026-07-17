@@ -20,6 +20,8 @@ func (a *adminHTTP) register(mux *http.ServeMux) {
 	mux.HandleFunc("/admin/api/members", a.withAuth(a.members))
 	mux.HandleFunc("/admin/api/members/", a.withAuth(a.memberAction))
 	mux.HandleFunc("/admin/api/logs", a.withAuth(a.logs))
+	mux.HandleFunc("/admin/api/feedback", a.withAuth(a.feedback))
+	mux.HandleFunc("/admin/api/feedback/", a.withAuth(a.feedbackDetail))
 }
 
 func (a *adminHTTP) page(w http.ResponseWriter, r *http.Request) {
@@ -141,6 +143,39 @@ func (a *adminHTTP) logs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"success": true, "data": rows, "total": total})
+}
+
+func (a *adminHTTP) feedback(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
+	rows, total, err := a.store.listFeedback(feedbackQuery{Page: page, PageSize: pageSize, FeedbackType: r.URL.Query().Get("feedback_type"), TraceStatus: r.URL.Query().Get("trace_status")})
+	if err != nil {
+		writeAdminError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"success": true, "data": rows, "total": total})
+}
+
+func (a *adminHTTP) feedbackDetail(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
+	id := strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/admin/api/feedback/"))
+	if id == "" || strings.Contains(id, "/") {
+		http.NotFound(w, r)
+		return
+	}
+	row, err := a.store.getFeedback(id)
+	if err != nil {
+		writeAdminError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"success": true, "data": row})
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {
