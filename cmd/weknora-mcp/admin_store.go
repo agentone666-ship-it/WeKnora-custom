@@ -59,7 +59,7 @@ func openAdminStore(path string) (*adminStore, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := db.AutoMigrate(&mcpMember{}, &mcpCallLog{}); err != nil {
+	if err := db.AutoMigrate(&mcpMember{}, &mcpCallLog{}, &mcpCallReference{}, &mcpFeedback{}, &mcpFeedbackNode{}); err != nil {
 		return nil, err
 	}
 	return &adminStore{db: db}, nil
@@ -236,7 +236,11 @@ func (s *adminStore) overview() (map[string]any, error) {
 	if err := s.db.Model(&mcpCallLog{}).Where("status != ?", "success").Count(&failed).Error; err != nil {
 		return nil, err
 	}
-	return map[string]any{"members": members, "enabled_members": enabled, "calls": calls, "failed_calls": failed}, nil
+	feedback, mismatches, err := s.feedbackCounts()
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"members": members, "enabled_members": enabled, "calls": calls, "failed_calls": failed, "feedback": feedback, "trace_mismatches": mismatches}, nil
 }
 
 func parseUint(value string) (uint, error) {
