@@ -58,14 +58,17 @@ go run ./cmd/weknora-mcp \
   "recalled_nodes": [
     {
       "node_id": "...",
+      "source_type": "wiki_page",
+      "wiki_slug": "entity/example",
       "knowledge_id": "...",
+      "knowledge_ids": ["..."],
       "knowledge_base_id": "...",
       "parent_node_id": "...",
       "sub_node_ids": [],
       "knowledge_title": "...",
       "rank": 1,
       "score": 0.91,
-      "match_type": "vector",
+      "match_type": "entity",
       "content_excerpt": "...",
       "content_hash": "sha256:..."
     }
@@ -73,7 +76,9 @@ go run ./cmd/weknora-mcp \
 }
 ```
 
-`node_id` 是本次实际召回并交给回答链路的 Chunk/节点 ID。MCP 服务会按 `request_id` 保存本次召回快照，包含节点、知识、知识库、父子节点、排名、分数、匹配类型、内容摘要和内容哈希；即使节点内容后续被编辑，历史反馈仍可核对当时证据。
+`ask_wiki` 会在 Agent 完成后读取已持久化的最终回答，因此不会把 `thinking` / `tool_call` / `tool_result` 等内部进度日志混入用户答案。对 Agent 实际读取或在答案中引用的 Wiki 页，`node_id` 是 Wiki Page UUID，`wiki_slug` 是可读标识，`knowledge_ids` 和 `sub_node_ids` 分别保存源文档与底层 Chunk ID。
+
+`ask_rag` 的 `node_id` 是本次实际召回并交给回答链路的 Chunk/节点 ID。MCP 服务会按 `request_id` 保存两类问答的召回快照，包含节点、知识、知识库、父子节点、排名、分数、匹配类型、内容摘要和内容哈希；即使内容后续被编辑，历史反馈仍可核对当时证据。
 
 ### `ask_rag`
 

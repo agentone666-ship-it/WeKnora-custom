@@ -14,6 +14,9 @@ import (
 func TestParseSSEResultIncludesTraceableReferences(t *testing.T) {
 	payload := strings.Join([]string{
 		`data: {"id":"req-backend","response_type":"references","knowledge_references":[{"id":"node-1","content":"The source content","knowledge_id":"knowledge-1","knowledge_base_id":"kb-1","parent_chunk_id":"parent-1","sub_chunk_id":["sub-1"],"knowledge_title":"Handbook","score":0.91,"match_type":"vector"}]}`,
+		`data: {"id":"req-backend","response_type":"thinking","content":"I should search first."}`,
+		`data: {"id":"req-backend","response_type":"tool_call","content":"Calling tool: wiki_search"}`,
+		`data: {"id":"req-backend","response_type":"tool_result","content":"internal search output"}`,
 		`data: {"id":"req-backend","response_type":"answer","content":"Hello "}`,
 		`data: {"id":"req-backend","response_type":"answer","content":"world"}`,
 		`data: [DONE]`,
@@ -27,7 +30,7 @@ func TestParseSSEResultIncludesTraceableReferences(t *testing.T) {
 		t.Fatalf("references=%d, want 1", len(result.RecalledNodes))
 	}
 	node := result.RecalledNodes[0]
-	if node.NodeID != "node-1" || node.KnowledgeID != "knowledge-1" || node.ParentNodeID != "parent-1" || node.Rank != 1 {
+	if node.NodeID != "node-1" || node.SourceType != "knowledge_chunk" || node.KnowledgeID != "knowledge-1" || node.ParentNodeID != "parent-1" || node.Rank != 1 {
 		t.Fatalf("unexpected recalled node: %#v", node)
 	}
 	if len(node.SubNodeIDs) != 1 || node.SubNodeIDs[0] != "sub-1" || node.ContentExcerpt != "The source content" {
@@ -187,4 +190,82 @@ func TestAskPropagatesRequestIDAndPersistsRecallSnapshot(t *testing.T) {
 	if err != nil || len(refs) != 1 || refs[0].NodeID != "node-ask" {
 		t.Fatalf("recall snapshot was not persisted: %#v err=%v", refs, err)
 	}
+}
+
+func TestAskWikiStoresCleanAnswerAndTraceablePageFeedback(t *testing.T) {
+	var seenPaths []string
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenPaths = append(seenPaths, r.URL.RequestURI())
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/sessions":
+			_, _ = w.Write([]byte(`{"data":{"id":"session-wiki"}}`))
+		case "/agent-chat/session-wiki":
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte(strings.Join([]string{
+				`data: {"response_type":"thinking","content":"I should search."}`,
+				`data: {"response_type":"tool_call","content":"Calling tool: wiki_read_page"}`,
+				`data: {"response_type":"answer","content":"stream answer"}`,
+			}, "\n")))
+		case "/messages/session-wiki/load":
+			_, _ = w.Write([]byte(`{"success":true,"data":[{"request_id":"req-wiki","role":"assistant","content":"Clean final answer from [[entity/free-market|Free Market]].","is_completed":true,"agent_steps":[{"tool_calls":[{"name":"wiki_read_page","args":{"slugs":["entity/free-market"]},"result":{"success":true}}]}]}]}`))
+		case "/knowledgebase/kb-wiki/wiki/pages/entity/free-market":
+			_, _ = w.Write([]byte(`{"id":"page-1","knowledge_base_id":"kb-wiki","slug":"entity/free-market","title":"Free Market","page_type":"entity","content":"Authoritative page content","summary":"Summary","source_refs":["knowledge-1|Source document","knowledge-2"],"chunk_refs":["chunk-1","chunk-2"]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer api.Close()
+
+	store := newTestAdminStore(t)
+	client := &apiClient{baseURL: api.URL, apiKey: "key", store: store, http: api.Client()}
+	ctx := context.WithValue(context.Background(), toolRequestIDKey{}, "req-wiki")
+	answer, err := client.ask(ctx, "/agent-chat", chatRequest{Query: "question"}, "kb-wiki")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if answer.Answer != "Clean final answer from [[entity/free-market|Free Market]]." || strings.Contains(answer.Answer, "Calling tool") {
+		t.Fatalf("agent progress leaked into answer: %q", answer.Answer)
+	}
+	if len(answer.RecalledNodes) != 1 {
+		t.Fatalf("recalled nodes=%d, want 1: %#v", len(answer.RecalledNodes), answer.RecalledNodes)
+	}
+	node := answer.RecalledNodes[0]
+	if node.NodeID != "page-1" || node.SourceType != "wiki_page" || node.WikiSlug != "entity/free-market" || node.KnowledgeID != "knowledge-1" {
+		t.Fatalf("unexpected Wiki page trace: %#v", node)
+	}
+	if len(node.KnowledgeIDs) != 2 || len(node.SubNodeIDs) != 2 || node.ContentExcerpt != "Authoritative page content" || !strings.HasPrefix(node.ContentHash, "sha256:") {
+		t.Fatalf("incomplete Wiki page snapshot: %#v", node)
+	}
+
+	refs, err := store.referencesByRequestID("req-wiki")
+	if err != nil || len(refs) != 1 || refs[0].NodeID != "page-1" || refs[0].WikiSlug != "entity/free-market" || refs[0].SourceType != "wiki_page" {
+		t.Fatalf("Wiki trace was not persisted: %#v err=%v", refs, err)
+	}
+	receipt, err := store.submitFeedback(context.Background(), feedbackInput{
+		FeedbackText: "The Free Market definition is outdated.", FeedbackType: "outdated",
+		RelatedRequestID: "req-wiki", TargetNodeIDs: []string{"page-1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipt.TraceStatus != traceStatusVerified || len(receipt.RecalledNodeIDs) != 1 || receipt.RecalledNodeIDs[0] != "page-1" {
+		t.Fatalf("feedback did not verify against Wiki snapshot: %#v", receipt)
+	}
+	view, err := store.getFeedback(receipt.FeedbackID)
+	if err != nil || len(view.References) != 1 || view.References[0].ContentHash != node.ContentHash {
+		t.Fatalf("feedback detail lost historical Wiki snapshot: %#v err=%v", view, err)
+	}
+	if !containsString(seenPaths, "/messages/session-wiki/load?limit=20") || !containsString(seenPaths, "/knowledgebase/kb-wiki/wiki/pages/entity/free-market") {
+		t.Fatalf("trace APIs were not called: %#v", seenPaths)
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
