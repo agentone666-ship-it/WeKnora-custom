@@ -420,6 +420,12 @@ func (c *apiClient) ask(ctx context.Context, path string, req chatRequest, knowl
 	} else {
 		result = parseSSEResult(data, result)
 	}
+	if path == "/agent-chat" {
+		result, err = c.enrichWikiAnswer(ctx, result)
+		if err != nil {
+			return knowledgeAnswer{}, err
+		}
+	}
 	if c.store != nil {
 		if err := c.store.saveRecallSnapshot(result); err != nil {
 			return knowledgeAnswer{}, fmt.Errorf("save recall snapshot: %w", err)
@@ -472,7 +478,11 @@ func parseSSEResult(data []byte, result knowledgeAnswer) knowledgeAnswer {
 		if event.SessionID != "" {
 			result.SessionID = event.SessionID
 		}
-		if event.ResponseType != "references" {
+		// Thinking, tool_call, tool_result and reflection events are progress
+		// metadata, not user-facing answer text. Appending every non-reference
+		// event leaked strings such as "Calling tool: wiki_search" into MCP
+		// answers. Empty response_type remains supported for older servers.
+		if event.ResponseType == "answer" || event.ResponseType == "" {
 			out.WriteString(event.Content)
 			out.WriteString(event.Text)
 			out.WriteString(event.Answer)
@@ -490,7 +500,7 @@ func parseSSEResult(data []byte, result knowledgeAnswer) knowledgeAnswer {
 				kbID = result.KnowledgeBaseID
 			}
 			result.RecalledNodes = append(result.RecalledNodes, recalledNode{
-				NodeID: ref.ID, KnowledgeID: ref.KnowledgeID, KnowledgeBaseID: kbID,
+				NodeID: ref.ID, SourceType: "knowledge_chunk", KnowledgeID: ref.KnowledgeID, KnowledgeBaseID: kbID,
 				ParentNodeID: ref.ParentChunkID, SubNodeIDs: ref.SubChunkID,
 				KnowledgeTitle: ref.KnowledgeTitle, Rank: len(result.RecalledNodes) + 1,
 				Score: ref.Score, MatchType: ref.MatchType,

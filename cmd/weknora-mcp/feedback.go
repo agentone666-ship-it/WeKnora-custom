@@ -29,7 +29,10 @@ var supportedFeedbackTypes = map[string]bool{
 
 type recalledNode struct {
 	NodeID          string   `json:"node_id"`
+	SourceType      string   `json:"source_type,omitempty"`
+	WikiSlug        string   `json:"wiki_slug,omitempty"`
 	KnowledgeID     string   `json:"knowledge_id,omitempty"`
+	KnowledgeIDs    []string `json:"knowledge_ids,omitempty"`
 	KnowledgeBaseID string   `json:"knowledge_base_id,omitempty"`
 	ParentNodeID    string   `json:"parent_node_id,omitempty"`
 	SubNodeIDs      []string `json:"sub_node_ids,omitempty"`
@@ -77,7 +80,10 @@ type mcpCallReference struct {
 	RequestID       string    `json:"request_id" gorm:"size:64;not null;uniqueIndex:idx_mcp_call_reference"`
 	SessionID       string    `json:"session_id" gorm:"size:64;index"`
 	NodeID          string    `json:"node_id" gorm:"size:128;not null;uniqueIndex:idx_mcp_call_reference"`
+	SourceType      string    `json:"source_type" gorm:"size:32;index"`
+	WikiSlug        string    `json:"wiki_slug" gorm:"size:255;index"`
 	KnowledgeID     string    `json:"knowledge_id" gorm:"size:128;index"`
+	KnowledgeIDs    []string  `json:"knowledge_ids" gorm:"serializer:json;type:text"`
 	KnowledgeBaseID string    `json:"knowledge_base_id" gorm:"size:128;index"`
 	ParentNodeID    string    `json:"parent_node_id" gorm:"size:128"`
 	SubNodeIDs      []string  `json:"sub_node_ids" gorm:"serializer:json;type:text"`
@@ -170,7 +176,8 @@ func (s *adminStore) saveRecallSnapshot(answer knowledgeAnswer) error {
 			}
 			row := mcpCallReference{
 				RequestID: answer.RequestID, SessionID: answer.SessionID, NodeID: node.NodeID,
-				KnowledgeID: node.KnowledgeID, KnowledgeBaseID: node.KnowledgeBaseID,
+				SourceType: node.SourceType, WikiSlug: node.WikiSlug,
+				KnowledgeID: node.KnowledgeID, KnowledgeIDs: node.KnowledgeIDs, KnowledgeBaseID: node.KnowledgeBaseID,
 				ParentNodeID: node.ParentNodeID, SubNodeIDs: node.SubNodeIDs,
 				KnowledgeTitle: node.KnowledgeTitle, Rank: node.Rank, Score: node.Score,
 				MatchType: node.MatchType, ContentExcerpt: node.ContentExcerpt, ContentHash: node.ContentHash,
