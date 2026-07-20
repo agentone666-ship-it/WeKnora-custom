@@ -29,6 +29,7 @@ type apiClient struct {
 	store           *adminStore
 	baseURL         string
 	apiKey          string
+	externalUserID  string
 	wikiAgentID     string
 	knowledgeBaseID string
 	http            *http.Client
@@ -48,6 +49,14 @@ type manualKnowledgeRequest struct {
 	Content string `json:"content"`
 	Status  string `json:"status,omitempty"`
 	Channel string `json:"channel"`
+}
+
+type knowledgeBaseSummary struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Type        string `json:"type,omitempty"`
+	IsDefault   bool   `json:"is_default"`
 }
 
 type authRoleKey struct{}
@@ -74,6 +83,7 @@ func main() {
 	listen := flag.String("listen", envOr("WEKNORA_MCP_LISTEN", ":8787"), "listen address")
 	apiURL := flag.String("api-url", envOr("WEKNORA_API_URL", "http://localhost:8080/api/v1"), "WeKnora API base URL")
 	apiKey := flag.String("api-key", os.Getenv("WEKNORA_MCP_API_KEY"), "WeKnora API key")
+	externalUserID := flag.String("external-user-id", os.Getenv("WEKNORA_MCP_EXTERNAL_USER_ID"), "external user ID sent as X-External-User-ID for API principal mode")
 	wikiAgentID := flag.String("wiki-agent-id", os.Getenv("WEKNORA_WIKI_AGENT_ID"), "default Wiki Agent ID")
 	authToken := flag.String("auth-token", os.Getenv("WEKNORA_MCP_AUTH_TOKEN"), "Bearer token required by HTTP clients")
 	writeTokens := flag.String("write-tokens", os.Getenv("WEKNORA_MCP_WRITE_TOKENS"), "comma-separated Bearer tokens allowed to update or upload knowledge")
@@ -85,7 +95,7 @@ func main() {
 		log.Fatal("WEKNORA_MCP_API_KEY or --api-key is required")
 	}
 
-	client := &apiClient{baseURL: strings.TrimRight(*apiURL, "/"), apiKey: *apiKey, wikiAgentID: *wikiAgentID, knowledgeBaseID: strings.TrimSpace(*knowledgeBaseID), http: &http.Client{Timeout: 10 * time.Minute}}
+	client := &apiClient{baseURL: strings.TrimRight(*apiURL, "/"), apiKey: *apiKey, externalUserID: strings.TrimSpace(*externalUserID), wikiAgentID: *wikiAgentID, knowledgeBaseID: strings.TrimSpace(*knowledgeBaseID), http: &http.Client{Timeout: 10 * time.Minute}}
 	store, err := openAdminStore(*adminDB)
 	if err != nil {
 		log.Fatalf("open MCP admin database: %v", err)
@@ -99,46 +109,8 @@ func main() {
 			log.Fatalf("bootstrap MCP writer: %v", err)
 		}
 	}
-	s := server.NewMCPServer("weknora-wiki", "0.1.0", server.WithToolCapabilities(true))
-	s.AddTool(mcp.NewTool("ask_wiki",
-		mcp.WithDescription("Ask a WeKnora Wiki knowledge base through its Wiki Agent. Returns the answer plus request_id, session_id, knowledge_base_id, and the exact recalled node IDs required for later feedback traceability."),
-		mcp.WithString("question", mcp.Required(), mcp.Description("Question to answer.")),
-		mcp.WithString("knowledge_base_id", mcp.Description("Optional knowledge base ID. Omit it when this MCP server is bound to a default knowledge base.")),
-		mcp.WithString("agent_id", mcp.Description("Optional Wiki Agent ID; defaults to WEKNORA_WIKI_AGENT_ID.")),
-		mcp.WithOutputSchema[knowledgeAnswer](),
-	), auditTool(store, "ask_wiki", client.askWiki))
-	s.AddTool(mcp.NewTool("ask_rag",
-		mcp.WithDescription("Ask a WeKnora knowledge base using the normal RAG pipeline. Returns the answer plus request_id, session_id, knowledge_base_id, and the exact recalled node IDs required for later feedback traceability."),
-		mcp.WithString("question", mcp.Required(), mcp.Description("Question to answer.")),
-		mcp.WithString("knowledge_base_id", mcp.Description("Optional knowledge base ID. Omit it when this MCP server is bound to a default knowledge base.")),
-		mcp.WithOutputSchema[knowledgeAnswer](),
-	), auditTool(store, "ask_rag", client.askRAG))
-	s.AddTool(mcp.NewTool("submit_knowledge_feedback",
-		mcp.WithDescription("Record a user's natural-language feedback about a WeKnora answer or its evidence. Agents SHOULD call this tool whenever the user says an answer is wrong, outdated, incomplete, irrelevant, cites the wrong evidence, misses knowledge, or supplies a correction/improvement. feedback_text is the only required field. When feedback follows ask_wiki/ask_rag, pass related_request_id and recalled_node_ids from that result; pass target_node_ids only for the subset the user clearly identifies as wrong—never guess target nodes. Missing optional context must not block submission. This tool only records feedback and never changes formal knowledge."),
-		mcp.WithString("feedback_text", mcp.Required(), mcp.Description("The user's feedback in their own words.")),
-		mcp.WithString("original_question", mcp.Description("Original question, when available.")),
-		mcp.WithString("answer_excerpt", mcp.Description("Relevant answer excerpt, when available.")),
-		mcp.WithString("suggested_correction", mcp.Description("User-provided correction or improved wording, when available.")),
-		mcp.WithString("feedback_type", mcp.Description("One of: incorrect, outdated, incomplete, irrelevant, wrong_reference, missing_knowledge, suggestion, other."), mcp.Enum("incorrect", "outdated", "incomplete", "irrelevant", "wrong_reference", "missing_knowledge", "suggestion", "other")),
-		mcp.WithString("related_request_id", mcp.Description("request_id returned by ask_wiki/ask_rag. The server uses it to verify and auto-fill the recall snapshot.")),
-		mcp.WithString("knowledge_base_id", mcp.Description("Knowledge base ID, when available.")),
-		mcp.WithArray("recalled_node_ids", mcp.Description("All node IDs returned in recalled_nodes for the related answer."), mcp.WithStringItems()),
-		mcp.WithArray("target_node_ids", mcp.Description("Only the recalled node IDs specifically identified as wrong. Omit when unclear; never guess."), mcp.WithStringItems()),
-		mcp.WithOutputSchema[feedbackReceipt](),
-	), auditTool(store, "submit_knowledge_feedback", store.feedbackTool))
-	s.AddTool(mcp.NewTool("update_knowledge",
-		mcp.WithDescription("Add a Markdown knowledge entry. Requires a writer-authorized MCP token."),
-		mcp.WithString("knowledge_base_id", mcp.Description("Optional target knowledge base ID. Omit it when this MCP server is bound to a default knowledge base.")),
-		mcp.WithString("title", mcp.Required(), mcp.Description("Knowledge title.")),
-		mcp.WithString("content", mcp.Required(), mcp.Description("Markdown knowledge content.")),
-	), auditTool(store, "update_knowledge", client.updateKnowledge))
-	s.AddTool(mcp.NewTool("upload_knowledge_file",
-		mcp.WithDescription("Upload a base64-encoded document to the bound WeKnora knowledge base. Requires a writer-authorized MCP token. Supports PDF, Word, Excel, PowerPoint, EPUB, MHTML, text, Markdown, CSV, JSON, XML, HTML, and common audio files."),
-		mcp.WithString("knowledge_base_id", mcp.Description("Optional target knowledge base ID. Omit it when this MCP server is bound to a default knowledge base.")),
-		mcp.WithString("file_name", mcp.Required(), mcp.Description("Original file name including extension, for example handbook.pdf.")),
-		mcp.WithString("content_base64", mcp.Required(), mcp.Description("Base64-encoded raw file bytes.")),
-		mcp.WithBoolean("enable_multimodel", mcp.Description("Enable multimodal parsing for documents containing important images.")),
-	), auditTool(store, "upload_knowledge_file", client.uploadKnowledgeFile))
+	s := server.NewMCPServer("weknora", "0.2.0", server.WithToolCapabilities(true))
+	registerMCPTools(s, store, client)
 
 	if strings.EqualFold(*transport, "stdio") {
 		if err := server.ServeStdio(s); err != nil {
@@ -176,6 +148,54 @@ func main() {
 	if err := http.ListenAndServe(*listen, mux); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func registerMCPTools(s *server.MCPServer, store *adminStore, client *apiClient) {
+	s.AddTool(mcp.NewTool("ask_wiki",
+		mcp.WithDescription("Ask a WeKnora Wiki knowledge base through its Wiki Agent. Returns the answer plus request_id, session_id, knowledge_base_id, and the exact recalled node IDs required for later feedback traceability."),
+		mcp.WithString("question", mcp.Required(), mcp.Description("Question to answer.")),
+		mcp.WithString("knowledge_base_id", mcp.Description("Optional knowledge base ID. Omit it when this MCP server is bound to a default knowledge base.")),
+		mcp.WithString("agent_id", mcp.Description("Optional Wiki Agent ID; defaults to WEKNORA_WIKI_AGENT_ID.")),
+		mcp.WithOutputSchema[knowledgeAnswer](),
+	), auditTool(store, "ask_wiki", client.knowledgeBaseID, client.askWiki))
+	s.AddTool(mcp.NewTool("ask_rag",
+		mcp.WithDescription("Ask a WeKnora knowledge base using the normal RAG pipeline. Returns the answer plus request_id, session_id, knowledge_base_id, and the exact recalled node IDs required for later feedback traceability."),
+		mcp.WithString("question", mcp.Required(), mcp.Description("Question to answer.")),
+		mcp.WithString("knowledge_base_id", mcp.Description("Optional knowledge base ID. Omit it when this MCP server is bound to a default knowledge base.")),
+		mcp.WithOutputSchema[knowledgeAnswer](),
+	), auditTool(store, "ask_rag", client.knowledgeBaseID, client.askRAG))
+	s.AddTool(mcp.NewTool("submit_knowledge_feedback",
+		mcp.WithDescription("Record a user's natural-language feedback about a WeKnora answer or its evidence. feedback_text is the only required field. When feedback follows ask_wiki/ask_rag, pass related_request_id and recalled_node_ids from that result; pass target_node_ids only for the subset the user clearly identifies as wrong. This tool records feedback and never changes formal knowledge."),
+		mcp.WithString("feedback_text", mcp.Required(), mcp.Description("The user's feedback in their own words.")),
+		mcp.WithString("original_question", mcp.Description("Original question, when available.")),
+		mcp.WithString("answer_excerpt", mcp.Description("Relevant answer excerpt, when available.")),
+		mcp.WithString("suggested_correction", mcp.Description("User-provided correction or improved wording, when available.")),
+		mcp.WithString("feedback_type", mcp.Description("One of: incorrect, outdated, incomplete, irrelevant, wrong_reference, missing_knowledge, suggestion, other."), mcp.Enum("incorrect", "outdated", "incomplete", "irrelevant", "wrong_reference", "missing_knowledge", "suggestion", "other")),
+		mcp.WithString("related_request_id", mcp.Description("request_id returned by ask_wiki/ask_rag. The server uses it to verify and auto-fill the recall snapshot.")),
+		mcp.WithString("knowledge_base_id", mcp.Description("Knowledge base ID, when available.")),
+		mcp.WithArray("recalled_node_ids", mcp.Description("All node IDs returned in recalled_nodes for the related answer."), mcp.WithStringItems()),
+		mcp.WithArray("target_node_ids", mcp.Description("Only recalled node IDs specifically identified as wrong. Omit when unclear."), mcp.WithStringItems()),
+		mcp.WithOutputSchema[feedbackReceipt](),
+	), auditTool(store, "submit_knowledge_feedback", client.knowledgeBaseID, store.feedbackTool))
+	s.AddTool(mcp.NewTool("search_knowledge_bases",
+		mcp.WithDescription("Search knowledge bases accessible to the configured WeKnora API key. Returns IDs that can be used with the other MCP tools."),
+		mcp.WithString("query", mcp.Description("Optional case-insensitive keyword matched against knowledge base name and description. Omit to list accessible knowledge bases.")),
+	), auditTool(store, "search_knowledge_bases", client.knowledgeBaseID, client.searchKnowledgeBases))
+	s.AddTool(mcp.NewTool("update_knowledge",
+		mcp.WithDescription("Add a Markdown knowledge entry. Requires a writer-authorized MCP token."),
+		mcp.WithString("knowledge_base_id", mcp.Description("Optional target knowledge base ID. Omit it when this MCP server is bound to a default knowledge base.")),
+		mcp.WithString("title", mcp.Required(), mcp.Description("Knowledge title.")),
+		mcp.WithString("content", mcp.Required(), mcp.Description("Markdown knowledge content.")),
+	), auditTool(store, "update_knowledge", client.knowledgeBaseID, client.updateKnowledge))
+	s.AddTool(mcp.NewTool("upload_knowledge_file",
+		mcp.WithDescription("Upload a base64-encoded document to the bound WeKnora knowledge base. Requires a writer-authorized MCP token. Supports PDF, Word, Excel, PowerPoint, EPUB, MHTML, text, Markdown, CSV, JSON, XML, HTML, and common audio files."),
+		mcp.WithString("knowledge_base_id", mcp.Description("Optional target knowledge base ID. Omit it when this MCP server is bound to a default knowledge base.")),
+		mcp.WithString("file_name", mcp.Required(), mcp.Description("Original file name including extension, for example handbook.pdf.")),
+		mcp.WithString("content_base64", mcp.Required(), mcp.Description("Base64-encoded raw file bytes.")),
+		mcp.WithBoolean("enable_multimodel", mcp.Description("Enable multimodal parsing for documents containing important images.")),
+	), auditTool(store, "upload_knowledge_file", client.knowledgeBaseID, client.uploadKnowledgeFile))
+	registerWikiAgentTools(s, store, client)
+	registerOfficialSkillTools(s, store, client)
 }
 
 func splitTokens(raw string) []string {
@@ -222,7 +242,7 @@ func clientIP(r *http.Request) string {
 	return r.RemoteAddr
 }
 
-func auditTool(store *adminStore, tool string, next server.ToolHandlerFunc) server.ToolHandlerFunc {
+func auditTool(store *adminStore, tool, defaultKnowledgeBaseID string, next server.ToolHandlerFunc) server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		started := time.Now()
 		requestID := strings.TrimSpace(request.Header.Get("X-Request-ID"))
@@ -241,6 +261,9 @@ func auditTool(store *adminStore, tool string, next server.ToolHandlerFunc) serv
 			errorMessage = toolResultText(result)
 		}
 		row := &mcpCallLog{RequestID: requestID, Tool: tool, Status: status, ErrorMessage: errorMessage, KnowledgeBaseID: request.GetString("knowledge_base_id", ""), Subject: auditSubject(tool, request), DurationMS: time.Since(started).Milliseconds()}
+		if row.KnowledgeBaseID == "" {
+			row.KnowledgeBaseID = defaultKnowledgeBaseID
+		}
 		if member, ok := ctx.Value(authMemberKey{}).(*mcpMember); ok {
 			row.MemberID, row.MemberName = &member.ID, member.Name
 		}
@@ -256,11 +279,25 @@ func auditSubject(tool string, request mcp.CallToolRequest) string {
 	if strings.HasPrefix(tool, "ask_") {
 		return request.GetString("question", "")
 	}
+	if tool == "search_knowledge_bases" || tool == "list_knowledge_bases" || tool == "search_knowledge" {
+		return request.GetString("query", "")
+	}
+	if tool == "hybrid_search" {
+		return request.GetString("query_text", "")
+	}
 	if tool == "upload_knowledge_file" {
 		return request.GetString("file_name", "")
 	}
 	if tool == "submit_knowledge_feedback" {
 		return request.GetString("feedback_text", "")
+	}
+	if tool == "import_knowledge_url" {
+		return request.GetString("url", "")
+	}
+	if strings.Contains(tool, "knowledge") {
+		if id := request.GetString("knowledge_id", ""); id != "" {
+			return id
+		}
 	}
 	return request.GetString("title", "")
 }
@@ -305,6 +342,17 @@ func envOr(key, fallback string) string {
 	return fallback
 }
 
+func (c *apiClient) setAuthHeaders(req *http.Request) {
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	req.Header.Set("X-API-Key", c.apiKey)
+	if req.Header.Get("X-Request-ID") == "" {
+		req.Header.Set("X-Request-ID", newRequestID())
+	}
+	if c.externalUserID != "" {
+		req.Header.Set("X-External-User-ID", c.externalUserID)
+	}
+}
+
 func (c *apiClient) request(ctx context.Context, method, path string, body any) ([]byte, string, error) {
 	var reader io.Reader
 	if body != nil {
@@ -318,8 +366,7 @@ func (c *apiClient) request(ctx context.Context, method, path string, body any) 
 	if err != nil {
 		return nil, "", err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	req.Header.Set("X-API-Key", c.apiKey)
+	c.setAuthHeaders(req)
 	req.Header.Set("Content-Type", "application/json")
 	if requestID, _ := ctx.Value(toolRequestIDKey{}).(string); requestID != "" {
 		req.Header.Set("X-Request-ID", requestID)
@@ -359,8 +406,7 @@ func (c *apiClient) uploadFile(ctx context.Context, kb, fileName string, data []
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	req.Header.Set("X-API-Key", c.apiKey)
+	c.setAuthHeaders(req)
 	req.Header.Set("Content-Type", w.FormDataContentType())
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -549,6 +595,44 @@ func (c *apiClient) askRAG(ctx context.Context, request mcp.CallToolRequest) (*m
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 	return mcp.NewToolResultStructured(answer, answer.Answer), nil
+}
+
+func (c *apiClient) searchKnowledgeBases(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	data, _, err := c.request(ctx, http.MethodGet, "/knowledge-bases", nil)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	var envelope struct {
+		Data []knowledgeBaseSummary `json:"data"`
+	}
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		return mcp.NewToolResultError("parse knowledge base list: " + err.Error()), nil
+	}
+	results := filterKnowledgeBases(envelope.Data, request.GetString("query", ""), c.knowledgeBaseID)
+	encoded, err := json.MarshalIndent(map[string]any{
+		"knowledge_bases": results,
+		"count":           len(results),
+	}, "", "  ")
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	return mcp.NewToolResultText(string(encoded)), nil
+}
+
+func filterKnowledgeBases(items []knowledgeBaseSummary, query, defaultID string) []knowledgeBaseSummary {
+	query = strings.ToLower(strings.TrimSpace(query))
+	results := make([]knowledgeBaseSummary, 0, len(items))
+	for _, item := range items {
+		if query != "" && !strings.Contains(strings.ToLower(item.Name), query) && !strings.Contains(strings.ToLower(item.Description), query) {
+			continue
+		}
+		item.IsDefault = item.ID == defaultID
+		results = append(results, item)
+		if len(results) == 20 {
+			break
+		}
+	}
+	return results
 }
 
 func (c *apiClient) updateKnowledge(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
