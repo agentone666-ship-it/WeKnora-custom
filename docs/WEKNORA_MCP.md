@@ -9,6 +9,8 @@
 ```bash
 export WEKNORA_API_URL=http://localhost:8080/api/v1
 export WEKNORA_MCP_API_KEY=sk-...
+# 租户启用 API Principal 外部用户模式时设置
+export WEKNORA_MCP_EXTERNAL_USER_ID=mcp-service
 export WEKNORA_WIKI_AGENT_ID=<Wiki Agent ID>
 export WEKNORA_MCP_AUTH_TOKEN=<首次接入令牌>
 export WEKNORA_MCP_ADMIN_TOKEN=<独立管理后台密钥>
@@ -43,9 +45,9 @@ go run ./cmd/weknora-mcp \
 
 ## 工具
 
-### `ask_wiki`
+服务端名称为 `weknora`，当前暴露 17 个工具。原有 5 个工具保持兼容，新增 1 个知识反馈工具，同时提供与 ClawHub 官方 `lyingbug/skills/weknora` v1.0.1 工作流对应的 11 个工具。
 
-调用 Wiki Agent。参数：`question`、`knowledge_base_id`，可选 `agent_id`。
+### 问答与反馈溯源
 
 除了兼容旧客户端的纯文本回答，工具会通过 MCP `structuredContent` 返回：
 
@@ -120,16 +122,43 @@ go run ./cmd/weknora-mcp \
 3. `target_node_ids` 必须是 `recalled_node_ids` 的子集。
 4. 节点或知识库不匹配时，反馈仍会保存，但标记为 `trace_mismatch`，不会静默绑定到错误节点。
 5. 没有可用上下文时仍可只提交 `feedback_text`，状态为 `untraced`。
+### 官方 Skill 兼容工具
 
-### `update_knowledge`
+| MCP 工具 | 对应 WeKnora REST 工作流 | 权限 |
+| --- | --- | --- |
+| `list_knowledge_bases` | `GET /knowledge-bases` | reader |
+| `get_knowledge_base` | `GET /knowledge-bases/:id` | reader |
+| `create_manual_knowledge` | `POST /knowledge-bases/:id/knowledge/manual` | writer |
+| `import_knowledge_url` | `POST /knowledge-bases/:id/knowledge/url` | writer |
+| `get_knowledge` | `GET /knowledge/:id` | reader |
+| `list_knowledge` | `GET /knowledge-bases/:id/knowledge` | reader |
+| `update_manual_knowledge` | `PUT /knowledge/manual/:id` | writer |
+| `delete_knowledge` | `DELETE /knowledge/:id` | writer |
+| `reparse_knowledge` | `POST /knowledge/:id/reparse` | writer |
+| `hybrid_search` | `POST /knowledge-bases/:id/hybrid-search` | reader |
+| `search_knowledge` | `POST /knowledge-search` | reader |
 
-向指定知识库新增一条 Markdown 手工知识。参数：`knowledge_base_id`、`title`、`content`。
+兼容层会为每次后端 API 请求同时设置 `Authorization`、`X-API-Key`、`X-Request-ID`，配置了 `WEKNORA_MCP_EXTERNAL_USER_ID` 时还会设置 `X-External-User-ID`。文件上传继续使用 multipart/form-data；`upload_knowledge_file` 由 MCP 客户端传入 Base64 内容，再由服务端转换为 multipart 请求。
 
-### `upload_knowledge_file`
+官方 Skill 文档中的单数 `tag_id` 与后端的复数 `tag_ids` 均可使用，MCP 会去重后统一传给 WeKnora。`list_knowledge` 支持 `page`、`page_size`、`tag_id`/`tag_ids`、`keyword`、`file_type`、`parse_status` 和 `source`。`hybrid_search` 支持向量/关键词阈值、`match_count`、知识条目范围、标签范围和禁用单路检索等参数。
 
-上传 Base64 编码文件。支持 PDF、Word、Excel、PowerPoint、EPUB、MHTML、文本、Markdown、CSV、JSON、XML、HTML 和常见音频格式。
+### 保留的兼容工具
 
-MCP 服务继承 `WEKNORA_MCP_API_KEY` 的权限；API Key 必须对目标知识库具有读取权限，写入工具还需要写入权限。Wiki Agent 需要在 WeKnora 中预先绑定 Wiki 知识库。
+| MCP 工具 | 说明 | 权限 |
+| --- | --- | --- |
+| `search_knowledge_bases` | 按名称/描述搜索当前 API Key 可访问的知识库，并标记默认知识库 | reader |
+| `ask_wiki` | 通过 Wiki Agent 问答 | reader |
+| `ask_rag` | 通过普通 RAG 流程问答 | reader |
+| `update_knowledge` | 新增 Markdown 手工知识（旧工具名） | writer |
+| `upload_knowledge_file` | 上传 Base64 编码文件，支持文档、表格、演示文稿、文本、网页和常见音频格式 | writer |
+
+### 权限与知识库范围
+
+- reader 成员可以浏览知识库、查看知识详情和执行检索/问答。
+- writer 成员除 reader 能力外，还可以新增、导入、更新、删除、重新解析和上传知识。
+- MCP 服务继承 `WEKNORA_MCP_API_KEY` 对 WeKnora 的实际权限；成员具有 writer 权限并不代表后端 API Key 一定拥有目标知识库写权限。
+- 设置 `WEKNORA_MCP_KB_ID` 后，所有带知识库范围的工具都会固定到该知识库，并拒绝显式访问其他知识库。
+- Wiki Agent 需要在 WeKnora 中预先绑定 Wiki 知识库。
 
 ## 客户端配置示例
 
