@@ -25,6 +25,7 @@ type WikiPageHandler struct {
 	lintService       *service.WikiLintService
 	logEntryService   interfaces.WikiLogEntryService
 	governanceService interfaces.WikiGovernanceService
+	versionService    interfaces.WikiPageVersionService
 	task              interfaces.TaskEnqueuer
 	pendingRepo       interfaces.TaskPendingOpsRepository
 }
@@ -36,6 +37,7 @@ func NewWikiPageHandler(
 	lintService *service.WikiLintService,
 	logEntryService interfaces.WikiLogEntryService,
 	governanceService interfaces.WikiGovernanceService,
+	versionService interfaces.WikiPageVersionService,
 	task interfaces.TaskEnqueuer,
 	pendingRepo interfaces.TaskPendingOpsRepository,
 ) *WikiPageHandler {
@@ -45,6 +47,7 @@ func NewWikiPageHandler(
 		lintService:       lintService,
 		logEntryService:   logEntryService,
 		governanceService: governanceService,
+		versionService:    versionService,
 		task:              task,
 		pendingRepo:       pendingRepo,
 	}
@@ -1372,4 +1375,188 @@ func (h *WikiPageHandler) ListScenarioPages(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"pages": pages})
+}
+
+type createWikiPageDraftRequest struct {
+	Snapshot      *types.WikiPage `json:"snapshot"`
+	ChangeSummary string          `json:"change_summary"`
+}
+
+type updateWikiPageDraftRequest struct {
+	Snapshot      *types.WikiPage `json:"snapshot" binding:"required"`
+	ChangeSummary string          `json:"change_summary"`
+}
+
+func (h *WikiPageHandler) versionPage(c *gin.Context) (*types.WikiPage, string, bool) {
+	kbID, _, err := h.validateWikiKB(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return nil, "", false
+	}
+	page, err := h.wikiService.GetPageByID(c.Request.Context(), c.Param("page_id"))
+	if err != nil || page.KnowledgeBaseID != kbID {
+		c.JSON(http.StatusNotFound, gin.H{"error": "wiki page not found"})
+		return nil, "", false
+	}
+	return page, kbID, true
+}
+
+func pageVersionNumber(c *gin.Context) (int, bool) {
+	v, err := strconv.Atoi(c.Param("version"))
+	if err != nil || v < 1 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid version"})
+		return 0, false
+	}
+	return v, true
+}
+
+func (h *WikiPageHandler) ListPageVersions(c *gin.Context) {
+	page, _, ok := h.versionPage(c)
+	if !ok {
+		return
+	}
+	versions, err := h.versionService.List(c.Request.Context(), page.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"versions": versions})
+}
+
+func (h *WikiPageHandler) GetPageVersion(c *gin.Context) {
+	page, _, ok := h.versionPage(c)
+	if !ok {
+		return
+	}
+	v, ok := pageVersionNumber(c)
+	if !ok {
+		return
+	}
+	version, err := h.versionService.Get(c.Request.Context(), page.ID, v)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, version)
+}
+
+func (h *WikiPageHandler) DiffPageVersions(c *gin.Context) {
+	page, _, ok := h.versionPage(c)
+	if !ok {
+		return
+	}
+	from, err1 := strconv.Atoi(c.Query("from"))
+	to, err2 := strconv.Atoi(c.Query("to"))
+	if err1 != nil || err2 != nil || from < 1 || to < 1 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "from and to must be positive version numbers"})
+		return
+	}
+	diff, err := h.versionService.Diff(c.Request.Context(), page.ID, from, to)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, diff)
+}
+
+func (h *WikiPageHandler) CreatePageDraft(c *gin.Context) {
+	page, _, ok := h.versionPage(c)
+	if !ok {
+		return
+	}
+	var req createWikiPageDraftRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if req.Snapshot != nil {
+		req.Snapshot.ID, req.Snapshot.TenantID, req.Snapshot.KnowledgeBaseID = page.ID, page.TenantID, page.KnowledgeBaseID
+	}
+	version, err := h.versionService.CreateDraft(c.Request.Context(), page.ID, c.GetString(types.UserIDContextKey.String()), req.ChangeSummary, req.Snapshot)
+	if err != nil {
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusCreated, version)
+}
+
+func (h *WikiPageHandler) UpdatePageDraft(c *gin.Context) {
+	page, _, ok := h.versionPage(c)
+	if !ok {
+		return
+	}
+	v, ok := pageVersionNumber(c)
+	if !ok {
+		return
+	}
+	var req updateWikiPageDraftRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	updated, err := h.versionService.UpdateDraft(c.Request.Context(), page.ID, v, req.ChangeSummary, req.Snapshot)
+	if err != nil {
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, updated)
+}
+
+func (h *WikiPageHandler) PublishPageVersion(c *gin.Context) {
+	page, _, ok := h.versionPage(c)
+	if !ok {
+		return
+	}
+	v, ok := pageVersionNumber(c)
+	if !ok {
+		return
+	}
+	version, err := h.versionService.Publish(c.Request.Context(), page.ID, v, c.GetString(types.UserIDContextKey.String()))
+	if err != nil {
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
+	// Rebuild link projections after the published snapshot is materialized.
+	if err := h.wikiService.RebuildLinks(c.Request.Context(), page.KnowledgeBaseID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, version)
+}
+
+func (h *WikiPageHandler) RollbackPageVersion(c *gin.Context) {
+	page, _, ok := h.versionPage(c)
+	if !ok {
+		return
+	}
+	v, ok := pageVersionNumber(c)
+	if !ok {
+		return
+	}
+	version, err := h.versionService.Rollback(c.Request.Context(), page.ID, v, c.GetString(types.UserIDContextKey.String()))
+	if err != nil {
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
+	if err := h.wikiService.RebuildLinks(c.Request.Context(), page.KnowledgeBaseID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, version)
+}
+
+func (h *WikiPageHandler) ArchivePageVersion(c *gin.Context) {
+	page, _, ok := h.versionPage(c)
+	if !ok {
+		return
+	}
+	v, ok := pageVersionNumber(c)
+	if !ok {
+		return
+	}
+	if err := h.versionService.Archive(c.Request.Context(), page.ID, v); err != nil {
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
+	c.Status(http.StatusNoContent)
 }
