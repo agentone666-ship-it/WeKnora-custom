@@ -119,6 +119,30 @@ export interface WikiPageIssue {
   updated_at: string;
 }
 
+export type WikiPageVersionStatus = 'draft' | 'published' | 'archived' | string;
+
+export interface WikiPageVersion {
+  id: string;
+  page_id: string;
+  knowledge_base_id: string;
+  version: number;
+  state: WikiPageVersionStatus;
+  snapshot: Partial<WikiPage> & Record<string, any>;
+  parent_version_id?: string;
+  change_summary?: string;
+  created_by?: string;
+  created_at: string;
+  published_by?: string;
+  published_at?: string;
+  archived_at?: string;
+}
+
+export interface WikiPageVersionDiff {
+  from_version: number;
+  to_version: number;
+  changes: Record<string, any>;
+}
+
 // Wiki API Functions
 export function listWikiPages(kbId: string, params?: {
   page_type?: string;
@@ -197,6 +221,51 @@ export function updateWikiPage(kbId: string, slug: string, data: Partial<WikiPag
 
 export function deleteWikiPage(kbId: string, slug: string) {
   return del(`/api/v1/knowledgebase/${kbId}/wiki/pages/${encodeSlugPath(slug)}`);
+}
+
+const wikiPageVersionBase = (kbId: string, pageId: string) =>
+  `/api/v1/knowledgebase/${kbId}/wiki/page-versions/${pageId}`;
+
+export function listWikiPageVersions(kbId: string, pageId: string) {
+  return get(wikiPageVersionBase(kbId, pageId));
+}
+
+export function getWikiPageVersion(kbId: string, pageId: string, versionId: string) {
+  return get(`${wikiPageVersionBase(kbId, pageId)}/${versionId}`);
+}
+
+export function diffWikiPageVersions(kbId: string, pageId: string, from: string, to: string) {
+  const query = new URLSearchParams({ from, to });
+  return get(`${wikiPageVersionBase(kbId, pageId)}/diff?${query.toString()}`);
+}
+
+export function createWikiPageDraft(
+  kbId: string,
+  pageId: string,
+  data: { snapshot?: Partial<WikiPage>; base_version_id?: string; change_summary?: string },
+) {
+  return post(`${wikiPageVersionBase(kbId, pageId)}/drafts`, data);
+}
+
+export function updateWikiPageDraft(
+  kbId: string,
+  pageId: string,
+  versionId: string,
+  data: { snapshot: Partial<WikiPage>; change_summary?: string },
+) {
+  return put(`${wikiPageVersionBase(kbId, pageId)}/${versionId}/draft`, data);
+}
+
+export function publishWikiPageVersion(kbId: string, pageId: string, versionId: string) {
+  return post(`${wikiPageVersionBase(kbId, pageId)}/${versionId}/publish`, {});
+}
+
+export function rollbackWikiPageVersion(kbId: string, pageId: string, versionId: string) {
+  return post(`${wikiPageVersionBase(kbId, pageId)}/${versionId}/rollback`, {});
+}
+
+export function archiveWikiPageVersion(kbId: string, pageId: string, versionId: string) {
+  return post(`${wikiPageVersionBase(kbId, pageId)}/${versionId}/archive`, {});
 }
 
 export interface WikiIndexEntryDTO {

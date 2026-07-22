@@ -140,6 +140,10 @@
                 ver:
                   graphDrawerPage.version
               }) }}</span>
+              <t-link theme="primary" hover="color" @click="graphVersionPanelVisible = true">
+                <template #prefixIcon><t-icon name="history" /></template>
+                版本管理
+              </t-link>
               <t-button v-if="graphMode === 'ego' && graphCenter !== graphDrawerPage.slug" size="small"
                 variant="outline" theme="default" style="margin-left: auto;" :disabled="!graphDrawerCanBloom"
                 @click="loadBloomNeighbors(graphDrawerPage.slug)">
@@ -488,6 +492,10 @@
                       selectedPage.version
                   })
                   }}</span>
+                  <t-link theme="primary" hover="color" @click="versionPanelVisible = true">
+                    <template #prefixIcon><t-icon name="history" /></template>
+                    版本管理
+                  </t-link>
                   <span class="wiki-reader-meta-text">{{ formatDate(selectedPage.updated_at) }}</span>
                   <t-link theme="primary" hover="color" class="wiki-reader-graph-link"
                     @click="emit('view-graph', selectedPage.slug)">
@@ -676,6 +684,13 @@
     <WikiReviewPanel v-if="props.canEdit" v-model="reviewPanelVisible" :knowledge-base-id="props.knowledgeBaseId"
       @count-change="pendingReviewCount = $event" @published="handleReviewPublished" />
 
+    <WikiVersionPanel v-if="selectedPage" v-model="versionPanelVisible" :knowledge-base-id="props.knowledgeBaseId"
+      :page="selectedPage" :can-edit="props.canEdit" @changed="refreshSelectedPage" />
+
+    <WikiVersionPanel v-if="graphDrawerPage" v-model="graphVersionPanelVisible"
+      :knowledge-base-id="props.knowledgeBaseId" :page="graphDrawerPage" :can-edit="props.canEdit"
+      @changed="refreshGraphDrawerPage" />
+
     <!-- In-place move confirmation, anchored at the drop point. Confirming runs
          the actual move API; cancelling discards the staged move. -->
     <teleport to="body">
@@ -715,6 +730,7 @@ import { hydrateProtectedFileImages, sanitizeMarkdownHTML } from '@/utils/securi
 import picturePreview from '@/components/picture-preview.vue'
 import WikiFolderActions from './WikiFolderActions.vue'
 import WikiReviewPanel from './WikiReviewPanel.vue'
+import WikiVersionPanel from './WikiVersionPanel.vue'
 import { createSessions } from '@/api/chat'
 import ChatView from '@/views/chat/index.vue'
 import {
@@ -896,6 +912,8 @@ const pageIssues = ref<WikiPageIssue[]>([])
 const showIssuesBox = ref(false)
 const showFixDrawer = ref(false)
 const showGlobalIssuesDrawer = ref(false)
+const versionPanelVisible = ref(false)
+const graphVersionPanelVisible = ref(false)
 const globalIssues = ref<WikiPageIssue[]>([])
 const currentFixSessionId = ref('')
 const stats = ref<WikiStats | null>(null)
@@ -2793,6 +2811,20 @@ async function refreshSelectedPage() {
     await loadPageIssues(slug)
   } catch (e) {
     console.error(`Failed to refresh wiki page ${slug}:`, e)
+  }
+}
+
+// Keep the graph drawer and graph node metadata in sync after publishing or
+// rolling back a version from the graph view.
+async function refreshGraphDrawerPage() {
+  if (!graphDrawerPage.value) return
+  const slug = graphDrawerPage.value.slug
+  try {
+    const res = await getWikiPage(props.knowledgeBaseId, slug)
+    graphDrawerPage.value = (res as any).data || res as any
+    await loadGraph()
+  } catch (e) {
+    console.error(`Failed to refresh graph page ${slug}:`, e)
   }
 }
 

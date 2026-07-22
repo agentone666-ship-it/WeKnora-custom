@@ -1841,6 +1841,17 @@ func RegisterWikiPageRoutes(r *gin.RouterGroup, wikiHandler *handler.WikiPageHan
 		wiki.PUT("/pages/*slug", g.OwnedWikiKBOrAdmin(), g.KBAccessWrite("kb_id"), wikiHandler.UpdatePage)
 		wiki.DELETE("/pages/*slug", g.OwnedWikiKBOrAdmin(), g.KBAccessWrite("kb_id"), wikiHandler.DeletePage)
 
+		// Immutable page version history. Read endpoints expose snapshots and
+		// diffs; lifecycle mutations keep the same ownership policy as page edits.
+		wikiRead.GET("/page-versions/:page_id", g.Viewer(), g.KBAccessRead("kb_id"), wikiHandler.ListPageVersions)
+		wikiRead.GET("/page-versions/:page_id/diff", g.Viewer(), g.KBAccessRead("kb_id"), wikiHandler.DiffPageVersions)
+		wikiRead.GET("/page-versions/:page_id/:version", g.Viewer(), g.KBAccessRead("kb_id"), wikiHandler.GetPageVersion)
+		wiki.POST("/page-versions/:page_id/drafts", g.OwnedWikiKBOrAdmin(), g.KBAccessWrite("kb_id"), wikiHandler.CreatePageDraft)
+		wiki.PUT("/page-versions/:page_id/:version/draft", g.OwnedWikiKBOrAdmin(), g.KBAccessWrite("kb_id"), wikiHandler.UpdatePageDraft)
+		wiki.POST("/page-versions/:page_id/:version/publish", g.OwnedWikiKBOrAdmin(), g.KBAccessWrite("kb_id"), wikiHandler.PublishPageVersion)
+		wiki.POST("/page-versions/:page_id/:version/rollback", g.OwnedWikiKBOrAdmin(), g.KBAccessWrite("kb_id"), wikiHandler.RollbackPageVersion)
+		wiki.POST("/page-versions/:page_id/:version/archive", g.OwnedWikiKBOrAdmin(), g.KBAccessWrite("kb_id"), wikiHandler.ArchivePageVersion)
+
 		// Folder tree (directory nodes)
 		wikiRead.GET("/folders", g.Viewer(), g.KBAccessRead("kb_id"), wikiHandler.ListFolders)
 		wiki.POST("/folders", g.OwnedWikiKBOrAdmin(), g.KBAccessWrite("kb_id"), wikiHandler.CreateFolder)
