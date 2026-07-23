@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"net/http"
@@ -9,19 +10,49 @@ import (
 )
 
 type adminHTTP struct {
-	store *adminStore
-	token string
+	store        *adminStore
+	client       *apiClient
+	authResolver *unifiedAuthResolver
+	token        string
 }
 
 func (a *adminHTTP) register(mux *http.ServeMux) {
 	mux.HandleFunc("/admin", a.page)
 	mux.HandleFunc("/admin/", a.page)
 	mux.HandleFunc("/admin/api/overview", a.withAuth(a.overview))
+	mux.HandleFunc("/admin/api/metrics", a.withAuth(a.metrics))
 	mux.HandleFunc("/admin/api/members", a.withAuth(a.members))
 	mux.HandleFunc("/admin/api/members/", a.withAuth(a.memberAction))
 	mux.HandleFunc("/admin/api/logs", a.withAuth(a.logs))
+	mux.HandleFunc("/admin/api/logs/", a.withAuth(a.logDetail))
 	mux.HandleFunc("/admin/api/feedback", a.withAuth(a.feedback))
 	mux.HandleFunc("/admin/api/feedback/", a.withAuth(a.feedbackDetail))
+}
+
+func (a *adminHTTP) metrics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
+	days, _ := strconv.Atoi(r.URL.Query().Get("days"))
+	memberID64, _ := strconv.ParseUint(r.URL.Query().Get("member_id"), 10, 64)
+	data, err := a.store.metrics(days, uint(memberID64))
+	if err != nil {
+		writeAdminError(w, err)
+		return
+	}
+	if a.client != nil {
+		if knowledgeBases, loadErr := a.client.listKnowledgeBases(r.Context()); loadErr == nil {
+			names := make(map[string]string, len(knowledgeBases))
+			for _, knowledgeBase := range knowledgeBases {
+				names[knowledgeBase.ID] = knowledgeBase.Name
+			}
+			for index := range data.TopKnowledgeBases {
+				data.TopKnowledgeBases[index].Label = names[data.TopKnowledgeBases[index].Name]
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"success": true, "data": data})
 }
 
 func (a *adminHTTP) page(w http.ResponseWriter, r *http.Request) {
@@ -37,11 +68,28 @@ func (a *adminHTTP) page(w http.ResponseWriter, r *http.Request) {
 func (a *adminHTTP) withAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		token := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
-		if token == "" || subtle.ConstantTimeCompare([]byte(token), []byte(a.token)) != 1 {
-			writeJSON(w, http.StatusUnauthorized, map[string]any{"success": false, "error": "管理密钥无效"})
+		if token != "" && subtle.ConstantTimeCompare([]byte(token), []byte(a.token)) == 1 {
+			next(w, r)
 			return
 		}
-		next(w, r)
+		identity, credential, err := a.authResolver.resolve(r.Context(), token)
+		if err != nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"success": false, "error": "请使用有效的前台账号令牌、API Key 或迁移期管理密钥"})
+			return
+		}
+		allowed := false
+		if identity.Source == authSourceAPIKey {
+			allowed = identity.FullAccess
+		} else {
+			allowed = identity.IsSystemAdmin || identity.Role == roleOwner || identity.Role == roleAdmin
+		}
+		if !allowed {
+			writeJSON(w, http.StatusForbidden, map[string]any{"success": false, "error": "当前前台角色无权管理 MCP"})
+			return
+		}
+		ctx := context.WithValue(r.Context(), unifiedAuthKey{}, identity)
+		ctx = context.WithValue(ctx, upstreamCredentialKey{}, credential)
+		next(w, r.WithContext(ctx))
 	}
 }
 
@@ -66,18 +114,26 @@ func (a *adminHTTP) members(w http.ResponseWriter, r *http.Request) {
 			writeAdminError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"success": true, "data": rows})
+		writeJSON(w, http.StatusOK, map[string]any{"success": true, "data": rows, "tools": toolCatalog, "roles": []string{roleOwner, roleAdmin, roleContributor, roleViewer}})
 	case http.MethodPost:
 		var req struct {
-			Name     string `json:"name"`
-			CanRead  bool   `json:"can_read"`
-			CanWrite bool   `json:"can_write"`
+			Name         string   `json:"name"`
+			Role         string   `json:"role"`
+			AllowedTools []string `json:"allowed_tools"`
+			CanRead      bool     `json:"can_read"`
+			CanWrite     bool     `json:"can_write"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeJSON(w, 400, map[string]any{"success": false, "error": "请求格式错误"})
 			return
 		}
-		member, token, err := a.store.createMember(req.Name, req.CanRead, req.CanWrite)
+		if strings.TrimSpace(req.Role) == "" {
+			req.Role = normalizeRole("", req.CanWrite)
+			if req.AllowedTools == nil {
+				req.AllowedTools = roleToolNames(req.Role)
+			}
+		}
+		member, token, err := a.store.createMemberWithPermissions(req.Name, req.Role, req.AllowedTools)
 		if err != nil {
 			writeJSON(w, 400, map[string]any{"success": false, "error": err.Error()})
 			return
@@ -143,6 +199,24 @@ func (a *adminHTTP) logs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"success": true, "data": rows, "total": total})
+}
+
+func (a *adminHTTP) logDetail(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w)
+		return
+	}
+	id, err := parseUint(strings.TrimSpace(strings.TrimPrefix(r.URL.Path, "/admin/api/logs/")))
+	if err != nil || id == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"success": false, "error": "调用日志 ID 无效"})
+		return
+	}
+	row, err := a.store.getLogDetail(id)
+	if err != nil {
+		writeAdminError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"success": true, "data": row})
 }
 
 func (a *adminHTTP) feedback(w http.ResponseWriter, r *http.Request) {
