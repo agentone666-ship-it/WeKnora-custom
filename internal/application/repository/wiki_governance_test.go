@@ -20,10 +20,45 @@ func newGovernanceTestRepo(t *testing.T) (*wikiGovernanceRepository, *gorm.DB) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&types.WikiPage{}, &types.WikiChangeSet{}, &types.WikiChangeItem{}, &types.WikiReview{}, &types.WikiPackage{}, &types.WikiPackagePage{}, &types.WikiScenario{}, &types.WikiGovernanceMetricEvent{}); err != nil {
+	if err := db.AutoMigrate(&types.WikiPage{}, &types.WikiPageVersion{}, &types.WikiChangeSet{}, &types.WikiChangeItem{}, &types.WikiReview{}, &types.WikiPackage{}, &types.WikiPackagePage{}, &types.WikiScenario{}, &types.WikiGovernanceMetricEvent{}); err != nil {
 		t.Fatal(err)
 	}
 	return &wikiGovernanceRepository{db: db}, db
+}
+
+func TestReviewUpdateSeedsOldAndPublishedVersions(t *testing.T) {
+	repo, db := newGovernanceTestRepo(t)
+	now := time.Now()
+	oldPage := &types.WikiPage{ID: uuid.NewString(), TenantID: 1, KnowledgeBaseID: "kb-1", Slug: "card/knowledge-versioned", Title: "versioned", Content: "old claim", PageType: types.WikiPageTypeCard, KnowledgeType: types.WikiKnowledgeTypeKnowledge, Status: types.WikiPageStatusPublished, ReviewStatus: types.WikiReviewApproved, MaturityStatus: types.WikiMaturityVerified, ChunkRefs: types.StringArray{"chunk-1"}, Version: 1, CreatedAt: now, UpdatedAt: now}
+	if err := db.Create(oldPage).Error; err != nil {
+		t.Fatal(err)
+	}
+	newPage := *oldPage
+	newPage.Content = "corrected claim"
+	set := &types.WikiChangeSet{ID: uuid.NewString(), TenantID: 1, KnowledgeBaseID: "kb-1", Status: types.WikiChangeSetPending, ReviewLevel: types.WikiReviewLevelL1, ChangeCategory: types.WikiChangeCategoryCorrection, CreatedAt: now, UpdatedAt: now, Items: []types.WikiChangeItem{{ID: uuid.NewString(), Operation: "update", PageID: oldPage.ID, PageSlug: oldPage.Slug, ExpectedVersion: 1, Before: snapshotForTest(t, oldPage), After: snapshotForTest(t, &newPage), CreatedAt: now}}}
+	if err := repo.CreateChangeSet(context.Background(), set); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.ReviewChangeSet(context.Background(), "kb-1", set.ID, "reviewer-1", &types.WikiReviewDecision{Decision: types.WikiReviewApproved}); err != nil {
+		t.Fatal(err)
+	}
+	var versions []types.WikiPageVersion
+	if err := db.Where("page_id = ?", oldPage.ID).Order("version ASC").Find(&versions).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(versions) != 2 || versions[0].State != types.WikiPageVersionHistory || versions[1].State != types.WikiPageVersionPublished {
+		t.Fatalf("versions=%+v, want old history and corrected published versions", versions)
+	}
+	var oldSnapshot, publishedSnapshot types.WikiPage
+	if err := json.Unmarshal(versions[0].Snapshot, &oldSnapshot); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(versions[1].Snapshot, &publishedSnapshot); err != nil {
+		t.Fatal(err)
+	}
+	if oldSnapshot.Content != "old claim" || publishedSnapshot.Content != "corrected claim" {
+		t.Fatalf("snapshot contents=%q/%q", oldSnapshot.Content, publishedSnapshot.Content)
+	}
 }
 
 func snapshotForTest(t *testing.T, page *types.WikiPage) types.JSON {
