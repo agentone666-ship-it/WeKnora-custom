@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { allConflictsSelected, buildConflictChoices, conflictChoiceKey, conflictReviewDecision } from './wikiConflictResolution.ts'
+import {
+  allConflictPositionsSelected,
+  allConflictsSelected,
+  buildConflictChoices,
+  buildConflictChoicesForPositions,
+  conflictChoiceKey,
+  conflictReviewDecision,
+} from './wikiConflictResolution.ts'
 
 test('builds one independent choice for every conflict position', () => {
   const selections = {
@@ -17,6 +24,29 @@ test('builds one independent choice for every conflict position', () => {
 test('does not complete review while any conflict is unselected', () => {
   const selections = { [conflictChoiceKey('item-1', 0)]: 'keep_existing' as const }
   assert.equal(allConflictsSelected('item-1', 2, selections), false)
+})
+
+test('builds choices across every item in a multi-item conflict review', () => {
+  const positions = [
+    { itemId: 'item-old', assessmentIndex: 0 },
+    { itemId: 'item-new', assessmentIndex: 0 },
+    { itemId: 'item-new', assessmentIndex: 1 },
+  ]
+  const selections = {
+    [conflictChoiceKey('item-old', 0)]: 'keep_existing' as const,
+    [conflictChoiceKey('item-new', 0)]: 'adopt_candidate' as const,
+    [conflictChoiceKey('item-new', 1)]: 'keep_existing' as const,
+  }
+
+  assert.deepEqual(buildConflictChoicesForPositions(positions, selections), [
+    { item_id: 'item-old', assessment_index: 0, resolution: 'keep_existing' },
+    { item_id: 'item-new', assessment_index: 0, resolution: 'adopt_candidate' },
+    { item_id: 'item-new', assessment_index: 1, resolution: 'keep_existing' },
+  ])
+  assert.equal(allConflictPositionsSelected(positions, selections), true)
+  assert.equal(allConflictPositionsSelected(positions, {
+    [conflictChoiceKey('item-new', 0)]: 'adopt_candidate',
+  }), false)
 })
 
 test('approves mixed choices and rejects when every candidate claim is discarded', () => {
