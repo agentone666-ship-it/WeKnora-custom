@@ -47,6 +47,10 @@
             </div>
             <div class="version-result"><span>审核通过后</span><strong>发布为节点新版本</strong><small>可在版本历史中回滚</small></div>
           </div>
+          <div v-if="selected.items?.length > 1" class="affected-notice">
+            <strong>已找到 {{ selected.items.length }} 个相关节点</strong>
+            <span>下面每个节点都需要确认最终说法，发布时会一起更新。</span>
+          </div>
 
           <section v-if="selectedFeedback" class="feedback-context">
             <div class="section-heading">
@@ -427,6 +431,9 @@ function formatConfidence(value: number) { return `${Math.round(Number(value || 
 .version-result { display: flex; flex-direction: column; min-width: 170px; padding: 11px 14px; border: 1px solid var(--td-success-color-3); border-radius: 9px; background: var(--td-success-color-1); }
 .version-result span, .version-result small { color: var(--td-text-color-secondary); font-size: 11px; }
 .version-result strong { margin: 3px 0; color: var(--td-success-color); font-size: 13px; }
+.affected-notice { display: flex; align-items: center; gap: 12px; margin: 0 0 14px; padding: 11px 14px; border: 1px solid var(--td-brand-color-3); border-radius: 9px; background: var(--td-brand-color-light); }
+.affected-notice strong { color: var(--td-brand-color); }
+.affected-notice span { color: var(--td-text-color-secondary); font-size: 13px; }
 .feedback-context, .attribution-card, .change-item, .publish-card { margin: 0 0 14px; padding: 17px; border: 1px solid var(--td-component-border); border-radius: 11px; background: var(--td-bg-color-container); }
 .feedback-context { border-color: var(--td-brand-color-3); background: linear-gradient(135deg, var(--td-brand-color-light), var(--td-bg-color-container) 60%); }
 .section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; margin-bottom: 14px; }
