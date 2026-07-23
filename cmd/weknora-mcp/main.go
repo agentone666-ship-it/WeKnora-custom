@@ -96,6 +96,7 @@ func main() {
 	}
 
 	client := &apiClient{baseURL: strings.TrimRight(*apiURL, "/"), apiKey: *apiKey, externalUserID: strings.TrimSpace(*externalUserID), wikiAgentID: *wikiAgentID, knowledgeBaseID: strings.TrimSpace(*knowledgeBaseID), http: &http.Client{Timeout: 10 * time.Minute}}
+	authResolver := &unifiedAuthResolver{baseURL: client.baseURL, http: client.http}
 	store, err := openAdminStore(*adminDB)
 	if err != nil {
 		log.Fatalf("open MCP admin database: %v", err)
@@ -109,7 +110,7 @@ func main() {
 			log.Fatalf("bootstrap MCP writer: %v", err)
 		}
 	}
-	s := server.NewMCPServer("weknora", "0.2.0", server.WithToolCapabilities(true))
+	s := server.NewMCPServer("weknora", "0.2.0", server.WithToolCapabilities(true), server.WithToolFilter(filterToolsForMember))
 	registerMCPTools(s, store, client)
 
 	if strings.EqualFold(*transport, "stdio") {
@@ -133,8 +134,8 @@ func main() {
 	}
 	httpServer := server.NewStreamableHTTPServer(s)
 	mux := http.NewServeMux()
-	mux.Handle("/mcp", bearerAuth(store, httpServer))
-	admin := &adminHTTP{store: store, token: adminAccessToken}
+	mux.Handle("/mcp", bearerAuth(store, authResolver, httpServer))
+	admin := &adminHTTP{store: store, client: client, authResolver: authResolver, token: adminAccessToken}
 	admin.register(mux)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
@@ -212,23 +213,29 @@ func tokenEqual(a, b string) bool {
 	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }
 
-func bearerAuth(store *adminStore, next http.Handler) http.Handler {
+func bearerAuth(store *adminStore, resolver *unifiedAuthResolver, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		provided := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
 		member, err := store.authenticate(provided)
 		meta := requestMeta{ClientIP: clientIP(r), UserAgent: r.UserAgent()}
-		if err != nil {
+		if err == nil && member != nil {
+			role := normalizeRole(member.Role, member.CanWrite)
+			ctx := context.WithValue(r.Context(), authRoleKey{}, role)
+			ctx = context.WithValue(ctx, authMemberKey{}, member)
+			ctx = context.WithValue(ctx, requestMetaKey{}, meta)
+			next.ServeHTTP(w, r.WithContext(ctx))
+			return
+		}
+		identity, credential, unifiedErr := resolver.resolve(r.Context(), provided)
+		if unifiedErr != nil {
 			store.addLog(&mcpCallLog{Tool: "authentication", Status: "denied", ErrorMessage: "unauthorized", ClientIP: meta.ClientIP, UserAgent: meta.UserAgent})
 			w.Header().Set("WWW-Authenticate", "Bearer")
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		role := "reader"
-		if member.CanWrite {
-			role = authRoleWriter
-		}
-		ctx := context.WithValue(r.Context(), authRoleKey{}, role)
-		ctx = context.WithValue(ctx, authMemberKey{}, member)
+		ctx := context.WithValue(r.Context(), authRoleKey{}, identity.Role)
+		ctx = context.WithValue(ctx, unifiedAuthKey{}, identity)
+		ctx = context.WithValue(ctx, upstreamCredentialKey{}, credential)
 		ctx = context.WithValue(ctx, requestMetaKey{}, meta)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
@@ -250,7 +257,13 @@ func auditTool(store *adminStore, tool, defaultKnowledgeBaseID string, next serv
 			requestID = uuid.NewString()
 		}
 		ctx = context.WithValue(ctx, toolRequestIDKey{}, requestID)
-		result, err := next(ctx, request)
+		var result *mcp.CallToolResult
+		var err error
+		if permissionErr := requireTool(ctx, tool); permissionErr != nil {
+			result = mcp.NewToolResultError(permissionErr.Error())
+		} else {
+			result, err = next(ctx, request)
+		}
 		status := "success"
 		errorMessage := ""
 		if err != nil {
@@ -260,12 +273,21 @@ func auditTool(store *adminStore, tool, defaultKnowledgeBaseID string, next serv
 			status = "failed"
 			errorMessage = toolResultText(result)
 		}
-		row := &mcpCallLog{RequestID: requestID, Tool: tool, Status: status, ErrorMessage: errorMessage, KnowledgeBaseID: request.GetString("knowledge_base_id", ""), Subject: auditSubject(tool, request), DurationMS: time.Since(started).Milliseconds()}
+		responseContent := ""
+		if result != nil {
+			responseContent = toolResultText(result)
+		}
+		row := &mcpCallLog{RequestID: requestID, Tool: tool, Status: status, ErrorMessage: errorMessage, KnowledgeBaseID: request.GetString("knowledge_base_id", ""), Subject: auditSubject(tool, request), ResponseContent: responseContent, DurationMS: time.Since(started).Milliseconds()}
 		if row.KnowledgeBaseID == "" {
 			row.KnowledgeBaseID = defaultKnowledgeBaseID
 		}
 		if member, ok := ctx.Value(authMemberKey{}).(*mcpMember); ok {
 			row.MemberID, row.MemberName = &member.ID, member.Name
+		} else if identity, ok := ctx.Value(unifiedAuthKey{}).(*unifiedIdentity); ok && identity != nil {
+			row.MemberName = identity.DisplayName
+			if row.MemberName == "" {
+				row.MemberName = identity.Subject
+			}
 		}
 		if meta, ok := ctx.Value(requestMetaKey{}).(requestMeta); ok {
 			row.ClientIP, row.UserAgent = meta.ClientIP, meta.UserAgent
@@ -312,7 +334,19 @@ func toolResultText(result *mcp.CallToolResult) string {
 }
 
 func requireWriter(ctx context.Context) error {
-	if role, _ := ctx.Value(authRoleKey{}).(string); role != authRoleWriter {
+	if identity, ok := ctx.Value(unifiedAuthKey{}).(*unifiedIdentity); ok && identity != nil {
+		if identity.Source != authSourceAPIKey || identity.FullAccess {
+			return nil
+		}
+		for _, capability := range identity.Capabilities {
+			if capability == "ingest" {
+				return nil
+			}
+		}
+		return errors.New("this tool requires the ingest API capability")
+	}
+	role, _ := ctx.Value(authRoleKey{}).(string)
+	if role != roleOwner && role != roleAdmin && role != roleContributor && role != authRoleWriter {
 		return errors.New("this tool requires a writer-authorized MCP token")
 	}
 	return nil
@@ -342,9 +376,19 @@ func envOr(key, fallback string) string {
 	return fallback
 }
 
-func (c *apiClient) setAuthHeaders(req *http.Request) {
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	req.Header.Set("X-API-Key", c.apiKey)
+func (c *apiClient) setAuthHeaders(ctx context.Context, req *http.Request) {
+	if credential, ok := ctx.Value(upstreamCredentialKey{}).(upstreamCredential); ok && strings.TrimSpace(credential.Token) != "" {
+		if credential.Kind == authSourceAPIKey {
+			req.Header.Set("X-API-Key", credential.Token)
+		} else {
+			req.Header.Set("Authorization", "Bearer "+credential.Token)
+		}
+	} else {
+		// Legacy MCP members and stdio retain the configured service API key
+		// during migration. New HTTP callers forward their own canonical
+		// WeKnora credential through the branch above.
+		req.Header.Set("X-API-Key", c.apiKey)
+	}
 	if req.Header.Get("X-Request-ID") == "" {
 		req.Header.Set("X-Request-ID", newRequestID())
 	}
@@ -366,7 +410,7 @@ func (c *apiClient) request(ctx context.Context, method, path string, body any) 
 	if err != nil {
 		return nil, "", err
 	}
-	c.setAuthHeaders(req)
+	c.setAuthHeaders(ctx, req)
 	req.Header.Set("Content-Type", "application/json")
 	if requestID, _ := ctx.Value(toolRequestIDKey{}).(string); requestID != "" {
 		req.Header.Set("X-Request-ID", requestID)
@@ -406,7 +450,7 @@ func (c *apiClient) uploadFile(ctx context.Context, kb, fileName string, data []
 	if err != nil {
 		return nil, err
 	}
-	c.setAuthHeaders(req)
+	c.setAuthHeaders(ctx, req)
 	req.Header.Set("Content-Type", w.FormDataContentType())
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -598,17 +642,11 @@ func (c *apiClient) askRAG(ctx context.Context, request mcp.CallToolRequest) (*m
 }
 
 func (c *apiClient) searchKnowledgeBases(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	data, _, err := c.request(ctx, http.MethodGet, "/knowledge-bases", nil)
+	knowledgeBases, err := c.listKnowledgeBases(ctx)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
-	var envelope struct {
-		Data []knowledgeBaseSummary `json:"data"`
-	}
-	if err := json.Unmarshal(data, &envelope); err != nil {
-		return mcp.NewToolResultError("parse knowledge base list: " + err.Error()), nil
-	}
-	results := filterKnowledgeBases(envelope.Data, request.GetString("query", ""), c.knowledgeBaseID)
+	results := filterKnowledgeBases(knowledgeBases, request.GetString("query", ""), c.knowledgeBaseID)
 	encoded, err := json.MarshalIndent(map[string]any{
 		"knowledge_bases": results,
 		"count":           len(results),
@@ -617,6 +655,20 @@ func (c *apiClient) searchKnowledgeBases(ctx context.Context, request mcp.CallTo
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 	return mcp.NewToolResultText(string(encoded)), nil
+}
+
+func (c *apiClient) listKnowledgeBases(ctx context.Context) ([]knowledgeBaseSummary, error) {
+	data, _, err := c.request(ctx, http.MethodGet, "/knowledge-bases", nil)
+	if err != nil {
+		return nil, err
+	}
+	var envelope struct {
+		Data []knowledgeBaseSummary `json:"data"`
+	}
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		return nil, fmt.Errorf("parse knowledge base list: %w", err)
+	}
+	return envelope.Data, nil
 }
 
 func filterKnowledgeBases(items []knowledgeBaseSummary, query, defaultID string) []knowledgeBaseSummary {
