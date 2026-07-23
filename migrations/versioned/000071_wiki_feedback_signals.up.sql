@@ -1,0 +1,31 @@
+CREATE TABLE IF NOT EXISTS wiki_feedback_signals (
+  id VARCHAR(36) PRIMARY KEY,
+  tenant_id BIGINT NOT NULL,
+  knowledge_base_id VARCHAR(36) NOT NULL,
+  source VARCHAR(32) NOT NULL DEFAULT 'manual_correction',
+  signal_type VARCHAR(32) NOT NULL DEFAULT 'other',
+  feedback_text TEXT NOT NULL,
+  original_question TEXT NOT NULL DEFAULT '',
+  answer_excerpt TEXT NOT NULL DEFAULT '',
+  suggested_correction TEXT NOT NULL DEFAULT '',
+  related_request_id VARCHAR(64) NOT NULL DEFAULT '',
+  session_id VARCHAR(64) NOT NULL DEFAULT '',
+  agent_id VARCHAR(64) NOT NULL DEFAULT '',
+  recalled_node_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+  target_node_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+  attributed_node_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+  status VARCHAR(32) NOT NULL,
+  strategy VARCHAR(32) NOT NULL DEFAULT 'manual_review',
+  risk_level VARCHAR(16) NOT NULL DEFAULT 'medium',
+  confidence DOUBLE PRECISION NOT NULL DEFAULT 0,
+  conflict_summary TEXT NOT NULL DEFAULT '',
+  change_set_id VARCHAR(36) NOT NULL DEFAULT '',
+  idempotency_key VARCHAR(128) NOT NULL,
+  created_by VARCHAR(255) NOT NULL DEFAULT '',
+  reviewed_by VARCHAR(255) NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT uq_wiki_feedback_signals_idempotency UNIQUE (idempotency_key)
+);
+CREATE INDEX IF NOT EXISTS idx_wiki_feedback_signals_list ON wiki_feedback_signals (knowledge_base_id, status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_wiki_feedback_signals_change_set ON wiki_feedback_signals (change_set_id);

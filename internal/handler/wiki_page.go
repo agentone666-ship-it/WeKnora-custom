@@ -1191,6 +1191,55 @@ func (h *WikiPageHandler) ReviewChangeSet(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": req.Decision})
 }
 
+func (h *WikiPageHandler) SubmitFeedbackSignal(c *gin.Context) {
+	kbID, tenantID, err := h.validateWikiKB(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	var req types.WikiFeedbackSignalInput
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	signal, err := h.governanceService.SubmitFeedbackSignal(c.Request.Context(), tenantID, kbID, c.GetString(types.UserIDContextKey.String()), &req)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{"signal": signal})
+}
+
+func (h *WikiPageHandler) ListFeedbackSignals(c *gin.Context) {
+	kbID, _, err := h.validateWikiKB(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
+	rows, total, err := h.governanceService.ListFeedbackSignals(c.Request.Context(), types.WikiFeedbackSignalListRequest{KnowledgeBaseID: kbID, Status: c.Query("status"), Limit: limit, Offset: offset})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"signals": rows, "total": total})
+}
+
+func (h *WikiPageHandler) GetFeedbackSignal(c *gin.Context) {
+	kbID, _, err := h.validateWikiKB(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	row, err := h.governanceService.GetFeedbackSignal(c.Request.Context(), kbID, c.Param("signal_id"))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"signal": row})
+}
+
 func (h *WikiPageHandler) BatchReviewChangeSets(c *gin.Context) {
 	kbID, _, err := h.validateWikiKB(c)
 	if err != nil {

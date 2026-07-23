@@ -437,6 +437,28 @@ export interface WikiChangeSet {
   items: WikiChangeItem[];
 }
 
+export interface WikiFeedbackSignal {
+  id: string;
+  knowledge_base_id: string;
+  source: string;
+  signal_type: string;
+  feedback_text: string;
+  original_question?: string;
+  answer_excerpt?: string;
+  suggested_correction?: string;
+  related_request_id?: string;
+  recalled_node_ids: string[];
+  target_node_ids: string[];
+  attributed_node_ids: string[];
+  status: string;
+  strategy: string;
+  risk_level: string;
+  confidence: number;
+  conflict_summary?: string;
+  change_set_id: string;
+  created_at: string;
+}
+
 export type WikiChangeCategory = 'addition' | 'update' | 'conflict' | 'correction' | 'retirement' | 'merge_duplicate';
 export type WikiConflictResolution = 'keep_existing' | 'adopt_candidate' | 'edit_candidate' | 'split_scope' | 'defer' | 'per_conflict';
 export interface WikiConflictChoice {
@@ -462,6 +484,15 @@ export function listWikiChangeSets(kbId: string, params?: {
 
 export function getWikiChangeSet(kbId: string, changeSetId: string) {
   return get(`/api/v1/knowledgebase/${kbId}/wiki/change-sets/${changeSetId}`);
+}
+
+export function listWikiFeedbackSignals(kbId: string, params?: { status?: string; limit?: number; offset?: number }) {
+  const query = new URLSearchParams();
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined && value !== '') query.set(key, String(value));
+  });
+  const qs = query.toString();
+  return get(`/api/v1/knowledgebase/${kbId}/wiki/feedback-signals${qs ? `?${qs}` : ''}`);
 }
 
 export function reviewWikiChangeSet(

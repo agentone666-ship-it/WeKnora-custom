@@ -26,6 +26,9 @@ type WikiGovernanceRepository interface {
 	GetGovernanceStats(ctx context.Context, kbID string) (*types.WikiGovernanceStats, error)
 	RecordGovernanceMetric(ctx context.Context, event *types.WikiGovernanceMetricEvent) error
 	CreateRollbackChangeSet(ctx context.Context, kbID, appliedChangeSetID, requestedBy string) (*types.WikiChangeSet, error)
+	SubmitFeedbackSignal(ctx context.Context, tenantID uint64, kbID, actor string, input *types.WikiFeedbackSignalInput) (*types.WikiFeedbackSignal, error)
+	ListFeedbackSignals(ctx context.Context, req types.WikiFeedbackSignalListRequest) ([]*types.WikiFeedbackSignal, int64, error)
+	GetFeedbackSignal(ctx context.Context, kbID, id string) (*types.WikiFeedbackSignal, error)
 }
 
 type WikiGovernanceService interface {
@@ -47,4 +50,7 @@ type WikiGovernanceService interface {
 	GetGovernanceStats(ctx context.Context, kbID string) (*types.WikiGovernanceStats, error)
 	RecordGovernanceMetric(ctx context.Context, event *types.WikiGovernanceMetricEvent) error
 	CreateRollbackChangeSet(ctx context.Context, kbID, appliedChangeSetID, requestedBy string) (*types.WikiChangeSet, error)
+	SubmitFeedbackSignal(ctx context.Context, tenantID uint64, kbID, actor string, input *types.WikiFeedbackSignalInput) (*types.WikiFeedbackSignal, error)
+	ListFeedbackSignals(ctx context.Context, req types.WikiFeedbackSignalListRequest) ([]*types.WikiFeedbackSignal, int64, error)
+	GetFeedbackSignal(ctx context.Context, kbID, id string) (*types.WikiFeedbackSignal, error)
 }

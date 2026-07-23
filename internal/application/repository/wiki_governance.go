@@ -17,7 +17,19 @@ import (
 
 var ErrWikiChangeSetConflict = errors.New("wiki change set version conflict")
 
+func updateFeedbackSignalForChangeSet(tx *gorm.DB, changeSetID string, values map[string]any) error {
+	// Older unit-test fixtures and pre-71 databases do not have the feedback
+	// table yet. A normal governance review must remain backwards compatible.
+	if !tx.Migrator().HasTable(&types.WikiFeedbackSignal{}) {
+		return nil
+	}
+	return tx.Model(&types.WikiFeedbackSignal{}).Where("change_set_id = ?", changeSetID).Updates(values).Error
+}
+
 func recordGovernancePublishedVersion(tx *gorm.DB, page *types.WikiPage, before types.JSON, operation, actor, summary string, now time.Time) error {
+	// Keep governance usable while an older database is being upgraded. Once
+	// migration 70 is present, every approved mutation must participate in the
+	// same version lifecycle as edits made from the version-management UI.
 	if !tx.Migrator().HasTable(&types.WikiPageVersion{}) {
 		return nil
 	}
@@ -878,7 +890,10 @@ func (r *wikiGovernanceRepository) ReviewChangeSet(ctx context.Context, kbID, id
 			return nil
 		}
 		if decision.Decision == types.WikiReviewRejected {
-			return tx.Model(&set).Updates(map[string]any{"status": types.WikiChangeSetRejected, "reviewed_by": reviewerID, "review_comment": decision.Comment, "reviewed_at": now, "updated_at": now}).Error
+			if err := tx.Model(&set).Updates(map[string]any{"status": types.WikiChangeSetRejected, "reviewed_by": reviewerID, "review_comment": decision.Comment, "reviewed_at": now, "updated_at": now}).Error; err != nil {
+				return err
+			}
+			return updateFeedbackSignalForChangeSet(tx, id, map[string]any{"status": types.WikiFeedbackRejected, "reviewed_by": reviewerID, "updated_at": now})
 		}
 		if decision.Decision != types.WikiReviewApproved {
 			return errors.New("decision must be approved, rejected, or deferred")
@@ -993,7 +1008,10 @@ func (r *wikiGovernanceRepository) ReviewChangeSet(ctx context.Context, kbID, id
 				return err
 			}
 		}
-		return tx.Model(&set).Updates(map[string]any{"status": types.WikiChangeSetApplied, "reviewed_by": reviewerID, "review_comment": decision.Comment, "reviewed_at": now, "updated_at": now}).Error
+		if err := tx.Model(&set).Updates(map[string]any{"status": types.WikiChangeSetApplied, "reviewed_by": reviewerID, "review_comment": decision.Comment, "reviewed_at": now, "updated_at": now}).Error; err != nil {
+			return err
+		}
+		return updateFeedbackSignalForChangeSet(tx, id, map[string]any{"status": types.WikiFeedbackPublished, "reviewed_by": reviewerID, "updated_at": now})
 	})
 	if errors.Is(err, ErrWikiChangeSetConflict) {
 		now := time.Now()
@@ -1001,7 +1019,10 @@ func (r *wikiGovernanceRepository) ReviewChangeSet(ctx context.Context, kbID, id
 			if updateErr := tx.Model(&types.WikiChangeSet{}).Where("knowledge_base_id = ? AND id = ? AND status = ?", kbID, id, types.WikiChangeSetPending).Updates(map[string]any{"status": types.WikiChangeSetConflict, "reviewed_by": reviewerID, "review_comment": "Page version changed during review", "reviewed_at": now, "updated_at": now}).Error; updateErr != nil {
 				return updateErr
 			}
-			return tx.Create(&types.WikiReview{ID: uuid.NewString(), ChangeSetID: id, ReviewerID: reviewerID, Decision: types.WikiChangeSetConflict, Comment: "Page version changed during review", DiscardedClaims: types.JSON(`[]`), ConflictChoices: types.JSON(`[]`), CreatedAt: now}).Error
+			if createErr := tx.Create(&types.WikiReview{ID: uuid.NewString(), ChangeSetID: id, ReviewerID: reviewerID, Decision: types.WikiChangeSetConflict, Comment: "Page version changed during review", DiscardedClaims: types.JSON(`[]`), ConflictChoices: types.JSON(`[]`), CreatedAt: now}).Error; createErr != nil {
+				return createErr
+			}
+			return updateFeedbackSignalForChangeSet(tx, id, map[string]any{"status": types.WikiFeedbackConflict, "conflict_summary": "Page version changed during review", "updated_at": now})
 		})
 	}
 	return err

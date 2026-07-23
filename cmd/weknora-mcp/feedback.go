@@ -4,8 +4,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -73,6 +76,9 @@ type feedbackReceipt struct {
 	KnowledgeBaseID  string   `json:"knowledge_base_id,omitempty"`
 	RecalledNodeIDs  []string `json:"recalled_node_ids"`
 	TargetNodeIDs    []string `json:"target_node_ids"`
+	ProcessingStatus string   `json:"processing_status,omitempty"`
+	ChangeSetID      string   `json:"change_set_id,omitempty"`
+	ProcessingError  string   `json:"processing_error,omitempty"`
 }
 
 type mcpCallReference struct {
@@ -397,5 +403,39 @@ func (s *adminStore) feedbackTool(ctx context.Context, request mcp.CallToolReque
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 	fallback := fmt.Sprintf("Feedback accepted (feedback_id=%s, trace_status=%s).", receipt.FeedbackID, receipt.TraceStatus)
+	return mcp.NewToolResultStructured(receipt, fallback), nil
+}
+
+func (c *apiClient) feedbackTool(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	var input feedbackInput
+	if err := request.BindArguments(&input); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	receipt, err := c.store.submitFeedback(ctx, input)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+	if receipt.KnowledgeBaseID == "" {
+		receipt.ProcessingStatus = "recorded_only"
+	} else {
+		payload := map[string]any{"source": "mcp_feedback", "signal_type": input.FeedbackType, "feedback_text": input.FeedbackText, "original_question": input.OriginalQuestion, "answer_excerpt": input.AnswerExcerpt, "suggested_correction": input.SuggestedCorrection, "related_request_id": input.RelatedRequestID, "recalled_node_ids": receipt.RecalledNodeIDs, "target_node_ids": receipt.TargetNodeIDs, "idempotency_key": "mcp-feedback-" + receipt.FeedbackID}
+		body, _, pushErr := c.request(ctx, http.MethodPost, "/knowledgebase/"+url.PathEscape(receipt.KnowledgeBaseID)+"/wiki/feedback-signals", payload)
+		if pushErr != nil {
+			receipt.ProcessingStatus, receipt.ProcessingError = "recorded_pending_sync", pushErr.Error()
+		} else {
+			var response struct {
+				Signal struct {
+					Status      string `json:"status"`
+					ChangeSetID string `json:"change_set_id"`
+				} `json:"signal"`
+			}
+			if json.Unmarshal(body, &response) == nil {
+				receipt.ProcessingStatus, receipt.ChangeSetID = response.Signal.Status, response.Signal.ChangeSetID
+			} else {
+				receipt.ProcessingStatus = "submitted"
+			}
+		}
+	}
+	fallback := fmt.Sprintf("Feedback accepted (feedback_id=%s, processing_status=%s).", receipt.FeedbackID, receipt.ProcessingStatus)
 	return mcp.NewToolResultStructured(receipt, fallback), nil
 }
