@@ -1,0 +1,4 @@
+interface:
+  display_name: "Wiki 知识节点读取"
+  short_description: "在 Wiki 中搜索、读取、追溯并核验所需知识节点"
+  default_prompt: "使用 $wiki-knowledge-reader 在 Wiki 知识库中找到并核验回答所需的节点。"
