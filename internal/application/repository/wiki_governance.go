@@ -17,6 +17,61 @@ import (
 
 var ErrWikiChangeSetConflict = errors.New("wiki change set version conflict")
 
+func recordGovernancePublishedVersion(tx *gorm.DB, page *types.WikiPage, before types.JSON, operation, actor, summary string, now time.Time) error {
+	if !tx.Migrator().HasTable(&types.WikiPageVersion{}) {
+		return nil
+	}
+	var current types.WikiPageVersion
+	parentID := ""
+	if err := tx.Where("page_id = ? AND state = ?", page.ID, types.WikiPageVersionPublished).
+		Order("version DESC").First(&current).Error; err == nil {
+		parentID = current.ID
+		if err := tx.Model(&types.WikiPageVersion{}).Where("id = ?", current.ID).
+			Update("state", types.WikiPageVersionHistory).Error; err != nil {
+			return err
+		}
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+	var maxVersion int
+	if err := tx.Model(&types.WikiPageVersion{}).Where("page_id = ?", page.ID).
+		Select("COALESCE(MAX(version), 0)").Scan(&maxVersion).Error; err != nil {
+		return err
+	}
+	if parentID == "" && operation != "create" && len(before) > 0 && before.ToString() != "{}" {
+		var previous types.WikiPage
+		if err := json.Unmarshal(before, &previous); err != nil {
+			return err
+		}
+		previousVersion := previous.Version
+		if previousVersion < 1 {
+			previousVersion = 1
+		}
+		seed := &types.WikiPageVersion{
+			ID: uuid.NewString(), TenantID: page.TenantID, KnowledgeBaseID: page.KnowledgeBaseID,
+			PageID: page.ID, Version: previousVersion, State: types.WikiPageVersionHistory,
+			Snapshot: before, ChangeSummary: "反馈更新前的已发布版本",
+			CreatedBy: actor, PublishedBy: actor, CreatedAt: now, PublishedAt: &now,
+		}
+		if err := tx.Create(seed).Error; err != nil {
+			return err
+		}
+		parentID = seed.ID
+		maxVersion = previousVersion
+	}
+	snapshot, err := json.Marshal(page)
+	if err != nil {
+		return err
+	}
+	version := &types.WikiPageVersion{
+		ID: uuid.NewString(), TenantID: page.TenantID, KnowledgeBaseID: page.KnowledgeBaseID,
+		PageID: page.ID, Version: maxVersion + 1, State: types.WikiPageVersionPublished,
+		ParentVersionID: parentID, Snapshot: types.JSON(snapshot), ChangeSummary: summary,
+		CreatedBy: actor, PublishedBy: actor, CreatedAt: now, PublishedAt: &now,
+	}
+	return tx.Create(version).Error
+}
+
 type wikiGovernanceRepository struct{ db *gorm.DB }
 
 func NewWikiGovernanceRepository(db *gorm.DB) interfaces.WikiGovernanceRepository {
@@ -933,6 +988,9 @@ func (r *wikiGovernanceRepository) ReviewChangeSet(ctx context.Context, kbID, id
 				if err := syncGovernedPagePackages(tx, page, now); err != nil {
 					return err
 				}
+			}
+			if err := recordGovernancePublishedVersion(tx, page, item.Before, item.Operation, reviewerID, "审核通过："+set.ChangeCategory, now); err != nil {
+				return err
 			}
 		}
 		return tx.Model(&set).Updates(map[string]any{"status": types.WikiChangeSetApplied, "reviewed_by": reviewerID, "review_comment": decision.Comment, "reviewed_at": now, "updated_at": now}).Error
