@@ -46,34 +46,37 @@
 
           <section v-if="isConflict" class="conflict-box">
             <div class="section-title">冲突定位与版本取舍</div>
-            <div v-for="assessment in conflictAssessments" :key="`${activeConflictItemId}:${assessment.assessmentIndex}`" class="conflict-assessment">
+            <div v-if="conflictAssessments.length === 0" class="conflict-empty">
+              这是一条历史冲突审核，但快照中没有可逐项裁决的冲突位置。请在下方整单批准、拒绝或暂缓。
+            </div>
+            <div v-for="assessment in conflictAssessments" :key="`${assessment.itemId}:${assessment.assessmentIndex}`" class="conflict-assessment">
               <div class="conflict-head">
                 <strong>{{ assessment.related_slug }}</strong>
                 <t-tag theme="danger" size="small">置信度 {{ formatConfidence(assessment.confidence) }}</t-tag>
               </div>
               <div class="claim-grid">
                 <button type="button" class="claim-option"
-                  :class="{ selected: conflictSelection(assessment.assessmentIndex) === 'adopt_candidate' }"
-                  @click="chooseConflict(assessment.assessmentIndex, 'adopt_candidate')">
+                  :class="{ selected: conflictSelection(assessment.itemId, assessment.assessmentIndex) === 'adopt_candidate' }"
+                  @click="chooseConflict(assessment.itemId, assessment.assessmentIndex, 'adopt_candidate')">
                   <span>候选新说法</span>
-                  <strong v-if="conflictSelection(assessment.assessmentIndex) === 'adopt_candidate'">✓ 保留这个说法</strong>
+                  <strong v-if="conflictSelection(assessment.itemId, assessment.assessmentIndex) === 'adopt_candidate'">✓ 保留这个说法</strong>
                   <pre>{{ assessment.candidate_claim || '未提取' }}</pre>
                 </button>
                 <button type="button" class="claim-option"
-                  :class="{ selected: conflictSelection(assessment.assessmentIndex) === 'keep_existing' }"
-                  @click="chooseConflict(assessment.assessmentIndex, 'keep_existing')">
+                  :class="{ selected: conflictSelection(assessment.itemId, assessment.assessmentIndex) === 'keep_existing' }"
+                  @click="chooseConflict(assessment.itemId, assessment.assessmentIndex, 'keep_existing')">
                   <span>既有说法</span>
-                  <strong v-if="conflictSelection(assessment.assessmentIndex) === 'keep_existing'">✓ 保留这个说法</strong>
+                  <strong v-if="conflictSelection(assessment.itemId, assessment.assessmentIndex) === 'keep_existing'">✓ 保留这个说法</strong>
                   <pre>{{ assessment.existing_claim || '未提取' }}</pre>
                 </button>
               </div>
               <div class="conflict-reason">冲突位置：{{ assessment.reason }}；适用范围{{ assessment.applicability_overlap ? '重叠' : '不重叠' }}</div>
-              <details v-if="relatedEvidence[assessment.related_slug]">
+              <details v-if="assessment.relatedEvidence[assessment.related_slug]">
                 <summary>查看既有页面证据与来源</summary>
-                <pre>{{ pretty(relatedEvidence[assessment.related_slug]) }}</pre>
+                <pre>{{ pretty(assessment.relatedEvidence[assessment.related_slug]) }}</pre>
               </details>
             </div>
-            <div class="conflict-progress" :class="{ complete: allConflictChoicesSelected }">
+            <div v-if="conflictAssessments.length" class="conflict-progress" :class="{ complete: allConflictChoicesSelected }">
               已选择 {{ selectedConflictCount }}/{{ conflictAssessments.length }} 处；每一处都选择后才能提交
             </div>
           </section>
@@ -118,7 +121,13 @@
           <div class="review-actions">
             <template v-if="isConflict">
               <t-button variant="outline" :loading="submitting" @click="deferConflict">暂缓审核</t-button>
-              <t-button theme="primary" :disabled="!allConflictChoicesSelected" :loading="submitting" @click="submitConflict">提交逐项裁决</t-button>
+              <template v-if="conflictAssessments.length">
+                <t-button theme="primary" :disabled="!allConflictChoicesSelected" :loading="submitting" @click="submitConflict">提交逐项裁决</t-button>
+              </template>
+              <template v-else>
+                <t-button theme="danger" variant="outline" :loading="submitting" @click="submitWholeConflict('rejected')">整单拒绝</t-button>
+                <t-button theme="primary" :loading="submitting" @click="submitWholeConflict('approved')">整单批准并发布</t-button>
+              </template>
             </template>
             <template v-else>
               <t-button theme="danger" variant="outline" :loading="submitting" @click="submit('rejected')">拒绝</t-button>
@@ -137,7 +146,7 @@ import { computed, ref, watch } from 'vue'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { batchReviewWikiChangeSets, getWikiChangeSet, listWikiChangeSets, reviewWikiChangeSet, type WikiChangeCategory, type WikiChangeItem, type WikiChangeSet, type WikiConflictChoice } from '@/api/wiki'
 import { normalizeWikiReviewSelection, toggleAllWikiReviews, toggleWikiReview, wikiReviewBatchSelectionState } from './wikiReviewSelection'
-import { allConflictsSelected, buildConflictChoices, conflictChoiceKey, conflictReviewDecision, type ConflictSelection } from './wikiConflictResolution'
+import { allConflictPositionsSelected, buildConflictChoicesForPositions, conflictChoiceKey, conflictReviewDecision, type ConflictSelection } from './wikiConflictResolution'
 
 const props = defineProps<{ modelValue: boolean; knowledgeBaseId: string }>()
 const emit = defineEmits<{ (e: 'update:modelValue', value: boolean): void; (e: 'count-change', value: number): void; (e: 'published'): void }>()
@@ -231,11 +240,11 @@ async function submit(decision: 'approved' | 'rejected', mergeIntoSlug = '') {
 }
 
 async function submitConflict() {
-  if (!selected.value || !activeConflictItemId.value || !allConflictChoicesSelected.value) {
+  if (!selected.value || !allConflictChoicesSelected.value) {
     MessagePlugin.warning('请为每一处冲突选择要保留的说法')
     return
   }
-  const choices = buildConflictChoices(activeConflictItemId.value, conflictAssessments.value.length, conflictSelections.value)
+  const choices = buildConflictChoicesForPositions(conflictAssessments.value, conflictSelections.value)
   const decision = conflictReviewDecision(choices)
   if (decision === 'rejected' && !comment.value.trim()) comment.value = '保留全部既有有效说法，拒绝当前冲突候选'
   submitting.value = true
@@ -249,6 +258,26 @@ async function submitConflict() {
     if (decision === 'approved') emit('published')
   } catch (error: any) {
     MessagePlugin.error(error?.message || '提交冲突裁决失败')
+  } finally { submitting.value = false }
+}
+
+async function submitWholeConflict(decision: 'approved' | 'rejected') {
+  if (!selected.value || conflictAssessments.value.length > 0) return
+  if (decision === 'rejected' && !comment.value.trim()) comment.value = '历史冲突审核无可逐项裁决位置，整单拒绝并保留既有知识'
+  submitting.value = true
+  try {
+    await reviewWikiChangeSet(props.knowledgeBaseId, selected.value.id, {
+      decision,
+      comment: comment.value.trim(),
+      resolution: decision === 'approved' ? 'adopt_candidate' : 'keep_existing',
+    })
+    MessagePlugin.success(decision === 'approved' ? '已整单批准并发布' : '已整单拒绝')
+    selected.value = null
+    await load()
+    if (decision === 'approved') emit('published')
+  } catch (error: any) {
+    const message = error?.response?.status === 409 ? '正式页面已变更，请刷新后重新审核' : (error?.message || '提交历史冲突审核失败')
+    MessagePlugin.error(message)
   } finally { submitting.value = false }
 }
 
@@ -305,22 +334,23 @@ function systemSuggestion(set: WikiChangeSet) {
   return '确认分类与场景后可批准'
 }
 const isConflict = computed(() => selected.value?.change_category === 'conflict')
-const activeConflictItemId = computed(() => selected.value?.items?.[0]?.id || '')
 const conflictAssessments = computed<any[]>(() => {
-  const assessments = selected.value?.items?.[0]?.after?.page_metadata?.cross_page_assessments || []
-  return assessments
-    .filter((assessment: any) => assessment.relation === 'conflicting' || assessment.relation === 'supersedes')
-    .map((assessment: any, assessmentIndex: number) => ({ ...assessment, assessmentIndex }))
+  return (selected.value?.items || []).flatMap(item => {
+    const assessments = item.after?.page_metadata?.cross_page_assessments || []
+    const relatedEvidence = item.after?.page_metadata?.related_page_evidence || {}
+    return assessments
+      .filter((assessment: any) => assessment.relation === 'conflicting' || assessment.relation === 'supersedes')
+      .map((assessment: any, assessmentIndex: number) => ({ ...assessment, itemId: item.id, assessmentIndex, relatedEvidence }))
+  })
 })
-const selectedConflictCount = computed(() => buildConflictChoices(activeConflictItemId.value, conflictAssessments.value.length, conflictSelections.value).length)
-const allConflictChoicesSelected = computed(() => conflictAssessments.value.length > 0 && allConflictsSelected(activeConflictItemId.value, conflictAssessments.value.length, conflictSelections.value))
-function conflictSelection(assessmentIndex: number): WikiConflictChoice['resolution'] | undefined {
-  return conflictSelections.value[conflictChoiceKey(activeConflictItemId.value, assessmentIndex)]
+const selectedConflictCount = computed(() => buildConflictChoicesForPositions(conflictAssessments.value, conflictSelections.value).length)
+const allConflictChoicesSelected = computed(() => allConflictPositionsSelected(conflictAssessments.value, conflictSelections.value))
+function conflictSelection(itemId: string, assessmentIndex: number): WikiConflictChoice['resolution'] | undefined {
+  return conflictSelections.value[conflictChoiceKey(itemId, assessmentIndex)]
 }
-function chooseConflict(assessmentIndex: number, resolution: WikiConflictChoice['resolution']) {
-  conflictSelections.value = { ...conflictSelections.value, [conflictChoiceKey(activeConflictItemId.value, assessmentIndex)]: resolution }
+function chooseConflict(itemId: string, assessmentIndex: number, resolution: WikiConflictChoice['resolution']) {
+  conflictSelections.value = { ...conflictSelections.value, [conflictChoiceKey(itemId, assessmentIndex)]: resolution }
 }
-const relatedEvidence = computed<Record<string, any>>(() => selected.value?.items?.[0]?.after?.page_metadata?.related_page_evidence || {})
 function categoryLabel(value: WikiChangeCategory) { return categoryOptions.find(item => item.value === value)?.label || value || '普通更新' }
 function categoryTheme(value: WikiChangeCategory) { return value === 'conflict' ? 'danger' : value === 'addition' ? 'success' : value === 'correction' || value === 'retirement' ? 'warning' : 'primary' }
 function formatConfidence(value: number) { return `${Math.round(Number(value || 0) * 100)}%` }
@@ -361,6 +391,7 @@ function formatConfidence(value: number) { return `${Math.round(Number(value || 
 .conflict-reason { margin: 10px 0; }
 .conflict-progress { margin-top: 12px; color: var(--td-warning-color); font-size: 13px; }
 .conflict-progress.complete { color: var(--td-success-color); }
+.conflict-empty { padding: 12px; border-radius: 6px; background: var(--td-warning-color-light); color: var(--td-warning-color); line-height: 1.6; }
 .merge-box { display: grid; grid-template-columns: 1fr auto; gap: 10px; margin: 14px 0; }
 .diff-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .diff-column { min-width: 0; }
