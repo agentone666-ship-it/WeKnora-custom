@@ -44,6 +44,23 @@
             </div>
           </div>
 
+          <section v-if="selectedFeedback" class="feedback-context">
+            <div class="section-title">反馈信号与溯源</div>
+            <div class="feedback-badges">
+              <t-tag size="small" theme="primary">{{ selectedFeedback.source }}</t-tag>
+              <t-tag size="small" :theme="selectedFeedback.risk_level === 'high' ? 'danger' : 'warning'">风险 {{ selectedFeedback.risk_level }}</t-tag>
+              <t-tag size="small" variant="light-outline">归因置信度 {{ formatConfidence(selectedFeedback.confidence) }}</t-tag>
+            </div>
+            <div v-if="selectedFeedback.conflict_summary" class="feedback-conflict">⚠ {{ selectedFeedback.conflict_summary }}</div>
+            <div class="feedback-fields">
+              <div><span>用户反馈</span><p>{{ selectedFeedback.feedback_text }}</p></div>
+              <div v-if="selectedFeedback.original_question"><span>原始问题</span><p>{{ selectedFeedback.original_question }}</p></div>
+              <div v-if="selectedFeedback.answer_excerpt"><span>原回答片段</span><p>{{ selectedFeedback.answer_excerpt }}</p></div>
+              <div v-if="selectedFeedback.suggested_correction"><span>建议修正</span><p>{{ selectedFeedback.suggested_correction }}</p></div>
+            </div>
+            <div class="evidence">Request ID：{{ selectedFeedback.related_request_id || '未提供' }} · 归因节点：{{ selectedFeedback.attributed_node_ids.join(', ') }}</div>
+          </section>
+
           <section v-if="isConflict" class="conflict-box">
             <div class="section-title">冲突定位与版本取舍</div>
             <div v-if="conflictAssessments.length === 0" class="conflict-empty">
@@ -144,7 +161,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { MessagePlugin } from 'tdesign-vue-next'
-import { batchReviewWikiChangeSets, getWikiChangeSet, listWikiChangeSets, reviewWikiChangeSet, type WikiChangeCategory, type WikiChangeItem, type WikiChangeSet, type WikiConflictChoice } from '@/api/wiki'
+import { batchReviewWikiChangeSets, getWikiChangeSet, listWikiChangeSets, listWikiFeedbackSignals, reviewWikiChangeSet, type WikiChangeCategory, type WikiChangeItem, type WikiChangeSet, type WikiConflictChoice, type WikiFeedbackSignal } from '@/api/wiki'
 import { normalizeWikiReviewSelection, toggleAllWikiReviews, toggleWikiReview, wikiReviewBatchSelectionState } from './wikiReviewSelection'
 import { allConflictPositionsSelected, buildConflictChoicesForPositions, conflictChoiceKey, conflictReviewDecision, type ConflictSelection } from './wikiConflictResolution'
 
@@ -152,6 +169,7 @@ const props = defineProps<{ modelValue: boolean; knowledgeBaseId: string }>()
 const emit = defineEmits<{ (e: 'update:modelValue', value: boolean): void; (e: 'count-change', value: number): void; (e: 'published'): void }>()
 const visible = computed({ get: () => props.modelValue, set: value => emit('update:modelValue', value) })
 const sets = ref<WikiChangeSet[]>([])
+const feedbackSignals = ref<WikiFeedbackSignal[]>([])
 const selected = ref<WikiChangeSet | null>(null)
 const category = ref<WikiChangeCategory | ''>('')
 const comment = ref('')
@@ -170,6 +188,7 @@ const knowledgeTypeOptions = ['knowledge', 'experience', 'question', 'hypothesis
 const maturityOptions = ['draft', 'pending_review', 'partially_verified', 'verified', 'disputed', 'outdated', 'unsupported', 'archived'].map(value => ({ label: value, value }))
 const batchSelection = computed(() => wikiReviewBatchSelectionState(selectedBatchIds.value, sets.value))
 const conflictCount = computed(() => sets.value.filter(set => set.change_category === 'conflict').length)
+const selectedFeedback = computed(() => feedbackSignals.value.find(signal => signal.change_set_id === selected.value?.id))
 
 watch(() => props.modelValue, open => { if (open) load() })
 watch(() => props.knowledgeBaseId, id => { if (id) load() }, { immediate: true })
@@ -177,8 +196,17 @@ watch(() => props.knowledgeBaseId, id => { if (id) load() }, { immediate: true }
 async function load() {
   loading.value = true
   try {
-    const res: any = await listWikiChangeSets(props.knowledgeBaseId, { status: 'pending', review_level: 'L1', change_category: category.value, limit: 100 })
+    const [changeSetResult, feedbackResult] = await Promise.allSettled([
+      listWikiChangeSets(props.knowledgeBaseId, { status: 'pending', review_level: 'L1', change_category: category.value, limit: 100 }),
+      listWikiFeedbackSignals(props.knowledgeBaseId, { limit: 200 }),
+    ])
+    if (changeSetResult.status === 'rejected') throw changeSetResult.reason
+
+    const res: any = changeSetResult.value
     sets.value = res.change_sets || []
+    feedbackSignals.value = feedbackResult.status === 'fulfilled'
+      ? ((feedbackResult.value as any).signals || [])
+      : []
     selectedBatchIds.value = normalizeWikiReviewSelection(selectedBatchIds.value, sets.value)
     emit('count-change', Number(res.total || 0))
     if (selected.value && !sets.value.some(item => item.id === selected.value?.id)) selected.value = null
@@ -372,6 +400,13 @@ function formatConfidence(value: number) { return `${Math.round(Number(value || 
 .review-context-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 16px 0; }
 .review-context-grid > div { display: flex; flex-direction: column; gap: 4px; padding: 10px; border-radius: 6px; background: var(--td-bg-color-secondarycontainer); }
 .review-context-grid span { color: var(--td-text-color-secondary); font-size: 12px; }
+.feedback-context { margin: 16px 0; padding: 14px; border: 1px solid var(--td-brand-color-light); border-radius: 8px; background: var(--td-brand-color-light); }
+.feedback-badges { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.feedback-conflict { margin: 8px 0; padding: 8px 10px; border-radius: 6px; color: var(--td-warning-color); background: var(--td-warning-color-1); }
+.feedback-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.feedback-fields > div { min-width: 0; padding: 10px; border-radius: 6px; background: var(--td-bg-color-container); }
+.feedback-fields span { color: var(--td-text-color-secondary); font-size: 12px; }
+.feedback-fields p { margin: 6px 0 0; white-space: pre-wrap; word-break: break-word; }
 .change-item { margin: 20px 0; }
 .section-title, .diff-title { font-weight: 600; margin-bottom: 8px; }
 .field-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }

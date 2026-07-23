@@ -1852,6 +1852,12 @@ func RegisterWikiPageRoutes(r *gin.RouterGroup, wikiHandler *handler.WikiPageHan
 		wiki.POST("/page-versions/:page_id/:version/rollback", g.OwnedWikiKBOrAdmin(), g.KBAccessWrite("kb_id"), wikiHandler.RollbackPageVersion)
 		wiki.POST("/page-versions/:page_id/:version/archive", g.OwnedWikiKBOrAdmin(), g.KBAccessWrite("kb_id"), wikiHandler.ArchivePageVersion)
 
+		// Feedback-driven correction loop. Signals create governed candidates;
+		// the existing review endpoints remain the only publication gate.
+		wikiRead.GET("/feedback-signals", g.Viewer(), g.KBAccessRead("kb_id"), wikiHandler.ListFeedbackSignals)
+		wikiRead.GET("/feedback-signals/:signal_id", g.Viewer(), g.KBAccessRead("kb_id"), wikiHandler.GetFeedbackSignal)
+		wiki.POST("/feedback-signals", g.OwnedWikiKBOrAdmin(), g.KBAccessWrite("kb_id"), wikiHandler.SubmitFeedbackSignal)
+
 		// Folder tree (directory nodes)
 		wikiRead.GET("/folders", g.Viewer(), g.KBAccessRead("kb_id"), wikiHandler.ListFolders)
 		wiki.POST("/folders", g.OwnedWikiKBOrAdmin(), g.KBAccessWrite("kb_id"), wikiHandler.CreateFolder)

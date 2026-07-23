@@ -177,7 +177,7 @@ func registerMCPTools(s *server.MCPServer, store *adminStore, client *apiClient)
 		mcp.WithArray("recalled_node_ids", mcp.Description("All node IDs returned in recalled_nodes for the related answer."), mcp.WithStringItems()),
 		mcp.WithArray("target_node_ids", mcp.Description("Only recalled node IDs specifically identified as wrong. Omit when unclear."), mcp.WithStringItems()),
 		mcp.WithOutputSchema[feedbackReceipt](),
-	), auditTool(store, "submit_knowledge_feedback", client.knowledgeBaseID, store.feedbackTool))
+	), auditTool(store, "submit_knowledge_feedback", client.knowledgeBaseID, client.feedbackTool))
 	s.AddTool(mcp.NewTool("search_knowledge_bases",
 		mcp.WithDescription("Search knowledge bases accessible to the configured WeKnora API key. Returns IDs that can be used with the other MCP tools."),
 		mcp.WithString("query", mcp.Description("Optional case-insensitive keyword matched against knowledge base name and description. Omit to list accessible knowledge bases.")),

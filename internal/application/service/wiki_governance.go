@@ -745,3 +745,12 @@ func (s *wikiGovernanceService) RecordGovernanceMetric(ctx context.Context, even
 func (s *wikiGovernanceService) CreateRollbackChangeSet(ctx context.Context, kbID, appliedChangeSetID, requestedBy string) (*types.WikiChangeSet, error) {
 	return s.repo.CreateRollbackChangeSet(ctx, kbID, appliedChangeSetID, requestedBy)
 }
+func (s *wikiGovernanceService) SubmitFeedbackSignal(ctx context.Context, tenantID uint64, kbID, actor string, input *types.WikiFeedbackSignalInput) (*types.WikiFeedbackSignal, error) {
+	return s.repo.SubmitFeedbackSignal(ctx, tenantID, kbID, actor, input)
+}
+func (s *wikiGovernanceService) ListFeedbackSignals(ctx context.Context, req types.WikiFeedbackSignalListRequest) ([]*types.WikiFeedbackSignal, int64, error) {
+	return s.repo.ListFeedbackSignals(ctx, req)
+}
+func (s *wikiGovernanceService) GetFeedbackSignal(ctx context.Context, kbID, id string) (*types.WikiFeedbackSignal, error) {
+	return s.repo.GetFeedbackSignal(ctx, kbID, id)
+}
