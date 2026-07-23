@@ -1,19 +1,17 @@
 <template>
-  <t-drawer v-model:visible="visible" header="反馈驱动的知识更新" size="1180px" :footer="false" destroy-on-close>
+  <t-drawer v-model:visible="visible" header="知识纠错审核" size="1180px" :footer="false" destroy-on-close>
     <div class="review-workbench">
       <header class="workflow-header">
         <div>
-          <h3>反馈审核工作台</h3>
-          <p>从反馈信号定位知识节点，生成修正候选，检测冲突并发布为可回滚的新版本。</p>
+          <h3>知识纠错审核</h3>
+          <p>判断哪个说法正确，必要时修改，然后发布。</p>
         </div>
         <div class="workflow-steps" aria-label="反馈处理流程">
-          <div class="workflow-step done"><b>1</b><span>信号入库</span></div>
+          <div class="workflow-step done"><b>1</b><span>查看反馈</span></div>
           <i></i>
-          <div class="workflow-step done"><b>2</b><span>归因定位</span></div>
+          <div class="workflow-step active"><b>2</b><span>选择说法</span></div>
           <i></i>
-          <div class="workflow-step active"><b>3</b><span>审核修正</span></div>
-          <i></i>
-          <div class="workflow-step"><b>4</b><span>发布验证</span></div>
+          <div class="workflow-step"><b>3</b><span>确认发布</span></div>
         </div>
       </header>
       <div class="review-layout">
@@ -22,24 +20,11 @@
           <t-select v-model="category" :options="categoryOptions" clearable placeholder="全部反馈类型" @change="load" />
           <t-button variant="outline" :loading="loading" @click="load">刷新</t-button>
         </div>
-        <div v-if="batchSelection.total" class="batch-selector">
-          <t-checkbox :checked="batchSelection.checked" :indeterminate="batchSelection.indeterminate"
-            @change="toggleAllBatch">
-            全选当前可批量审核项（{{ batchSelection.total }}）
-          </t-checkbox>
-          <span v-if="conflictCount">{{ conflictCount }} 条冲突需逐条裁决</span>
-        </div>
-        <div v-if="selectedBatchIds.length" class="batch-actions">
-          <span>已选 {{ selectedBatchIds.length }} 条非冲突变更</span>
-          <t-button size="small" theme="primary" :loading="submitting" @click="submitBatch">批量批准</t-button>
-        </div>
         <div class="queue-title"><span>待处理信号</span><t-tag size="small" theme="primary">{{ sets.length }}</t-tag></div>
         <div v-if="!loading && sets.length === 0" class="review-empty">暂无待处理反馈</div>
         <div v-for="set in sets" :key="set.id" class="review-row" :class="{ active: selected?.id === set.id }"
           @click="select(set)">
           <div class="review-row-top">
-            <t-checkbox v-if="set.change_category !== 'conflict'" :checked="selectedBatchIds.includes(set.id)"
-              @click.stop @change="toggleBatch(set.id, $event)" />
             <t-tag size="small" :theme="categoryTheme(set.change_category)">{{ categoryLabel(set.change_category) }}</t-tag>
             <span>{{ set.items?.[0]?.after?.title || set.items?.[0]?.page_slug || '未命名节点' }}</span>
           </div>
@@ -58,39 +43,20 @@
             <div>
               <span class="eyebrow">待审核知识更新</span>
               <h3>{{ selected.items?.[0]?.after?.title || selected.items?.[0]?.page_slug }}</h3>
-              <div class="detail-meta">
-                <t-tag :theme="categoryTheme(selected.change_category)">{{ categoryLabel(selected.change_category) }}</t-tag>
-                <t-tag variant="light-outline">{{ selected.review_level || 'L1' }} 人工审核</t-tag>
-                <t-tag v-if="selectedFeedback" :theme="riskTheme(selectedFeedback.risk_level)" variant="light">{{ riskLabel(selectedFeedback.risk_level) }}</t-tag>
-              </div>
+              <div class="detail-meta"><t-tag :theme="categoryTheme(selected.change_category)">{{ categoryLabel(selected.change_category) }}</t-tag></div>
             </div>
             <div class="version-result"><span>审核通过后</span><strong>发布为节点新版本</strong><small>可在版本历史中回滚</small></div>
           </div>
 
           <section v-if="selectedFeedback" class="feedback-context">
             <div class="section-heading">
-              <div><span class="section-index">01</span><div><strong>反馈信号</strong><p>审核为什么需要修改这条知识</p></div></div>
-              <div class="feedback-badges">
-                <t-tag size="small" theme="primary">{{ sourceLabel(selectedFeedback.source) }}</t-tag>
-                <t-tag size="small" variant="light-outline">置信度 {{ formatConfidence(selectedFeedback.confidence) }}</t-tag>
-              </div>
+              <div><span class="section-index">01</span><div><strong>查看反馈</strong><p>用户认为当前说法哪里不准确</p></div></div>
             </div>
             <blockquote>{{ selectedFeedback.feedback_text }}</blockquote>
             <div class="feedback-fields compact">
-              <div v-if="selectedFeedback.original_question"><span>触发问题</span><p>{{ selectedFeedback.original_question }}</p></div>
-              <div v-if="selectedFeedback.answer_excerpt"><span>原回答</span><p>{{ selectedFeedback.answer_excerpt }}</p></div>
-              <div v-if="selectedFeedback.suggested_correction" class="suggestion"><span>建议修正方向</span><p>{{ selectedFeedback.suggested_correction }}</p></div>
-            </div>
-          </section>
-
-          <section class="attribution-card">
-            <div class="section-heading">
-              <div><span class="section-index">02</span><div><strong>归因定位</strong><p>反馈已关联到对应知识节点和来源记录</p></div></div>
-            </div>
-            <div class="attribution-grid">
-              <div><span>目标节点</span><strong>{{ selected.items?.[0]?.after?.title || selected.items?.[0]?.page_slug }}</strong><small>{{ selected.items?.[0]?.page_slug }}</small></div>
-              <div><span>归因结果</span><strong>{{ selectedFeedback ? formatConfidence(selectedFeedback.confidence) : '系统候选' }}</strong><small>{{ selectedFeedback?.attributed_node_ids?.length || selected.items?.length || 0 }} 个关联节点</small></div>
-              <div><span>处理策略</span><strong>{{ selectedFeedback?.strategy === 'auto_update' ? '自动更新' : '人工审核' }}</strong><small>{{ reasonText(selected.reasons) }}</small></div>
+              <div v-if="selectedFeedback.original_question"><span>用户当时问</span><p>{{ selectedFeedback.original_question }}</p></div>
+              <div v-if="selectedFeedback.answer_excerpt"><span>系统当时回答</span><p>{{ selectedFeedback.answer_excerpt }}</p></div>
+              <div v-if="selectedFeedback.suggested_correction" class="suggestion"><span>根据反馈整理出的新说法</span><p>{{ selectedFeedback.suggested_correction }}</p></div>
             </div>
           </section>
 
@@ -132,25 +98,35 @@
           </section>
           <section v-for="item in selected.items" :key="item.id" class="change-item">
             <div class="section-heading">
-              <div><span class="section-index">{{ isConflict ? '04' : '03' }}</span><div><strong>修正候选</strong><p>{{ operationLabel(item.operation) }} {{ item.page_slug }}</p></div></div>
-              <div class="field-tags"><t-tag v-for="field in visibleChangedFields(item.changed_fields)" :key="field" size="small" variant="light-outline">{{ fieldLabel(field) }}</t-tag></div>
+              <div><span class="section-index">{{ isConflict ? '04' : '02' }}</span><div><strong>哪个说法是对的？</strong><p>先选择，再在下方调整最终内容</p></div></div>
             </div>
-            <div v-if="overrides[item.id]" class="review-edit-fields">
-              <t-select v-model="overrides[item.id].knowledge_type" :options="knowledgeTypeOptions" placeholder="知识类型" />
-              <t-select v-model="overrides[item.id].maturity_status" :options="maturityOptions" placeholder="成熟度" />
+            <div class="decision-grid">
+              <button type="button" class="decision-option" :class="{ selected: decisionChoices[item.id] === 'existing' }" @click="chooseDecision(item, 'existing')">
+                <span class="decision-label">保留现有说法</span><strong v-if="decisionChoices[item.id] === 'existing'">✓ 已选择</strong>
+                <p>{{ excerpt(pageContent(item.before)) }}</p>
+              </button>
+              <button type="button" class="decision-option" :class="{ selected: decisionChoices[item.id] === 'feedback' }" @click="chooseDecision(item, 'feedback')">
+                <span class="decision-label">采用反馈说法</span><strong v-if="decisionChoices[item.id] === 'feedback'">✓ 已选择</strong>
+                <p>{{ selectedFeedback?.suggested_correction || excerpt(pageContent(item.after)) }}</p>
+              </button>
+              <button type="button" class="decision-option" :class="{ selected: decisionChoices[item.id] === 'custom' }" @click="chooseDecision(item, 'custom')">
+                <span class="decision-label">两者都不准确，我来修改</span><strong v-if="decisionChoices[item.id] === 'custom'">✓ 已选择</strong>
+                <p>从当前内容开始编辑，写出最终应发布的说法。</p>
+              </button>
             </div>
-            <div class="diff-grid">
-              <div class="diff-column">
-                <div class="diff-title"><span>当前已发布内容</span><t-tag size="small" variant="light-outline">旧版本</t-tag></div>
-                <div class="content-preview">{{ pageContent(item.before) || '（当前没有正文）' }}</div>
-              </div>
-              <div class="diff-column">
-                <div class="diff-title"><span>候选修正版</span><t-tag size="small" theme="success">可编辑</t-tag></div>
-                <t-textarea v-if="overrides[item.id]" v-model="overrides[item.id].content" class="candidate-editor" :autosize="{ minRows: 10, maxRows: 22 }" placeholder="编辑审核通过后要发布的正文" />
-              </div>
+            <div class="final-editor">
+              <div class="diff-title"><span>最终采用的说法</span><small>选择上方说法后仍可继续修改</small></div>
+              <t-textarea v-if="overrides[item.id]" v-model="overrides[item.id].content" class="candidate-editor" :autosize="{ minRows: 10, maxRows: 22 }" placeholder="请先选择一个说法，再检查并修改最终内容" @focus="markCustom(item.id)" />
             </div>
             <details class="technical-details">
-              <summary>查看溯源证据与技术详情（{{ item.evidence_chunk_ids?.length || 0 }} 条）</summary>
+              <summary>查看处理详情</summary>
+              <div class="technical-summary">
+                <span>节点：{{ item.page_slug }}</span>
+                <span>来源：{{ sourceLabel(selectedFeedback?.source) }}</span>
+                <span>风险：{{ riskLabel(selectedFeedback?.risk_level) }}</span>
+                <span>置信度：{{ selectedFeedback ? formatConfidence(selectedFeedback.confidence) : '—' }}</span>
+                <span>处理方式：{{ selectedFeedback?.strategy || '人工审核' }}</span>
+              </div>
               <div class="evidence">证据 Chunk：{{ item.evidence_chunk_ids?.join(', ') || '无' }}</div>
               <div v-for="(excerpt, chunkId) in item.evidence_excerpts || {}" :key="chunkId" class="evidence-excerpt"><div class="diff-title">Chunk {{ chunkId }}</div><pre>{{ excerpt }}</pre></div>
               <div class="evidence-excerpt"><div class="diff-title">完整字段变更</div><pre>{{ pretty({ before: item.before, after: item.after }) }}</pre></div>
@@ -162,8 +138,8 @@
             <t-button variant="outline" :disabled="!mergeTargetSlug.trim()" :loading="submitting" @click="submit('approved', mergeTargetSlug)">合并并批准</t-button>
           </div>
           <section class="publish-card">
-            <div class="section-heading"><div><span class="section-index">{{ isConflict ? '05' : '04' }}</span><div><strong>审核与发布</strong><p>批准后更新目标节点，并创建可追溯的新版本</p></div></div></div>
-            <t-textarea v-model="comment" :autosize="{ minRows: 3, maxRows: 6 }" placeholder="填写审核意见；拒绝时必须说明原因" />
+            <div class="section-heading"><div><span class="section-index">{{ isConflict ? '05' : '03' }}</span><div><strong>确认发布</strong><p>发布后会生成一个新版本，之后仍可回滚</p></div></div></div>
+            <t-textarea v-model="comment" :autosize="{ minRows: 2, maxRows: 5 }" placeholder="审核备注（可选；拒绝反馈时必须填写原因）" />
           <div class="review-actions">
             <template v-if="isConflict">
               <t-button variant="outline" :loading="submitting" @click="deferConflict">暂缓审核</t-button>
@@ -176,8 +152,8 @@
               </template>
             </template>
             <template v-else>
-              <t-button theme="danger" variant="outline" :loading="submitting" @click="submit('rejected')">拒绝候选</t-button>
-              <t-button theme="primary" :loading="submitting" @click="submit('approved')">审核通过并发布新版本</t-button>
+              <t-button theme="danger" variant="outline" :loading="submitting" @click="submit('rejected')">拒绝这条反馈</t-button>
+              <t-button theme="primary" :disabled="!allDecisionsMade" :loading="submitting" @click="submit('approved')">确认修改并发布</t-button>
             </template>
           </div>
           </section>
@@ -207,18 +183,15 @@ const comment = ref('')
 const loading = ref(false)
 const detailLoading = ref(false)
 const submitting = ref(false)
-const selectedBatchIds = ref<string[]>([])
 const overrides = ref<Record<string, { knowledge_type: string; maturity_status: string; content: string; summary: string; applicability_text: string }>>({})
+type DecisionChoice = 'existing' | 'feedback' | 'custom'
+const decisionChoices = ref<Record<string, DecisionChoice>>({})
 const mergeTargetSlug = ref('')
 const conflictSelections = ref<ConflictSelection>({})
 const categoryOptions: { label: string; value: WikiChangeCategory }[] = [
   { label: '新增', value: 'addition' }, { label: '普通更新', value: 'update' }, { label: '冲突', value: 'conflict' },
   { label: '纠错', value: 'correction' }, { label: '旧版本淘汰', value: 'retirement' }, { label: '合并/重复', value: 'merge_duplicate' },
 ]
-const knowledgeTypeOptions = ['knowledge', 'experience', 'question', 'hypothesis', 'experiment', 'metric', 'procedure', 'failure', 'case', 'rule'].map(value => ({ label: value, value }))
-const maturityOptions = ['draft', 'pending_review', 'partially_verified', 'verified', 'disputed', 'outdated', 'unsupported', 'archived'].map(value => ({ label: value, value }))
-const batchSelection = computed(() => wikiReviewBatchSelectionState(selectedBatchIds.value, sets.value))
-const conflictCount = computed(() => sets.value.filter(set => set.change_category === 'conflict').length)
 const selectedFeedback = computed(() => feedbackSignals.value.find(signal => signal.change_set_id === selected.value?.id))
 function feedbackFor(set: WikiChangeSet) { return feedbackSignals.value.find(signal => signal.change_set_id === set.id) }
 
@@ -239,7 +212,6 @@ async function load() {
     feedbackSignals.value = feedbackResult.status === 'fulfilled'
       ? ((feedbackResult.value as any).signals || [])
       : []
-    selectedBatchIds.value = normalizeWikiReviewSelection(selectedBatchIds.value, sets.value)
     emit('count-change', Number(res.total || 0))
     if (selected.value && !sets.value.some(item => item.id === selected.value?.id)) selected.value = null
   } catch (error: any) {
@@ -256,6 +228,7 @@ async function select(set: WikiChangeSet) {
     conflictSelections.value = {}
     mergeTargetSlug.value = String(selected.value?.items?.[0]?.after?.page_metadata?.possible_duplicate_slug || '')
     overrides.value = {}
+    decisionChoices.value = {}
     for (const item of selected.value?.items || []) {
       overrides.value[item.id] = {
         knowledge_type: String(item.after?.knowledge_type || ''),
@@ -272,6 +245,10 @@ async function select(set: WikiChangeSet) {
 
 async function submit(decision: 'approved' | 'rejected', mergeIntoSlug = '') {
   if (!selected.value) return
+  if (decision === 'approved' && !isConflict.value && !allDecisionsMade.value) {
+    MessagePlugin.warning('请先为每一项选择正确说法')
+    return
+  }
   if (decision === 'rejected' && !comment.value.trim()) {
     MessagePlugin.warning('请填写拒绝原因')
     return
@@ -354,34 +331,28 @@ async function deferConflict() {
   } finally { submitting.value = false }
 }
 
-function toggleBatch(id: string, checked: boolean) {
-  selectedBatchIds.value = toggleWikiReview(selectedBatchIds.value, sets.value, id, checked)
-}
-
-function toggleAllBatch(checked: boolean) {
-  selectedBatchIds.value = toggleAllWikiReviews(selectedBatchIds.value, sets.value, checked)
-}
-
-async function submitBatch() {
-  const batchIds = normalizeWikiReviewSelection(selectedBatchIds.value, sets.value)
-  if (!batchIds.length) return
-  selectedBatchIds.value = batchIds
-  submitting.value = true
-  try {
-    const res: any = await batchReviewWikiChangeSets(props.knowledgeBaseId, { change_set_ids: batchIds, decision: 'approved', comment: '前端 L1 批量审核' })
-    const succeeded = Number(res.succeeded || 0)
-    if (succeeded < batchIds.length) MessagePlugin.warning(`已批准 ${succeeded} 条，其余项目请查看返回原因`)
-    else MessagePlugin.success(`已批准 ${succeeded} 条 L1 变更`)
-    selectedBatchIds.value = []
-    await load()
-    if (succeeded > 0) emit('published')
-  } catch (error: any) {
-    MessagePlugin.error(error?.message || '批量审核失败')
-  } finally { submitting.value = false }
-}
-
 function pretty(value: unknown) { return value ? JSON.stringify(value, null, 2) : '（无，这是新建页面）' }
 function pageContent(page?: Record<string, any>) { return String(page?.content || page?.summary || '') }
+function excerpt(value: string, limit = 180) {
+  const text = value.replace(/\s+/g, ' ').trim()
+  return text.length > limit ? `${text.slice(0, limit)}…` : (text || '（暂无内容）')
+}
+function feedbackDraft(item: WikiChangeItem) {
+  return String(item.after?.content || selectedFeedback.value?.suggested_correction || pageContent(item.before))
+}
+function chooseDecision(item: WikiChangeItem, choice: DecisionChoice) {
+  decisionChoices.value = { ...decisionChoices.value, [item.id]: choice }
+  const override = overrides.value[item.id]
+  if (!override) return
+  if (choice === 'existing') override.content = pageContent(item.before)
+  if (choice === 'feedback') override.content = feedbackDraft(item)
+  if (choice === 'custom' && !override.content.trim()) override.content = pageContent(item.before)
+}
+function markCustom(itemId: string) {
+  if (decisionChoices.value[itemId]) return
+  decisionChoices.value = { ...decisionChoices.value, [itemId]: 'custom' }
+}
+const allDecisionsMade = computed(() => isConflict.value || Boolean(selected.value?.items?.length && selected.value.items.every(item => decisionChoices.value[item.id])))
 function visibleChangedFields(fields?: string[]) { return (fields || []).filter(field => ['content', 'summary', 'title', 'knowledge_type', 'maturity_status'].includes(field)) }
 function fieldLabel(field: string) { return ({ content: '正文', summary: '摘要', title: '标题', knowledge_type: '知识类型', maturity_status: '成熟度' } as Record<string, string>)[field] || field }
 function sourceLabel(source?: string) { return ({ mcp: 'MCP 调用', mcp_feedback: 'MCP 反馈', manual_correction: '人工纠错', agent_answer: 'Agent 回答', user_feedback: '用户反馈' } as Record<string, string>)[source || ''] || source || '系统检查' }
@@ -479,6 +450,16 @@ function formatConfidence(value: number) { return `${Math.round(Number(value || 
 .field-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
 .review-edit-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
 .wide-field { grid-column: 1 / -1; }
+.decision-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 16px; }
+.decision-option { position: relative; min-width: 0; min-height: 142px; padding: 14px; color: inherit; text-align: left; cursor: pointer; border: 2px solid var(--td-component-border); border-radius: 10px; background: var(--td-bg-color-secondarycontainer); transition: .18s ease; }
+.decision-option:hover { border-color: var(--td-brand-color-5); transform: translateY(-1px); }
+.decision-option.selected { border-color: var(--td-brand-color); background: var(--td-brand-color-light); box-shadow: 0 4px 14px rgba(0,0,0,.05); }
+.decision-option > strong { position: absolute; top: 13px; right: 13px; color: var(--td-brand-color); font-size: 12px; }
+.decision-label { display: block; padding-right: 58px; font-weight: 650; }
+.decision-option p { display: -webkit-box; overflow: hidden; margin: 12px 0 0; color: var(--td-text-color-secondary); font-size: 13px; line-height: 1.65; -webkit-line-clamp: 4; -webkit-box-orient: vertical; }
+.final-editor { padding: 14px; border: 1px solid var(--td-brand-color-3); border-radius: 10px; background: var(--td-bg-color-container); }
+.final-editor .diff-title small { color: var(--td-text-color-secondary); font-weight: 400; }
+.technical-summary { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-bottom: 10px; }
 .conflict-box { margin: 0 0 14px; padding: 17px; border: 1px solid var(--td-error-color-4); border-radius: 11px; background: var(--td-error-color-1); }
 .conflict-assessment { margin: 12px 0; padding: 12px; border-radius: 6px; background: var(--td-bg-color-container); }
 .conflict-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
@@ -508,5 +489,5 @@ pre { margin: 0; padding: 12px; max-height: 340px; overflow: auto; white-space: 
 .technical-details[open] summary { margin-bottom: 10px; color: var(--td-text-color-primary); }
 .review-empty, .review-loading { display: grid; place-items: center; min-height: 180px; color: var(--td-text-color-placeholder); }
 @media (max-width: 1000px) { .workflow-header { align-items: flex-start; flex-direction: column; } .review-layout { grid-template-columns: 290px 1fr; } .workflow-step span { display: none; } .attribution-grid { grid-template-columns: 1fr; } }
-@media (max-width: 760px) { .review-layout { grid-template-columns: 1fr; } .review-list { max-height: 240px; border-right: 0; border-bottom: 1px solid var(--td-component-border); } .diff-grid, .feedback-fields { grid-template-columns: 1fr; } .detail-head { flex-direction: column; } }
+@media (max-width: 760px) { .review-layout { grid-template-columns: 1fr; } .review-list { max-height: 240px; border-right: 0; border-bottom: 1px solid var(--td-component-border); } .diff-grid, .feedback-fields, .decision-grid { grid-template-columns: 1fr; } .detail-head { flex-direction: column; } }
 </style>
