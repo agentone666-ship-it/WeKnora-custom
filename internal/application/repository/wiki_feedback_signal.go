@@ -60,83 +60,41 @@ func appendFeedbackReason(reasons map[string][]string, pageID, reason string) {
 	reasons[pageID] = append(reasons[pageID], reason)
 }
 
-// feedbackAffectedPages expands the explicitly attributed nodes to every
-// directly related page that can repeat or depend on the disputed claim. The
-// expansion uses the wiki graph plus titles/aliases mentioned in the feedback;
-// this avoids silently fixing only the page returned by the original answer.
-func feedbackAffectedPages(allPages []types.WikiPage, seedIDs types.StringArray, in *types.WikiFeedbackSignalInput) ([]types.WikiPage, map[string][]string) {
-	selected := make(map[string]bool, len(seedIDs))
+// feedbackAffectedPages attributes feedback only within the pages recalled for
+// the original question. Explicit targets are authoritative. Without explicit
+// targets, the feedback/question context may narrow the recalled set, but it
+// must never expand into unrelated pages elsewhere in the knowledge base.
+func feedbackAffectedPages(recalledPages []types.WikiPage, targetIDs types.StringArray, in *types.WikiFeedbackSignalInput) ([]types.WikiPage, map[string][]string) {
+	selected := make(map[string]bool, len(targetIDs))
 	reasons := make(map[string][]string)
-	seedSlugs := make(map[string]bool)
-	pageBySlug := make(map[string]*types.WikiPage, len(allPages))
-	for i := range allPages {
-		pageBySlug[allPages[i].Slug] = &allPages[i]
-	}
-	for _, id := range seedIDs {
+	for _, id := range targetIDs {
 		selected[id] = true
 		appendFeedbackReason(reasons, id, "explicit_attribution")
 	}
-	for i := range allPages {
-		if selected[allPages[i].ID] {
-			seedSlugs[allPages[i].Slug] = true
-		}
-	}
 
-	// Add both directions of every direct wiki relation around a seed.
-	neighborSlugs := make(map[string]bool)
-	for i := range allPages {
-		page := &allPages[i]
-		if selected[page.ID] {
-			for _, slug := range append(append(types.StringArray(nil), page.OutLinks...), page.InLinks...) {
-				neighborSlugs[slug] = true
-			}
-		}
-		for _, slug := range append(append(types.StringArray(nil), page.OutLinks...), page.InLinks...) {
-			if seedSlugs[slug] {
+	if len(targetIDs) == 0 {
+		contextText := strings.Join([]string{in.FeedbackText, in.OriginalQuestion, in.AnswerExcerpt, in.SuggestedCorrection}, "\n")
+		for i := range recalledPages {
+			page := &recalledPages[i]
+			haystack := strings.Join([]string{page.Title, page.Summary, page.Content}, "\n")
+			if strings.TrimSpace(in.AnswerExcerpt) != "" && feedbackTextContains(haystack, in.AnswerExcerpt) {
 				selected[page.ID] = true
-				appendFeedbackReason(reasons, page.ID, "direct_wiki_relation")
+				appendFeedbackReason(reasons, page.ID, "answer_excerpt_match")
 			}
-		}
-	}
-	for slug := range neighborSlugs {
-		if page := pageBySlug[slug]; page != nil {
-			selected[page.ID] = true
-			appendFeedbackReason(reasons, page.ID, "direct_wiki_relation")
-		}
-	}
-
-	contextText := strings.Join([]string{in.FeedbackText, in.OriginalQuestion, in.AnswerExcerpt, in.SuggestedCorrection}, "\n")
-	terms := make(map[string]bool)
-	// Titles and aliases are the wiki's own vocabulary. If one is explicitly
-	// mentioned by the feedback, every page repeating it is affected.
-	for i := range allPages {
-		page := &allPages[i]
-		for _, term := range append(types.StringArray{page.Title}, page.Aliases...) {
-			term = strings.TrimSpace(term)
-			if len([]rune(term)) >= 2 && feedbackTextContains(contextText, term) {
-				terms[term] = true
-			}
-		}
-	}
-	for i := range allPages {
-		page := &allPages[i]
-		haystack := strings.Join([]string{page.Title, page.Summary, page.Content}, "\n")
-		if strings.TrimSpace(in.AnswerExcerpt) != "" && feedbackTextContains(haystack, in.AnswerExcerpt) {
-			selected[page.ID] = true
-			appendFeedbackReason(reasons, page.ID, "answer_excerpt_match")
-		}
-		for term := range terms {
-			if feedbackTextContains(haystack, term) {
-				selected[page.ID] = true
-				appendFeedbackReason(reasons, page.ID, "mentioned_wiki_term:"+term)
+			for _, term := range append(types.StringArray{page.Title}, page.Aliases...) {
+				term = strings.TrimSpace(term)
+				if len([]rune(term)) >= 2 && feedbackTextContains(contextText, term) {
+					selected[page.ID] = true
+					appendFeedbackReason(reasons, page.ID, "recalled_page_mention:"+term)
+				}
 			}
 		}
 	}
 
 	affected := make([]types.WikiPage, 0, len(selected))
-	for i := range allPages {
-		if selected[allPages[i].ID] {
-			affected = append(affected, allPages[i])
+	for i := range recalledPages {
+		if selected[recalledPages[i].ID] {
+			affected = append(affected, recalledPages[i])
 		}
 	}
 	return affected, reasons
@@ -153,14 +111,14 @@ func (r *wikiGovernanceRepository) SubmitFeedbackSignal(ctx context.Context, ten
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, err
 	}
-	nodeIDs := append(types.StringArray(nil), in.TargetNodeIDs...)
+	candidateNodeIDs := append(types.StringArray(nil), in.TargetNodeIDs...)
 	confidence := 1.0
-	if len(nodeIDs) == 0 {
-		nodeIDs = append(nodeIDs, in.RecalledNodeIDs...)
+	if len(candidateNodeIDs) == 0 {
+		candidateNodeIDs = append(candidateNodeIDs, in.RecalledNodeIDs...)
 		confidence = 0.7
 	}
-	if len(nodeIDs) == 0 {
-		return nil, errors.New("feedback cannot be attributed: target_node_ids or recalled_node_ids is required")
+	if len(candidateNodeIDs) == 0 {
+		confidence = 0.3
 	}
 	now := time.Now()
 	signal := &types.WikiFeedbackSignal{ID: uuid.NewString(), TenantID: tenantID, KnowledgeBaseID: kbID, Source: strings.TrimSpace(in.Source), SignalType: strings.TrimSpace(in.SignalType), FeedbackText: strings.TrimSpace(in.FeedbackText), OriginalQuestion: in.OriginalQuestion, AnswerExcerpt: in.AnswerExcerpt, SuggestedCorrection: in.SuggestedCorrection, RelatedRequestID: in.RelatedRequestID, SessionID: in.SessionID, AgentID: in.AgentID, RecalledNodeIDs: in.RecalledNodeIDs, TargetNodeIDs: in.TargetNodeIDs, Status: types.WikiFeedbackReceived, Strategy: "manual_review", RiskLevel: feedbackRisk(in), Confidence: confidence, IdempotencyKey: key, CreatedBy: actor, CreatedAt: now, UpdatedAt: now}
@@ -171,13 +129,17 @@ func (r *wikiGovernanceRepository) SubmitFeedbackSignal(ctx context.Context, ten
 		signal.SignalType = "other"
 	}
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var allPages []types.WikiPage
-		if err := tx.Where("knowledge_base_id = ? AND status <> ?", kbID, types.WikiPageStatusArchived).Find(&allPages).Error; err != nil {
-			return err
+		var recalledPages []types.WikiPage
+		if len(candidateNodeIDs) > 0 {
+			if err := tx.Where("knowledge_base_id = ? AND status <> ? AND id IN ?", kbID, types.WikiPageStatusArchived, candidateNodeIDs).Find(&recalledPages).Error; err != nil {
+				return err
+			}
 		}
-		pages, attributionReasons := feedbackAffectedPages(allPages, nodeIDs, in)
+		pages, attributionReasons := feedbackAffectedPages(recalledPages, in.TargetNodeIDs, in)
 		if len(pages) == 0 {
-			return errors.New("no matching wiki nodes were found")
+			signal.Strategy = "manual_attribution"
+			signal.ConflictSummary = "未能在原问题召回节点中确认具体修正目标，反馈已保留待人工归因"
+			return tx.Create(signal).Error
 		}
 		pageIDs := make([]string, 0, len(pages))
 		for i := range pages {
