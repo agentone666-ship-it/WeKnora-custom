@@ -20,13 +20,13 @@
           <t-select v-model="category" :options="categoryOptions" clearable placeholder="全部反馈类型" @change="load" />
           <t-button variant="outline" :loading="loading" @click="load">刷新</t-button>
         </div>
-        <div class="queue-title"><span>待处理信号</span><t-tag size="small" theme="primary">{{ sets.length }}</t-tag></div>
+        <div class="queue-title"><span>待审核反馈</span><t-tag size="small" theme="primary">{{ sets.length }}</t-tag></div>
         <div v-if="!loading && sets.length === 0" class="review-empty">暂无待处理反馈</div>
         <div v-for="set in sets" :key="set.id" class="review-row" :class="{ active: selected?.id === set.id }"
           @click="select(set)">
           <div class="review-row-top">
             <t-tag size="small" :theme="categoryTheme(set.change_category)">{{ categoryLabel(set.change_category) }}</t-tag>
-            <span>{{ set.items?.[0]?.after?.title || set.items?.[0]?.page_slug || '未命名节点' }}</span>
+            <span>{{ set.items?.[0]?.after?.title || set.items?.[0]?.page_slug || '未命名内容' }}</span>
           </div>
           <p class="queue-feedback">{{ feedbackFor(set)?.feedback_text || reasonText(set.reasons) }}</p>
           <div class="review-row-meta">
@@ -41,59 +41,58 @@
         <template v-else-if="selected">
           <div class="detail-head">
             <div>
-              <span class="eyebrow">待审核知识更新</span>
+              <span class="eyebrow">待审核内容</span>
               <h3>{{ selected.items?.[0]?.after?.title || selected.items?.[0]?.page_slug }}</h3>
               <div class="detail-meta"><t-tag :theme="categoryTheme(selected.change_category)">{{ categoryLabel(selected.change_category) }}</t-tag></div>
             </div>
-            <div class="version-result"><span>审核通过后</span><strong>发布为节点新版本</strong><small>可在版本历史中回滚</small></div>
+            <div class="version-result"><span>审核通过后</span><strong>保存为新版本</strong><small>旧版本仍会保留，可随时恢复</small></div>
           </div>
           <div v-if="selected.items?.length > 1" class="affected-notice">
-            <strong>已找到 {{ selected.items.length }} 个相关节点</strong>
-            <span>下面每个节点都需要确认最终说法，发布时会一起更新。</span>
+            <strong>这条反馈关联了 {{ selected.items.length }} 条知识</strong>
+            <span>请逐条确认，发布时会一起更新。</span>
           </div>
 
           <section v-if="selectedFeedback" class="feedback-context">
             <div class="section-heading">
               <div><span class="section-index">01</span><div><strong>查看反馈</strong><p>用户认为当前说法哪里不准确</p></div></div>
             </div>
-            <blockquote>{{ selectedFeedback.feedback_text }}</blockquote>
+            <div class="markdown-content feedback-markdown" v-html="renderMarkdown(selectedFeedback.feedback_text)"></div>
             <div class="feedback-fields compact">
-              <div v-if="selectedFeedback.original_question"><span>用户当时问</span><p>{{ selectedFeedback.original_question }}</p></div>
-              <div v-if="selectedFeedback.answer_excerpt"><span>系统当时回答</span><p>{{ selectedFeedback.answer_excerpt }}</p></div>
-              <div v-if="selectedFeedback.suggested_correction" class="suggestion"><span>根据反馈整理出的新说法</span><p>{{ selectedFeedback.suggested_correction }}</p></div>
+              <div v-if="selectedFeedback.original_question"><span>用户当时问</span><div class="markdown-content" v-html="renderMarkdown(selectedFeedback.original_question)"></div></div>
+              <div v-if="selectedFeedback.answer_excerpt"><span>系统当时回答</span><div class="markdown-content" v-html="renderMarkdown(selectedFeedback.answer_excerpt)"></div></div>
+              <div v-if="selectedFeedback.suggested_correction" class="suggestion"><span>根据反馈整理出的新说法</span><div class="markdown-content" v-html="renderMarkdown(selectedFeedback.suggested_correction)"></div></div>
             </div>
           </section>
 
           <section v-if="isConflict" class="conflict-box">
-            <div class="section-heading"><div><span class="section-index">03</span><div><strong>冲突检测</strong><p>逐项选择最终保留的知识口径</p></div></div></div>
+            <div class="section-heading"><div><span class="section-index">03</span><div><strong>发现说法不一致</strong><p>请逐项选择最终保留的说法</p></div></div></div>
             <div v-if="conflictAssessments.length === 0" class="conflict-empty">
               这是一条历史冲突审核，但快照中没有可逐项裁决的冲突位置。请在下方整单批准、拒绝或暂缓。
             </div>
             <div v-for="assessment in conflictAssessments" :key="`${assessment.itemId}:${assessment.assessmentIndex}`" class="conflict-assessment">
               <div class="conflict-head">
-                <strong>{{ assessment.related_slug }}</strong>
-                <t-tag theme="danger" size="small">置信度 {{ formatConfidence(assessment.confidence) }}</t-tag>
+                <strong>{{ conflictTitle(assessment) }}</strong>
               </div>
               <div class="claim-grid">
                 <button type="button" class="claim-option"
                   :class="{ selected: conflictSelection(assessment.itemId, assessment.assessmentIndex) === 'adopt_candidate' }"
                   @click="chooseConflict(assessment.itemId, assessment.assessmentIndex, 'adopt_candidate')">
-                  <span>候选新说法</span>
+                  <span>反馈建议的新说法</span>
                   <strong v-if="conflictSelection(assessment.itemId, assessment.assessmentIndex) === 'adopt_candidate'">✓ 保留这个说法</strong>
-                  <pre>{{ assessment.candidate_claim || '未提取' }}</pre>
+                  <div class="markdown-content claim-content" v-html="renderMarkdown(assessment.candidate_claim || '没有可展示的内容')"></div>
                 </button>
                 <button type="button" class="claim-option"
                   :class="{ selected: conflictSelection(assessment.itemId, assessment.assessmentIndex) === 'keep_existing' }"
                   @click="chooseConflict(assessment.itemId, assessment.assessmentIndex, 'keep_existing')">
-                  <span>既有说法</span>
+                  <span>知识库现在的说法</span>
                   <strong v-if="conflictSelection(assessment.itemId, assessment.assessmentIndex) === 'keep_existing'">✓ 保留这个说法</strong>
-                  <pre>{{ assessment.existing_claim || '未提取' }}</pre>
+                  <div class="markdown-content claim-content" v-html="renderMarkdown(assessment.existing_claim || '没有可展示的内容')"></div>
                 </button>
               </div>
-              <div class="conflict-reason">冲突位置：{{ assessment.reason }}；适用范围{{ assessment.applicability_overlap ? '重叠' : '不重叠' }}</div>
+              <div class="conflict-reason">{{ conflictReason(assessment) }}</div>
               <details v-if="assessment.relatedEvidence[assessment.related_slug]" class="technical-details">
-                <summary>查看既有页面证据与来源</summary>
-                <pre>{{ pretty(assessment.relatedEvidence[assessment.related_slug]) }}</pre>
+                <summary>查看支持现有说法的来源</summary>
+                <div class="markdown-content evidence-content" v-html="renderMarkdown(evidenceText(assessment.relatedEvidence[assessment.related_slug]))"></div>
               </details>
             </div>
             <div v-if="conflictAssessments.length" class="conflict-progress" :class="{ complete: allConflictChoicesSelected }">
@@ -102,48 +101,50 @@
           </section>
           <section v-for="item in selected.items" :key="item.id" class="change-item">
             <div class="section-heading">
-              <div><span class="section-index">{{ isConflict ? '04' : '02' }}</span><div><strong>哪个说法是对的？</strong><p>先选择，再在下方调整最终内容</p></div></div>
+              <div><span class="section-index">{{ isConflict ? '04' : '02' }}</span><div><strong>哪个说法是对的？</strong><p>{{ itemTitle(item) }} · {{ versionText(item) }}</p></div></div>
             </div>
             <div class="decision-grid">
               <button type="button" class="decision-option" :class="{ selected: decisionChoices[item.id] === 'existing' }" @click="chooseDecision(item, 'existing')">
                 <span class="decision-label">保留现有说法</span><strong v-if="decisionChoices[item.id] === 'existing'">✓ 已选择</strong>
-                <p>{{ excerpt(pageContent(item.before)) }}</p>
+                <div class="markdown-content decision-preview" v-html="renderMarkdown(pageContent(item.before) || '（暂无内容）')"></div>
               </button>
               <button type="button" class="decision-option" :class="{ selected: decisionChoices[item.id] === 'feedback' }" @click="chooseDecision(item, 'feedback')">
                 <span class="decision-label">采用反馈说法</span><strong v-if="decisionChoices[item.id] === 'feedback'">✓ 已选择</strong>
-                <p>{{ selectedFeedback?.suggested_correction || excerpt(pageContent(item.after)) }}</p>
+                <div class="markdown-content decision-preview" v-html="renderMarkdown(selectedFeedback?.suggested_correction || pageContent(item.after) || '（暂无内容）')"></div>
               </button>
               <button type="button" class="decision-option" :class="{ selected: decisionChoices[item.id] === 'custom' }" @click="chooseDecision(item, 'custom')">
                 <span class="decision-label">两者都不准确，我来修改</span><strong v-if="decisionChoices[item.id] === 'custom'">✓ 已选择</strong>
                 <p>从当前内容开始编辑，写出最终应发布的说法。</p>
               </button>
             </div>
-            <div class="final-editor">
-              <div class="diff-title"><span>最终采用的说法</span><small>选择上方说法后仍可继续修改</small></div>
-              <t-textarea v-if="overrides[item.id]" v-model="overrides[item.id].content" class="candidate-editor" :autosize="{ minRows: 10, maxRows: 22 }" placeholder="请先选择一个说法，再检查并修改最终内容" @focus="markCustom(item.id)" />
-            </div>
-            <details class="technical-details">
-              <summary>查看处理详情</summary>
-              <div class="technical-summary">
-                <span>节点：{{ item.page_slug }}</span>
-                <span>来源：{{ sourceLabel(selectedFeedback?.source) }}</span>
-                <span>风险：{{ riskLabel(selectedFeedback?.risk_level) }}</span>
-                <span>置信度：{{ selectedFeedback ? formatConfidence(selectedFeedback.confidence) : '—' }}</span>
-                <span>处理方式：{{ selectedFeedback?.strategy || '人工审核' }}</span>
+            <div v-if="decisionChoices[item.id]" class="final-editor">
+              <div class="diff-title">
+                <span>最终采用的说法</span>
+                <t-button v-if="decisionChoices[item.id] !== 'custom'" size="small" variant="text" @click="chooseDecision(item, 'custom')">需要微调</t-button>
               </div>
-              <div class="evidence">证据 Chunk：{{ item.evidence_chunk_ids?.join(', ') || '无' }}</div>
-              <div v-for="(excerpt, chunkId) in item.evidence_excerpts || {}" :key="chunkId" class="evidence-excerpt"><div class="diff-title">Chunk {{ chunkId }}</div><pre>{{ excerpt }}</pre></div>
-              <div class="evidence-excerpt"><div class="diff-title">完整字段变更</div><pre>{{ pretty({ before: item.before, after: item.after }) }}</pre></div>
+              <t-textarea v-if="decisionChoices[item.id] === 'custom' && overrides[item.id]" v-model="overrides[item.id].content" class="candidate-editor" :autosize="{ minRows: 10, maxRows: 22 }" placeholder="写下最终要发布的内容，可使用标题、列表等格式" />
+              <div v-else class="markdown-content final-preview" v-html="renderMarkdown(overrides[item.id]?.content || '')"></div>
+            </div>
+            <div v-else class="choice-hint">请先从上面选择一个说法。选择前不会出现编辑框。</div>
+            <details class="technical-details">
+              <summary>查看来源与排查信息</summary>
+              <div class="technical-summary">
+                <span>知识条目：{{ itemTitle(item) }}</span>
+                <span>反馈来源：{{ sourceLabel(selectedFeedback?.source) }}</span>
+                <span>建议关注：{{ attentionLabel(selectedFeedback?.risk_level) }}</span>
+              </div>
+              <div v-for="(sourceExcerpt, sourceId) in item.evidence_excerpts || {}" :key="sourceId" class="evidence-excerpt"><div class="diff-title">引用来源</div><div class="markdown-content evidence-content" v-html="renderMarkdown(String(sourceExcerpt))"></div></div>
+              <details class="diagnostic-details"><summary>管理员排查编号</summary><pre>{{ diagnosticText(item) }}</pre></details>
             </details>
           </section>
 
-          <div v-if="selected.items?.[0]?.operation === 'create' && !isConflict" class="merge-box">
-            <t-input v-model="mergeTargetSlug" placeholder="合并到已有卡片 slug（可选）" />
-            <t-button variant="outline" :disabled="!mergeTargetSlug.trim()" :loading="submitting" @click="submit('approved', mergeTargetSlug)">合并并批准</t-button>
-          </div>
+          <details v-if="selected.items?.[0]?.operation === 'create' && !isConflict" class="merge-box technical-details">
+            <summary>这条内容与现有知识重复？</summary>
+            <div class="merge-controls"><t-input v-model="mergeTargetSlug" placeholder="填写要合并到的知识路径" /><t-button variant="outline" :disabled="!mergeTargetSlug.trim()" :loading="submitting" @click="submit('approved', mergeTargetSlug)">合并并发布</t-button></div>
+          </details>
           <section class="publish-card">
             <div class="section-heading"><div><span class="section-index">{{ isConflict ? '05' : '03' }}</span><div><strong>确认发布</strong><p>发布后会生成一个新版本，之后仍可回滚</p></div></div></div>
-            <t-textarea v-model="comment" :autosize="{ minRows: 2, maxRows: 5 }" placeholder="审核备注（可选；拒绝反馈时必须填写原因）" />
+            <details class="review-note"><summary>添加审核说明（可选）</summary><t-textarea v-model="comment" :autosize="{ minRows: 2, maxRows: 5 }" placeholder="拒绝反馈时请填写原因" /></details>
           <div class="review-actions">
             <template v-if="isConflict">
               <t-button variant="outline" :loading="submitting" @click="deferConflict">暂缓审核</t-button>
@@ -162,7 +163,7 @@
           </div>
           </section>
         </template>
-        <div v-else class="review-empty">从左侧选择一条反馈，开始归因与修正审核</div>
+        <div v-else class="review-empty">从左侧选择一条反馈，开始审核</div>
       </main>
       </div>
     </div>
@@ -172,8 +173,9 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { MessagePlugin } from 'tdesign-vue-next'
-import { batchReviewWikiChangeSets, getWikiChangeSet, listWikiChangeSets, listWikiFeedbackSignals, reviewWikiChangeSet, type WikiChangeCategory, type WikiChangeItem, type WikiChangeSet, type WikiConflictChoice, type WikiFeedbackSignal } from '@/api/wiki'
-import { normalizeWikiReviewSelection, toggleAllWikiReviews, toggleWikiReview, wikiReviewBatchSelectionState } from './wikiReviewSelection'
+import { marked } from 'marked'
+import { getWikiChangeSet, listWikiChangeSets, listWikiFeedbackSignals, reviewWikiChangeSet, type WikiChangeCategory, type WikiChangeItem, type WikiChangeSet, type WikiConflictChoice, type WikiFeedbackSignal } from '@/api/wiki'
+import { sanitizeMarkdownHTML } from '@/utils/security'
 import { allConflictPositionsSelected, buildConflictChoicesForPositions, conflictChoiceKey, conflictReviewDecision, type ConflictSelection } from './wikiConflictResolution'
 
 const props = defineProps<{ modelValue: boolean; knowledgeBaseId: string }>()
@@ -335,11 +337,11 @@ async function deferConflict() {
   } finally { submitting.value = false }
 }
 
-function pretty(value: unknown) { return value ? JSON.stringify(value, null, 2) : '（无，这是新建页面）' }
 function pageContent(page?: Record<string, any>) { return String(page?.content || page?.summary || '') }
-function excerpt(value: string, limit = 180) {
-  const text = value.replace(/\s+/g, ' ').trim()
-  return text.length > limit ? `${text.slice(0, limit)}…` : (text || '（暂无内容）')
+function renderMarkdown(value?: string) {
+  const source = String(value || '').trim()
+  if (!source) return '<p>（暂无内容）</p>'
+  return sanitizeMarkdownHTML(marked.parse(source, { breaks: true, gfm: true, async: false }) as string)
 }
 function feedbackDraft(item: WikiChangeItem) {
   return String(item.after?.content || selectedFeedback.value?.suggested_correction || pageContent(item.before))
@@ -352,27 +354,46 @@ function chooseDecision(item: WikiChangeItem, choice: DecisionChoice) {
   if (choice === 'feedback') override.content = feedbackDraft(item)
   if (choice === 'custom' && !override.content.trim()) override.content = pageContent(item.before)
 }
-function markCustom(itemId: string) {
-  if (decisionChoices.value[itemId]) return
-  decisionChoices.value = { ...decisionChoices.value, [itemId]: 'custom' }
-}
 const allDecisionsMade = computed(() => isConflict.value || Boolean(selected.value?.items?.length && selected.value.items.every(item => decisionChoices.value[item.id])))
-function visibleChangedFields(fields?: string[]) { return (fields || []).filter(field => ['content', 'summary', 'title', 'knowledge_type', 'maturity_status'].includes(field)) }
-function fieldLabel(field: string) { return ({ content: '正文', summary: '摘要', title: '标题', knowledge_type: '知识类型', maturity_status: '成熟度' } as Record<string, string>)[field] || field }
-function sourceLabel(source?: string) { return ({ mcp: 'MCP 调用', mcp_feedback: 'MCP 反馈', manual_correction: '人工纠错', agent_answer: 'Agent 回答', user_feedback: '用户反馈' } as Record<string, string>)[source || ''] || source || '系统检查' }
-function riskLabel(risk?: string) { return ({ high: '高风险', medium: '中风险', low: '低风险' } as Record<string, string>)[risk || ''] || '待评估' }
-function riskTheme(risk?: string) { return risk === 'high' ? 'danger' : risk === 'low' ? 'success' : 'warning' }
-function reasonText(reasons?: string[]) { return reasons?.join(' / ') || '常规检查' }
-function operationLabel(operation: WikiChangeItem['operation']) { return ({ create: '新建', update: '更新', archive: '归档' } as const)[operation] }
-function formatTime(value: string) { return value ? new Date(value).toLocaleString() : '' }
-function impactText(page?: Record<string, any>) {
-  if (!page) return '未知'
-  return [page.business_line, ...(page.scenario_ids || []), ...(page.affected_metrics || [])].filter(Boolean).join(' / ') || '全局或待归类'
+function sourceLabel(source?: string) { return ({ mcp: '接口使用反馈', mcp_feedback: '接口使用反馈', manual_correction: '人工纠错', agent_answer: '问答反馈', user_feedback: '用户反馈' } as Record<string, string>)[source || ''] || '系统检查' }
+function attentionLabel(risk?: string) { return ({ high: '需要重点确认', medium: '建议仔细确认', low: '常规确认' } as Record<string, string>)[risk || ''] || '常规确认' }
+function reasonText(reasons?: string[]) {
+  const labels: Record<string, string> = {
+    possible_duplicate: '可能与现有知识重复', conflict: '与现有说法不一致', correction: '收到纠错反馈',
+    stale: '内容可能已过期', retirement: '建议停止使用', feedback: '收到用户反馈',
+  }
+  return reasons?.map(reason => labels[reason] || '需要人工确认').join(' / ') || '常规检查'
 }
-function systemSuggestion(set: WikiChangeSet) {
-  if (set.change_category === 'conflict') return '对照双方说法、证据和适用范围，明确选择最终保留版本'
-  if (set.reasons?.includes('possible_duplicate')) return '优先合并到已有卡片，避免重复口径'
-  return '确认分类与场景后可批准'
+function formatTime(value: string) { return value ? new Date(value).toLocaleString() : '' }
+function itemTitle(item: WikiChangeItem) {
+  return String(item.after?.title || item.before?.title || item.page_slug || '未命名知识')
+}
+function versionText(item: WikiChangeItem) {
+  if (item.operation === 'create') return '发布后为第 1 版'
+  const current = Number(item.before?.version || item.expected_version || 0)
+  return current > 0 ? `当前第 ${current} 版，发布后为第 ${current + 1} 版` : '发布后会保留为新版本'
+}
+function conflictTitle(assessment: any) {
+  const slug = String(assessment.related_title || assessment.related_slug || '')
+  const tail = slug.split('/').filter(Boolean).pop() || '相关知识'
+  return tail.replace(/[-_]+/g, ' ')
+}
+function conflictReason(assessment: any) {
+  const reason = String(assessment.reason || '').trim()
+  if (!reason) return assessment.applicability_overlap ? '两种说法适用于相同场景，请确认哪一个正确。' : '两种说法适用场景可能不同，请确认是否都需要保留。'
+  return `${reason}${/[。！？]$/.test(reason) ? '' : '。'}${assessment.applicability_overlap ? '两种说法适用于相同场景。' : '两种说法的适用场景可能不同。'}`
+}
+function evidenceText(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (Array.isArray(value)) return value.map(entry => evidenceText(entry)).filter(Boolean).join('\n\n')
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>
+    return String(record.excerpt || record.content || record.summary || record.text || Object.values(record).map(entry => evidenceText(entry)).filter(Boolean).join('\n\n'))
+  }
+  return String(value || '暂无来源内容')
+}
+function diagnosticText(item: WikiChangeItem) {
+  return [`知识路径：${item.page_slug}`, `变更编号：${item.id}`, `来源编号：${item.evidence_chunk_ids?.join(', ') || '无'}`].join('\n')
 }
 const isConflict = computed(() => selected.value?.change_category === 'conflict')
 const conflictAssessments = computed<any[]>(() => {
@@ -394,7 +415,6 @@ function chooseConflict(itemId: string, assessmentIndex: number, resolution: Wik
 }
 function categoryLabel(value: WikiChangeCategory) { return categoryOptions.find(item => item.value === value)?.label || value || '普通更新' }
 function categoryTheme(value: WikiChangeCategory) { return value === 'conflict' ? 'danger' : value === 'addition' ? 'success' : value === 'correction' || value === 'retirement' ? 'warning' : 'primary' }
-function formatConfidence(value: number) { return `${Math.round(Number(value || 0) * 100)}%` }
 </script>
 
 <style scoped>
@@ -441,14 +461,14 @@ function formatConfidence(value: number) { return `${Math.round(Number(value || 
 .section-heading strong { font-size: 15px; }
 .section-heading p { margin: 3px 0 0; color: var(--td-text-color-secondary); font-size: 12px; }
 .section-index { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 8px; color: var(--td-brand-color); background: var(--td-brand-color-light); font-size: 11px; font-weight: 700; }
-.feedback-context blockquote { margin: 0 0 12px; padding: 13px 15px; border-left: 3px solid var(--td-brand-color); border-radius: 0 8px 8px 0; background: var(--td-bg-color-container); font-size: 14px; line-height: 1.7; }
+.feedback-markdown { margin: 0 0 12px; padding: 13px 15px; border-left: 3px solid var(--td-brand-color); border-radius: 0 8px 8px 0; background: var(--td-bg-color-container); }
 .feedback-badges { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
 .feedback-conflict { margin: 8px 0; padding: 8px 10px; border-radius: 6px; color: var(--td-warning-color); background: var(--td-warning-color-1); }
 .feedback-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .feedback-fields > div { min-width: 0; padding: 10px; border-radius: 6px; background: var(--td-bg-color-container); }
 .feedback-fields .suggestion { grid-column: 1 / -1; background: var(--td-warning-color-1); }
 .feedback-fields span { color: var(--td-text-color-secondary); font-size: 12px; }
-.feedback-fields p { margin: 6px 0 0; white-space: pre-wrap; word-break: break-word; }
+.feedback-fields .markdown-content { margin-top: 6px; }
 .attribution-grid { display: grid; grid-template-columns: 1.4fr .8fr 1fr; gap: 10px; }
 .attribution-grid > div { display: flex; flex-direction: column; min-width: 0; padding: 12px; border-radius: 8px; background: var(--td-bg-color-secondarycontainer); }
 .attribution-grid span, .attribution-grid small { color: var(--td-text-color-secondary); font-size: 11px; }
@@ -463,9 +483,11 @@ function formatConfidence(value: number) { return `${Math.round(Number(value || 
 .decision-option.selected { border-color: var(--td-brand-color); background: var(--td-brand-color-light); box-shadow: 0 4px 14px rgba(0,0,0,.05); }
 .decision-option > strong { position: absolute; top: 13px; right: 13px; color: var(--td-brand-color); font-size: 12px; }
 .decision-label { display: block; padding-right: 58px; font-weight: 650; }
-.decision-option p { display: -webkit-box; overflow: hidden; margin: 12px 0 0; color: var(--td-text-color-secondary); font-size: 13px; line-height: 1.65; -webkit-line-clamp: 4; -webkit-box-orient: vertical; }
+.decision-preview { display: -webkit-box; overflow: hidden; margin-top: 12px; color: var(--td-text-color-secondary); font-size: 13px; -webkit-line-clamp: 5; -webkit-box-orient: vertical; }
 .final-editor { padding: 14px; border: 1px solid var(--td-brand-color-3); border-radius: 10px; background: var(--td-bg-color-container); }
 .final-editor .diff-title small { color: var(--td-text-color-secondary); font-weight: 400; }
+.choice-hint { padding: 13px 14px; border: 1px dashed var(--td-component-border); border-radius: 9px; color: var(--td-text-color-secondary); background: var(--td-bg-color-secondarycontainer); font-size: 13px; }
+.final-preview { min-height: 90px; max-height: 360px; overflow: auto; }
 .technical-summary { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-bottom: 10px; }
 .conflict-box { margin: 0 0 14px; padding: 17px; border: 1px solid var(--td-error-color-4); border-radius: 11px; background: var(--td-error-color-1); }
 .conflict-assessment { margin: 12px 0; padding: 12px; border-radius: 6px; background: var(--td-bg-color-container); }
@@ -477,12 +499,13 @@ function formatConfidence(value: number) { return `${Math.round(Number(value || 
 .claim-option.selected { border-color: var(--td-brand-color); background: var(--td-brand-color-light); }
 .claim-option > span { display: block; margin-bottom: 6px; }
 .claim-option > strong { position: absolute; top: 8px; right: 10px; color: var(--td-brand-color); font-size: 12px; }
-.claim-option pre { padding: 8px 0 0; background: transparent; }
+.claim-content { max-height: 230px; overflow: auto; padding-top: 8px; }
 .conflict-reason { margin: 10px 0; }
 .conflict-progress { margin-top: 12px; color: var(--td-warning-color); font-size: 13px; }
 .conflict-progress.complete { color: var(--td-success-color); }
 .conflict-empty { padding: 12px; border-radius: 6px; background: var(--td-warning-color-light); color: var(--td-warning-color); line-height: 1.6; }
-.merge-box { display: grid; grid-template-columns: 1fr auto; gap: 10px; margin: 14px 0; }
+.merge-box { margin: 14px 0; padding: 13px 14px; border: 1px solid var(--td-component-border); border-radius: 9px; }
+.merge-controls { display: grid; grid-template-columns: 1fr auto; gap: 10px; }
 .diff-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .diff-column { min-width: 0; }
 .diff-title { display: flex; align-items: center; justify-content: space-between; }
@@ -490,10 +513,30 @@ function formatConfidence(value: number) { return `${Math.round(Number(value || 
 .candidate-editor :deep(textarea) { line-height: 1.7; font-family: inherit; }
 pre { margin: 0; padding: 12px; max-height: 340px; overflow: auto; white-space: pre-wrap; word-break: break-word; border-radius: 6px; background: var(--td-bg-color-secondarycontainer); font-size: 12px; }
 .review-actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 14px; }
+.review-note { margin-top: 4px; color: var(--td-text-color-secondary); font-size: 12px; }
+.review-note summary { margin-bottom: 10px; cursor: pointer; }
 .evidence-excerpt { margin-top: 10px; }
 .technical-details { margin-top: 12px; color: var(--td-text-color-secondary); font-size: 12px; }
 .technical-details summary { cursor: pointer; user-select: none; }
 .technical-details[open] summary { margin-bottom: 10px; color: var(--td-text-color-primary); }
+.diagnostic-details { margin-top: 10px; }
+.markdown-content { min-width: 0; color: var(--td-text-color-primary); font-size: 14px; line-height: 1.72; overflow-wrap: anywhere; }
+.markdown-content :deep(> :first-child) { margin-top: 0; }
+.markdown-content :deep(> :last-child) { margin-bottom: 0; }
+.markdown-content :deep(p) { margin: 8px 0; }
+.markdown-content :deep(h1), .markdown-content :deep(h2), .markdown-content :deep(h3), .markdown-content :deep(h4) { margin: 16px 0 8px; line-height: 1.4; }
+.markdown-content :deep(h1) { font-size: 20px; }
+.markdown-content :deep(h2) { font-size: 17px; }
+.markdown-content :deep(h3), .markdown-content :deep(h4) { font-size: 15px; }
+.markdown-content :deep(ul), .markdown-content :deep(ol) { margin: 8px 0; padding-left: 22px; }
+.markdown-content :deep(li) { margin: 4px 0; }
+.markdown-content :deep(blockquote) { margin: 10px 0; padding: 8px 12px; border-left: 3px solid var(--td-brand-color-4); color: var(--td-text-color-secondary); background: var(--td-bg-color-secondarycontainer); }
+.markdown-content :deep(pre) { margin: 10px 0; }
+.markdown-content :deep(code:not(pre code)) { padding: 1px 5px; border-radius: 4px; background: var(--td-bg-color-secondarycontainer); font-size: .92em; }
+.markdown-content :deep(table) { width: 100%; margin: 10px 0; border-collapse: collapse; }
+.markdown-content :deep(th), .markdown-content :deep(td) { padding: 7px 9px; border: 1px solid var(--td-component-border); text-align: left; }
+.markdown-content :deep(th) { background: var(--td-bg-color-secondarycontainer); }
+.markdown-content :deep(a) { color: var(--td-brand-color); }
 .review-empty, .review-loading { display: grid; place-items: center; min-height: 180px; color: var(--td-text-color-placeholder); }
 @media (max-width: 1000px) { .workflow-header { align-items: flex-start; flex-direction: column; } .review-layout { grid-template-columns: 290px 1fr; } .workflow-step span { display: none; } .attribution-grid { grid-template-columns: 1fr; } }
 @media (max-width: 760px) { .review-layout { grid-template-columns: 1fr; } .review-list { max-height: 240px; border-right: 0; border-bottom: 1px solid var(--td-component-border); } .diff-grid, .feedback-fields, .decision-grid { grid-template-columns: 1fr; } .detail-head { flex-direction: column; } }
