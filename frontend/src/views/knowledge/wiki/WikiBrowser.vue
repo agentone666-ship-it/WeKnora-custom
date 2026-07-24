@@ -136,6 +136,10 @@
               <t-tag size="small" :theme="getTypeTheme(graphDrawerPage.page_type)" variant="light-outline">
                 {{ getTypeLabel(graphDrawerPage.page_type) }}
               </t-tag>
+              <t-tag v-if="graphDrawerPage.page_type === 'card' && graphDrawerPage.knowledge_type" size="small"
+                theme="warning" variant="light-outline">
+                {{ getKnowledgeTypeLabel(graphDrawerPage.knowledge_type) }}
+              </t-tag>
               <span class="wiki-reader-meta-text">{{ $t('knowledgeEditor.wikiBrowser.version', {
                 ver:
                   graphDrawerPage.version
@@ -486,6 +490,10 @@
                 <div class="wiki-reader-meta">
                   <t-tag size="small" :theme="getTypeTheme(selectedPage.page_type)" variant="light-outline">
                     {{ getTypeLabel(selectedPage.page_type) }}
+                  </t-tag>
+                  <t-tag v-if="selectedPage.page_type === 'card' && selectedPage.knowledge_type" size="small"
+                    theme="warning" variant="light-outline">
+                    {{ getKnowledgeTypeLabel(selectedPage.knowledge_type) }}
                   </t-tag>
                   <span class="wiki-reader-meta-text">{{ $t('knowledgeEditor.wikiBrowser.version', {
                     ver:
@@ -1875,6 +1883,24 @@ function getTypeLabel(type: string): string {
     log: 'Log',
   }
   return map[type] || type
+}
+
+function getKnowledgeTypeLabel(type: string): string {
+  const keyByType: Record<string, string> = {
+    knowledge: 'knowledge',
+    experience: 'experience',
+    question: 'question',
+    hypothesis: 'hypothesis',
+    experiment: 'experiment',
+    metric: 'metric',
+    procedure: 'procedure',
+    failure: 'failure',
+    case: 'case',
+    rule: 'rule',
+  }
+  const key = keyByType[type]
+  if (!key) return type
+  return t(`knowledgeEditor.wikiBrowser.knowledgeTypes.${key}`)
 }
 
 // getPageIcon picks a distinct icon per page_type so the merged knowledge
