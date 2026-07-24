@@ -84,10 +84,14 @@ func recordGovernancePublishedVersion(tx *gorm.DB, page *types.WikiPage, before 
 	return tx.Create(version).Error
 }
 
-type wikiGovernanceRepository struct{ db *gorm.DB }
+type wikiGovernanceRepository struct {
+	db           *gorm.DB
+	modelService interfaces.ModelService
+	kbService    interfaces.KnowledgeBaseService
+}
 
-func NewWikiGovernanceRepository(db *gorm.DB) interfaces.WikiGovernanceRepository {
-	return &wikiGovernanceRepository{db: db}
+func NewWikiGovernanceRepository(db *gorm.DB, modelService interfaces.ModelService, kbService interfaces.KnowledgeBaseService) interfaces.WikiGovernanceRepository {
+	return &wikiGovernanceRepository{db: db, modelService: modelService, kbService: kbService}
 }
 
 func (r *wikiGovernanceRepository) CreateChangeSet(ctx context.Context, set *types.WikiChangeSet) error {
