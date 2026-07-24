@@ -10,6 +10,15 @@ test('review content is rendered as sanitized markdown', () => {
   assert.match(component, /class="markdown-content final-preview"/)
 })
 
+test('wiki links, citations, and relationship codes are rendered as business-friendly labels', () => {
+  assert.match(component, /function prepareWikiMarkdown/)
+  assert.match(component, /wiki-review-link/)
+  assert.match(component, /wiki-review-citation/)
+  assert.match(component, /consistent: '内容一致'/)
+  assert.match(component, /conflicting: '说法冲突'/)
+  assert.match(component, /marked\.parse\(prepareWikiMarkdown\(source\)/)
+})
+
 test('the content editor only appears after the reviewer chooses custom editing', () => {
   assert.match(component, /v-if="decisionChoices\[item\.id\] === 'custom' && overrides\[item\.id\]"/)
   assert.match(component, /v-else class="choice-hint"/)

@@ -338,10 +338,61 @@ async function deferConflict() {
 }
 
 function pageContent(page?: Record<string, any>) { return String(page?.content || page?.summary || '') }
+
+const wikiRelationLabels: Record<string, string> = {
+  consistent: '内容一致',
+  complementary: '内容互补',
+  conflicting: '说法冲突',
+  supersedes: '新内容替代旧内容',
+  unrelated: '暂无直接关联',
+  uncertain: '关系待确认',
+  supports: '支持此知识',
+  contradicts: '与此知识矛盾',
+  tests: '用于验证',
+  answers: '解答此问题',
+  causes: '可能导致',
+  depends_on: '依赖此知识',
+  applies_to: '适用于',
+  measures: '用于衡量',
+  example_of: '属于示例',
+  mitigates: '用于降低风险',
+}
+
+function escapeWikiHTML(value: string) {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+function prepareWikiMarkdown(value: string) {
+  const withLinks = value.replace(/\[\[([^\]]+)\]\]/g, (match, inner: string) => {
+    const pipeIndex = inner.indexOf('|')
+    const slug = (pipeIndex > 0 ? inner.slice(0, pipeIndex) : inner).trim()
+    if (!slug) return match
+    const fallback = slug.split('/').filter(Boolean).pop() || slug
+    const display = (pipeIndex > 0 ? inner.slice(pipeIndex + 1) : fallback).trim() || fallback
+    return `<span class="wiki-review-link" title="关联知识：${escapeWikiHTML(slug)}">${escapeWikiHTML(display)}</span>`
+  })
+
+  const withCitations = withLinks.replace(/\[c(\d{3,})\]/gi, (_, index: string) => {
+    const sourceNumber = Number.parseInt(index, 10) + 1
+    return `<sup class="wiki-review-citation" title="来源引用 c${index}">[来源 ${sourceNumber}]</sup>`
+  })
+
+  const relationCodes = Object.keys(wikiRelationLabels).join('|')
+  return withCitations.replace(new RegExp(`[（(](${relationCodes})[）)]`, 'gi'), (_, relation: string) => {
+    const normalized = relation.toLowerCase()
+    return `<span class="wiki-relation wiki-relation--${normalized}">${wikiRelationLabels[normalized]}</span>`
+  })
+}
+
 function renderMarkdown(value?: string) {
   const source = String(value || '').trim()
   if (!source) return '<p>（暂无内容）</p>'
-  return sanitizeMarkdownHTML(marked.parse(source, { breaks: true, gfm: true, async: false }) as string)
+  return sanitizeMarkdownHTML(marked.parse(prepareWikiMarkdown(source), { breaks: true, gfm: true, async: false }) as string)
 }
 function feedbackDraft(item: WikiChangeItem) {
   return String(item.after?.content || selectedFeedback.value?.suggested_correction || pageContent(item.before))
@@ -537,6 +588,13 @@ pre { margin: 0; padding: 12px; max-height: 340px; overflow: auto; white-space: 
 .markdown-content :deep(th), .markdown-content :deep(td) { padding: 7px 9px; border: 1px solid var(--td-component-border); text-align: left; }
 .markdown-content :deep(th) { background: var(--td-bg-color-secondarycontainer); }
 .markdown-content :deep(a) { color: var(--td-brand-color); }
+.markdown-content :deep(.wiki-review-link) { display: inline-flex; align-items: center; max-width: 100%; padding: 1px 7px; border: 1px solid var(--td-brand-color-3); border-radius: 5px; color: var(--td-brand-color); background: var(--td-brand-color-1); font-weight: 500; vertical-align: baseline; }
+.markdown-content :deep(.wiki-review-link)::before { content: '关联知识'; margin-right: 5px; color: var(--td-text-color-secondary); font-size: 11px; font-weight: 400; }
+.markdown-content :deep(.wiki-review-citation) { margin: 0 2px; color: var(--td-brand-color); font-size: 11px; }
+.markdown-content :deep(.wiki-relation) { display: inline-flex; align-items: center; margin-left: 5px; padding: 1px 7px; border-radius: 999px; color: var(--td-text-color-secondary); background: var(--td-bg-color-secondarycontainer); font-size: 11px; line-height: 1.7; vertical-align: middle; }
+.markdown-content :deep(.wiki-relation--consistent), .markdown-content :deep(.wiki-relation--supports) { color: var(--td-success-color); background: var(--td-success-color-light); }
+.markdown-content :deep(.wiki-relation--conflicting), .markdown-content :deep(.wiki-relation--contradicts) { color: var(--td-error-color); background: var(--td-error-color-light); }
+.markdown-content :deep(.wiki-relation--uncertain) { color: var(--td-warning-color); background: var(--td-warning-color-light); }
 .review-empty, .review-loading { display: grid; place-items: center; min-height: 180px; color: var(--td-text-color-placeholder); }
 @media (max-width: 1000px) { .workflow-header { align-items: flex-start; flex-direction: column; } .review-layout { grid-template-columns: 290px 1fr; } .workflow-step span { display: none; } .attribution-grid { grid-template-columns: 1fr; } }
 @media (max-width: 760px) { .review-layout { grid-template-columns: 1fr; } .review-list { max-height: 240px; border-right: 0; border-bottom: 1px solid var(--td-component-border); } .diff-grid, .feedback-fields, .decision-grid { grid-template-columns: 1fr; } .detail-head { flex-direction: column; } }
