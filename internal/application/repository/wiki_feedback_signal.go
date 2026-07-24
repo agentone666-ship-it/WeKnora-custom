@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Tencent/WeKnora/internal/models/chat"
 	"github.com/Tencent/WeKnora/internal/types"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -29,6 +30,61 @@ func feedbackCandidateContent(page *types.WikiPage, in *types.WikiFeedbackSignal
 	// the page unchanged and leave the item for manual attribution/editing.
 	// This keeps feedback as review context instead of polluting the Wiki page.
 	return page.Content
+}
+
+// generateFeedbackCandidateContent produces a complete replacement page from
+// the page and the context of the original answer. Feedback is treated as an
+// instruction to revise the existing article, never as text to append to it.
+// The deterministic fallback keeps the review flow usable when a model is not
+// configured or temporarily unavailable.
+func (r *wikiGovernanceRepository) generateFeedbackCandidateContent(ctx context.Context, kbID string, page *types.WikiPage, in *types.WikiFeedbackSignalInput) string {
+	fallback := feedbackCandidateContent(page, in)
+	if r.modelService == nil || r.kbService == nil {
+		return fallback
+	}
+	kb, err := r.kbService.GetKnowledgeBaseByIDOnly(ctx, kbID)
+	if err != nil || kb == nil || strings.TrimSpace(kb.SummaryModelID) == "" {
+		return fallback
+	}
+	model, err := r.modelService.GetChatModel(ctx, kb.SummaryModelID)
+	if err != nil || model == nil {
+		return fallback
+	}
+	prompt := fmt.Sprintf(`请修正一篇 Wiki 页面，并只输出修正后的完整 Markdown 正文。
+
+要求：
+1. 以原页面为基础，保留没有被反馈影响的标题、结构、事实和列表。
+2. 结合原问题、系统原回答、用户反馈和建议修正，真正改写页面中受影响的内容。
+3. 不要追加“用户反馈”“反馈修正候选”“修正说明”等元信息。
+4. 不要编造上下文无法确认的事实；无法确认的部分保留原文。
+5. 不要输出 Markdown 代码围栏或解释文字。
+
+【原 Wiki 页面】
+%s
+
+【用户原问题】
+%s
+
+【系统原回答】
+%s
+
+【用户反馈】
+%s
+
+【建议修正】
+%s`, page.Content, in.OriginalQuestion, in.AnswerExcerpt, in.FeedbackText, in.SuggestedCorrection)
+	resp, err := model.Chat(ctx, []chat.Message{{Role: "system", Content: "你是严谨的 Wiki 内容修正器。"}, {Role: "user", Content: prompt}}, &chat.ChatOptions{Temperature: 0.1, MaxTokens: 8192})
+	if err != nil || resp == nil {
+		return fallback
+	}
+	content := strings.TrimSpace(resp.Content)
+	content = strings.TrimPrefix(content, "```markdown")
+	content = strings.TrimPrefix(content, "```md")
+	content = strings.TrimSuffix(strings.TrimSpace(content), "```")
+	if content == "" {
+		return fallback
+	}
+	return content
 }
 
 func feedbackRisk(in *types.WikiFeedbackSignalInput) string {
@@ -166,7 +222,7 @@ func (r *wikiGovernanceRepository) SubmitFeedbackSignal(ctx context.Context, ten
 			Count(&pendingCount).Error; err != nil {
 			return err
 		}
-		set := &types.WikiChangeSet{ID: uuid.NewString(), TenantID: tenantID, KnowledgeBaseID: kbID, Status: types.WikiChangeSetPending, ReviewLevel: types.WikiReviewLevelL1, ChangeCategory: types.WikiChangeCategoryCorrection, Reasons: types.StringArray{"feedback_signal", in.SignalType}, ModelID: "feedback-loop", PromptVersion: "feedback-candidate-v1", CandidateFingerprint: key, CreatedBy: actor, CreatedAt: now, UpdatedAt: now}
+		set := &types.WikiChangeSet{ID: uuid.NewString(), TenantID: tenantID, KnowledgeBaseID: kbID, Status: types.WikiChangeSetPending, ReviewLevel: types.WikiReviewLevelL1, ChangeCategory: types.WikiChangeCategoryCorrection, Reasons: types.StringArray{"feedback_signal", in.SignalType}, ModelID: "feedback-loop", PromptVersion: "feedback-candidate-v2-full-page", CandidateFingerprint: key, CreatedBy: actor, CreatedAt: now, UpdatedAt: now}
 		if pendingCount > 0 {
 			signal.ConflictSummary = "目标节点已有待审核变更，请审核人对照现有候选后再发布"
 			set.Reasons = append(set.Reasons, "pending_feedback_conflict")
@@ -174,10 +230,10 @@ func (r *wikiGovernanceRepository) SubmitFeedbackSignal(ctx context.Context, ten
 		for i := range pages {
 			page := pages[i]
 			after := page
-			after.Content = feedbackCandidateContent(&page, in)
+			after.Content = r.generateFeedbackCandidateContent(ctx, kbID, &page, in)
 			beforeJSON, _ := json.Marshal(&page)
 			afterJSON, _ := json.Marshal(&after)
-			evidence, _ := json.Marshal(map[string]any{"feedback_signal_id": signal.ID, "feedback_text": in.FeedbackText, "suggested_correction": in.SuggestedCorrection, "related_request_id": in.RelatedRequestID, "attribution_reasons": attributionReasons[page.ID]})
+			evidence, _ := json.Marshal(map[string]any{"feedback_signal_id": signal.ID, "feedback_text": in.FeedbackText, "suggested_correction": in.SuggestedCorrection, "related_request_id": in.RelatedRequestID, "attribution_reasons": attributionReasons[page.ID], "candidate_generation": "full_page_revision"})
 			set.Items = append(set.Items, types.WikiChangeItem{ID: uuid.NewString(), Operation: "update", ChangeCategory: types.WikiChangeCategoryCorrection, PageID: page.ID, PageSlug: page.Slug, ExpectedVersion: page.Version, Before: types.JSON(beforeJSON), After: types.JSON(afterJSON), ChangedFields: types.StringArray{"content"}, EvidenceChunkIDs: page.ChunkRefs, EvidenceExcerpts: types.JSON(evidence), CreatedAt: now})
 			signal.AttributedNodeIDs = append(signal.AttributedNodeIDs, page.ID)
 		}
