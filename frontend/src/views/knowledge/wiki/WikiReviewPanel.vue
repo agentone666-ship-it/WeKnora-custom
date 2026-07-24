@@ -103,6 +103,39 @@
             <div class="section-heading">
               <div><span class="section-index">{{ isConflict ? '04' : '02' }}</span><div><strong>哪个说法是对的？</strong><p>{{ itemTitle(item) }} · {{ versionText(item) }}</p></div></div>
             </div>
+            <div class="change-summary">
+              <div class="change-summary-head">
+                <div>
+                  <strong>这次具体改了什么</strong>
+                  <span>{{ diffSummary(item).description }}</span>
+                </div>
+                <div class="change-counts" aria-label="修改统计">
+                  <span class="change-count removed">− {{ diffSummary(item).removedLines }} 行删除</span>
+                  <span class="change-count added">＋ {{ diffSummary(item).addedLines }} 行新增</span>
+                </div>
+              </div>
+              <div v-if="diffSummary(item).changed" class="diff-board">
+                <div class="diff-board-column">
+                  <div class="diff-board-title"><span class="diff-dot removed"></span><strong>修改前</strong><small>原知识库内容</small></div>
+                  <div class="diff-lines">
+                    <div v-for="(row, index) in diffRows(item).before" :key="`before-${item.id}-${index}`" class="diff-line" :class="`diff-line--${row.type}`">
+                      <span class="diff-line-number">{{ row.number || '' }}</span><span class="diff-line-marker">{{ row.type === 'removed' ? '−' : ' ' }}</span><code>{{ row.text || ' ' }}</code>
+                    </div>
+                    <div v-if="!diffRows(item).before.length" class="diff-empty">（原内容为空）</div>
+                  </div>
+                </div>
+                <div class="diff-board-column">
+                  <div class="diff-board-title"><span class="diff-dot added"></span><strong>修改后</strong><small>准备发布的内容</small></div>
+                  <div class="diff-lines">
+                    <div v-for="(row, index) in diffRows(item).after" :key="`after-${item.id}-${index}`" class="diff-line" :class="`diff-line--${row.type}`">
+                      <span class="diff-line-number">{{ row.number || '' }}</span><span class="diff-line-marker">{{ row.type === 'added' ? '＋' : ' ' }}</span><code>{{ row.text || ' ' }}</code>
+                    </div>
+                    <div v-if="!diffRows(item).after.length" class="diff-empty">（新内容为空）</div>
+                  </div>
+                </div>
+              </div>
+              <div v-else class="diff-unchanged">未检测到正文变化，主要是元数据或关联关系调整。</div>
+            </div>
             <div class="decision-grid">
               <button type="button" class="decision-option" :class="{ selected: decisionChoices[item.id] === 'existing' }" @click="chooseDecision(item, 'existing')">
                 <span class="decision-label">保留现有说法</span><strong v-if="decisionChoices[item.id] === 'existing'">✓ 已选择</strong>
@@ -339,6 +372,64 @@ async function deferConflict() {
 
 function pageContent(page?: Record<string, any>) { return String(page?.content || page?.summary || '') }
 
+type DiffRow = { text: string; type: 'context' | 'added' | 'removed'; number: number }
+type DiffResult = { before: DiffRow[]; after: DiffRow[]; addedLines: number; removedLines: number; changed: boolean; description: string }
+
+function comparisonBefore(item: WikiChangeItem) { return pageContent(item.before) }
+function comparisonAfter(item: WikiChangeItem) { return String(item.after?.content || selectedFeedback.value?.suggested_correction || pageContent(item.after) || '') }
+
+function buildDiff(item: WikiChangeItem): DiffResult {
+  const before = comparisonBefore(item).split(/\r?\n/)
+  const after = comparisonAfter(item).split(/\r?\n/)
+  const beforeEmpty = before.length === 1 && !before[0]
+  const afterEmpty = after.length === 1 && !after[0]
+  const oldLines = beforeEmpty ? [] : before
+  const newLines = afterEmpty ? [] : after
+  const n = oldLines.length
+  const m = newLines.length
+  const rowsBefore: DiffRow[] = []
+  const rowsAfter: DiffRow[] = []
+  let addedLines = 0
+  let removedLines = 0
+
+  // A bounded LCS keeps the review drawer responsive even for very large Markdown pages.
+  if (n <= 220 && m <= 220) {
+    const table = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1))
+    for (let i = n - 1; i >= 0; i -= 1) {
+      for (let j = m - 1; j >= 0; j -= 1) table[i][j] = oldLines[i] === newLines[j] ? table[i + 1][j + 1] + 1 : Math.max(table[i + 1][j], table[i][j + 1])
+    }
+    let i = 0; let j = 0
+    while (i < n || j < m) {
+      if (i < n && j < m && oldLines[i] === newLines[j]) {
+        rowsBefore.push({ text: oldLines[i], type: 'context', number: i + 1 }); rowsAfter.push({ text: newLines[j], type: 'context', number: j + 1 }); i += 1; j += 1
+      } else if (j < m && (i === n || table[i][j + 1] >= table[i + 1][j])) {
+        rowsAfter.push({ text: newLines[j], type: 'added', number: j + 1 }); addedLines += 1; j += 1
+      } else {
+        rowsBefore.push({ text: oldLines[i], type: 'removed', number: i + 1 }); removedLines += 1; i += 1
+      }
+    }
+  } else {
+    oldLines.forEach((text, index) => { rowsBefore.push({ text, type: 'removed', number: index + 1 }); removedLines += 1 })
+    newLines.forEach((text, index) => { rowsAfter.push({ text, type: 'added', number: index + 1 }); addedLines += 1 })
+  }
+
+  const changed = addedLines > 0 || removedLines > 0
+  const description = !changed
+    ? '正文没有变化'
+    : oldLines.length === 0
+      ? `新增 ${addedLines} 行内容`
+      : newLines.length === 0
+        ? `删除 ${removedLines} 行内容`
+        : `删除 ${removedLines} 行，新增 ${addedLines} 行`
+  return { before: rowsBefore, after: rowsAfter, addedLines, removedLines, changed, description }
+}
+
+function diffSummary(item: WikiChangeItem) { return buildDiff(item) }
+function diffRows(item: WikiChangeItem) {
+  const result = buildDiff(item)
+  return { before: result.before.filter(row => row.type !== 'added'), after: result.after.filter(row => row.type !== 'removed') }
+}
+
 const wikiRelationLabels: Record<string, string> = {
   consistent: '内容一致',
   complementary: '内容互补',
@@ -528,6 +619,33 @@ function categoryTheme(value: WikiChangeCategory) { return value === 'conflict' 
 .field-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
 .review-edit-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
 .wide-field { grid-column: 1 / -1; }
+.change-summary { margin: 0 0 16px; padding: 13px; border: 1px solid var(--td-component-border); border-radius: 10px; background: var(--td-bg-color-secondarycontainer); }
+.change-summary-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 11px; }
+.change-summary-head > div:first-child { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.change-summary-head strong { font-size: 14px; }
+.change-summary-head span { color: var(--td-text-color-secondary); font-size: 12px; }
+.change-counts { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
+.change-count { padding: 3px 8px; border-radius: 999px; font-size: 11px !important; font-weight: 600; white-space: nowrap; }
+.change-count.removed { color: var(--td-error-color); background: var(--td-error-color-light); }
+.change-count.added { color: var(--td-success-color); background: var(--td-success-color-light); }
+.diff-board { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.diff-board-column { min-width: 0; overflow: hidden; border: 1px solid var(--td-component-border); border-radius: 8px; background: var(--td-bg-color-container); }
+.diff-board-title { display: flex; align-items: center; gap: 7px; padding: 8px 10px; border-bottom: 1px solid var(--td-component-border); font-size: 12px; }
+.diff-board-title small { margin-left: auto; color: var(--td-text-color-placeholder); font-size: 11px; }
+.diff-dot { width: 8px; height: 8px; border-radius: 50%; }
+.diff-dot.removed { background: var(--td-error-color); }
+.diff-dot.added { background: var(--td-success-color); }
+.diff-lines { max-height: 300px; overflow: auto; padding: 5px 0; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.55; }
+.diff-line { display: grid; grid-template-columns: 34px 18px minmax(0, 1fr); min-height: 20px; padding: 1px 9px 1px 0; }
+.diff-line code { min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; color: var(--td-text-color-primary); font-family: inherit; }
+.diff-line-number { padding-right: 7px; color: var(--td-text-color-placeholder); text-align: right; user-select: none; }
+.diff-line-marker { color: var(--td-text-color-placeholder); text-align: center; font-weight: 700; }
+.diff-line--removed { background: var(--td-error-color-light); }
+.diff-line--removed .diff-line-marker, .diff-line--removed code { color: var(--td-error-color); }
+.diff-line--added { background: var(--td-success-color-light); }
+.diff-line--added .diff-line-marker, .diff-line--added code { color: var(--td-success-color); }
+.diff-empty, .diff-unchanged { padding: 12px; color: var(--td-text-color-placeholder); font-size: 12px; }
+.diff-unchanged { border: 1px dashed var(--td-component-border); border-radius: 8px; background: var(--td-bg-color-container); }
 .decision-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 16px; }
 .decision-option { position: relative; min-width: 0; min-height: 142px; padding: 14px; color: inherit; text-align: left; cursor: pointer; border: 2px solid var(--td-component-border); border-radius: 10px; background: var(--td-bg-color-secondarycontainer); transition: .18s ease; }
 .decision-option:hover { border-color: var(--td-brand-color-5); transform: translateY(-1px); }
@@ -597,5 +715,5 @@ pre { margin: 0; padding: 12px; max-height: 340px; overflow: auto; white-space: 
 .markdown-content :deep(.wiki-relation--uncertain) { color: var(--td-warning-color); background: var(--td-warning-color-light); }
 .review-empty, .review-loading { display: grid; place-items: center; min-height: 180px; color: var(--td-text-color-placeholder); }
 @media (max-width: 1000px) { .workflow-header { align-items: flex-start; flex-direction: column; } .review-layout { grid-template-columns: 290px 1fr; } .workflow-step span { display: none; } .attribution-grid { grid-template-columns: 1fr; } }
-@media (max-width: 760px) { .review-layout { grid-template-columns: 1fr; } .review-list { max-height: 240px; border-right: 0; border-bottom: 1px solid var(--td-component-border); } .diff-grid, .feedback-fields, .decision-grid { grid-template-columns: 1fr; } .detail-head { flex-direction: column; } }
+@media (max-width: 760px) { .review-layout { grid-template-columns: 1fr; } .review-list { max-height: 240px; border-right: 0; border-bottom: 1px solid var(--td-component-border); } .diff-grid, .feedback-fields, .decision-grid, .diff-board { grid-template-columns: 1fr; } .change-summary-head { align-items: flex-start; flex-direction: column; } .change-counts { justify-content: flex-start; } .detail-head { flex-direction: column; } }
 </style>
