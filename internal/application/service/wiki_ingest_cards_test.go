@@ -82,6 +82,9 @@ func TestApplyCardGraphBuildsAndClearsRelationshipSection(t *testing.T) {
 	if len(page.OutLinks) != 1 || page.OutLinks[0] != "card/knowledge-b" || !strings.Contains(page.Content, "[[card/knowledge-b|B]]") {
 		t.Fatalf("graph edge was not rendered: out=%v content=%q", page.OutLinks, page.Content)
 	}
+	if !strings.Contains(page.Content, "（内容互补）") || strings.Contains(page.Content, "（complementary）") {
+		t.Fatalf("graph relation was not rendered in business-friendly Chinese: %q", page.Content)
+	}
 	if err := applyCardGraph(page, nil, nil); err != nil {
 		t.Fatal(err)
 	}

@@ -76,6 +76,23 @@ var validSemanticCardRelations = map[string]bool{
 	"example_of": true, "mitigates": true,
 }
 
+var crossPageRelationLabels = map[string]string{
+	"consistent":    "内容一致",
+	"complementary": "内容互补",
+	"conflicting":   "说法冲突",
+	"supersedes":    "新内容替代旧内容",
+	"unrelated":     "暂无直接关联",
+	"uncertain":     "关系待确认",
+}
+
+func crossPageRelationLabel(value any) string {
+	relation := fmt.Sprint(value)
+	if label := crossPageRelationLabels[relation]; label != "" {
+		return label
+	}
+	return "关系待确认"
+}
+
 func mergeCardStrings(a, b types.StringArray) types.StringArray {
 	out := make(types.StringArray, 0, len(a)+len(b))
 	seen := map[string]bool{}
@@ -129,7 +146,7 @@ func cardMarkdown(c scenarioCardCandidate, relationships []map[string]any) strin
 	if len(relationships) > 0 {
 		b.WriteString("\n## 关联知识\n")
 		for _, relation := range relationships {
-			fmt.Fprintf(&b, "- [[%s|%s]]（%s）\n", relation["target_slug"], relation["target_title"], relation["relation_type"])
+			fmt.Fprintf(&b, "- [[%s|%s]]（%s）\n", relation["target_slug"], relation["target_title"], crossPageRelationLabel(relation["relation_type"]))
 		}
 	}
 	return b.String()
@@ -419,7 +436,7 @@ func replaceCardRelationshipSection(content string, relationships []map[string]a
 	b.WriteString(strings.TrimRight(content, "\n"))
 	b.WriteString(heading)
 	for _, relation := range relationships {
-		fmt.Fprintf(&b, "- [[%s|%s]]（%s）\n", relation["target_slug"], relation["target_title"], relation["relation_type"])
+		fmt.Fprintf(&b, "- [[%s|%s]]（%s）\n", relation["target_slug"], relation["target_title"], crossPageRelationLabel(relation["relation_type"]))
 	}
 	return b.String()
 }
