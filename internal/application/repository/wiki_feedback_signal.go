@@ -24,7 +24,11 @@ func feedbackCandidateContent(page *types.WikiPage, in *types.WikiFeedbackSignal
 	if excerpt != "" && strings.Contains(page.Content, excerpt) {
 		return strings.Replace(page.Content, excerpt, correction, 1)
 	}
-	return strings.TrimSpace(page.Content) + "\n\n## 反馈修正候选\n\n" + correction
+	// Never append feedback to the page as if it were knowledge content. If
+	// the original answer excerpt cannot be located in this recalled page, keep
+	// the page unchanged and leave the item for manual attribution/editing.
+	// This keeps feedback as review context instead of polluting the Wiki page.
+	return page.Content
 }
 
 func feedbackRisk(in *types.WikiFeedbackSignalInput) string {

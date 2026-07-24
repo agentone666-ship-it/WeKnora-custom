@@ -141,9 +141,10 @@
                 <span class="decision-label">保留现有说法</span><strong v-if="decisionChoices[item.id] === 'existing'">✓ 已选择</strong>
                 <div class="markdown-content decision-preview" v-html="renderMarkdown(pageContent(item.before) || '（暂无内容）')"></div>
               </button>
-              <button type="button" class="decision-option" :class="{ selected: decisionChoices[item.id] === 'feedback' }" @click="chooseDecision(item, 'feedback')">
+              <button type="button" class="decision-option" :class="{ selected: decisionChoices[item.id] === 'feedback' }" :disabled="!hasAutoContentChange(item)" @click="chooseDecision(item, 'feedback')">
                 <span class="decision-label">采用反馈说法</span><strong v-if="decisionChoices[item.id] === 'feedback'">✓ 已选择</strong>
-                <div class="markdown-content decision-preview" v-html="renderMarkdown(selectedFeedback?.suggested_correction || pageContent(item.after) || '（暂无内容）')"></div>
+                <div v-if="hasAutoContentChange(item)" class="markdown-content decision-preview" v-html="renderMarkdown(selectedFeedback?.suggested_correction || pageContent(item.after) || '（暂无内容）')"></div>
+                <p v-else class="decision-unavailable">未能在该 Wiki 页中定位原回答，系统没有自动拼接反馈。请使用“我来修改”并直接修正页面内容。</p>
               </button>
               <button type="button" class="decision-option" :class="{ selected: decisionChoices[item.id] === 'custom' }" @click="chooseDecision(item, 'custom')">
                 <span class="decision-label">两者都不准确，我来修改</span><strong v-if="decisionChoices[item.id] === 'custom'">✓ 已选择</strong>
@@ -376,7 +377,8 @@ type DiffRow = { text: string; type: 'context' | 'added' | 'removed'; number: nu
 type DiffResult = { before: DiffRow[]; after: DiffRow[]; addedLines: number; removedLines: number; changed: boolean; description: string }
 
 function comparisonBefore(item: WikiChangeItem) { return pageContent(item.before) }
-function comparisonAfter(item: WikiChangeItem) { return String(item.after?.content || selectedFeedback.value?.suggested_correction || pageContent(item.after) || '') }
+function comparisonAfter(item: WikiChangeItem) { return String(item.after?.content || pageContent(item.after) || '') }
+function hasAutoContentChange(item: WikiChangeItem) { return comparisonBefore(item) !== comparisonAfter(item) }
 
 function buildDiff(item: WikiChangeItem): DiffResult {
   const before = comparisonBefore(item).split(/\r?\n/)
@@ -650,9 +652,11 @@ function categoryTheme(value: WikiChangeCategory) { return value === 'conflict' 
 .decision-option { position: relative; min-width: 0; min-height: 142px; padding: 14px; color: inherit; text-align: left; cursor: pointer; border: 2px solid var(--td-component-border); border-radius: 10px; background: var(--td-bg-color-secondarycontainer); transition: .18s ease; }
 .decision-option:hover { border-color: var(--td-brand-color-5); transform: translateY(-1px); }
 .decision-option.selected { border-color: var(--td-brand-color); background: var(--td-brand-color-light); box-shadow: 0 4px 14px rgba(0,0,0,.05); }
+.decision-option:disabled { cursor: not-allowed; opacity: .72; transform: none; }
 .decision-option > strong { position: absolute; top: 13px; right: 13px; color: var(--td-brand-color); font-size: 12px; }
 .decision-label { display: block; padding-right: 58px; font-weight: 650; }
 .decision-preview { display: -webkit-box; overflow: hidden; margin-top: 12px; color: var(--td-text-color-secondary); font-size: 13px; -webkit-line-clamp: 5; -webkit-box-orient: vertical; }
+.decision-unavailable { margin: 12px 0 0; color: var(--td-text-color-secondary); font-size: 12px; line-height: 1.55; }
 .final-editor { padding: 14px; border: 1px solid var(--td-brand-color-3); border-radius: 10px; background: var(--td-bg-color-container); }
 .final-editor .diff-title small { color: var(--td-text-color-secondary); font-weight: 400; }
 .choice-hint { padding: 13px 14px; border: 1px dashed var(--td-component-border); border-radius: 9px; color: var(--td-text-color-secondary); background: var(--td-bg-color-secondarycontainer); font-size: 13px; }
