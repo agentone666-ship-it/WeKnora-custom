@@ -45,6 +45,13 @@ func feedbackKey(kbID string, in *types.WikiFeedbackSignalInput) string {
 	return hex.EncodeToString(s[:])
 }
 
+func feedbackCandidateNodeIDs(in *types.WikiFeedbackSignalInput) []string {
+	if len(in.TargetNodeIDs) > 0 {
+		return append([]string(nil), in.TargetNodeIDs...)
+	}
+	return append([]string(nil), in.RecalledNodeIDs...)
+}
+
 func feedbackTextContains(text, term string) bool {
 	text = strings.ToLower(strings.TrimSpace(text))
 	term = strings.ToLower(strings.TrimSpace(term))
@@ -111,10 +118,13 @@ func (r *wikiGovernanceRepository) SubmitFeedbackSignal(ctx context.Context, ten
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, err
 	}
-	candidateNodeIDs := append(types.StringArray(nil), in.TargetNodeIDs...)
+	// Keep query IDs as a plain []string. types.StringArray implements
+	// driver.Valuer for JSON columns; passing it to GORM's `IN ?` predicate
+	// makes PostgreSQL bind the whole JSON value as one parameter and produces
+	// invalid SQL such as `id IN $3` instead of expanding the IDs.
+	candidateNodeIDs := feedbackCandidateNodeIDs(in)
 	confidence := 1.0
-	if len(candidateNodeIDs) == 0 {
-		candidateNodeIDs = append(candidateNodeIDs, in.RecalledNodeIDs...)
+	if len(in.TargetNodeIDs) == 0 && len(candidateNodeIDs) > 0 {
 		confidence = 0.7
 	}
 	if len(candidateNodeIDs) == 0 {
