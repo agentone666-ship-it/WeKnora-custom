@@ -158,7 +158,7 @@ func TestPendingGraphCardStaysIsolatedAndPublishesLatestGraph(t *testing.T) {
 	repo, db := newGovernanceTestRepo(t)
 	now := time.Now()
 	page := &types.WikiPage{TenantID: 1, KnowledgeBaseID: "kb-1", Slug: "card/question-graph", Title: "graph", Content: "# graph\n\nclaim\n", PageType: types.WikiPageTypeCard, KnowledgeType: types.WikiKnowledgeTypeQuestion, Status: types.WikiPageStatusDraft, ReviewStatus: types.WikiReviewPending, MaturityStatus: types.WikiMaturityPendingReview, ChunkRefs: types.StringArray{"chunk-1"}, Version: 1}
-	set := &types.WikiChangeSet{ID: uuid.NewString(), TenantID: 1, KnowledgeBaseID: "kb-1", Status: types.WikiChangeSetPending, ReviewLevel: types.WikiReviewLevelL1, CreatedAt: now, UpdatedAt: now, Items: []types.WikiChangeItem{{ID: uuid.NewString(), Operation: "create", PageSlug: page.Slug, After: snapshotForTest(t, page), CreatedAt: now}}}
+	set := &types.WikiChangeSet{ID: uuid.NewString(), TenantID: 1, KnowledgeBaseID: "kb-1", Status: types.WikiChangeSetPending, ReviewLevel: types.WikiReviewLevelL1, ChangeCategory: types.WikiChangeCategoryConflict, Reasons: types.StringArray{"cross_page_claim_conflict"}, CreatedAt: now, UpdatedAt: now, Items: []types.WikiChangeItem{{ID: uuid.NewString(), Operation: "create", ChangeCategory: types.WikiChangeCategoryConflict, PageSlug: page.Slug, After: snapshotForTest(t, page), CreatedAt: now}}}
 	if err := repo.CreateChangeSet(context.Background(), set); err != nil {
 		t.Fatal(err)
 	}
@@ -178,9 +178,20 @@ func TestPendingGraphCardStaysIsolatedAndPublishesLatestGraph(t *testing.T) {
 	graphPage.Content += "\n## 关联知识\n- [[card/knowledge-target|target]]（answers）\n"
 	graphPage.OutLinks = types.StringArray{"card/knowledge-target"}
 	graphPage.PageMetadata = types.JSON(`{"relationships":[{"target_slug":"card/knowledge-target","relation_type":"answers"}]}`)
-	updated, err := repo.UpdatePendingGraphCard(context.Background(), "kb-1", candidates[0].ChangeItemID, graphPage)
+	governance := types.WikiPendingGraphGovernance{SyncReviewEnvelope: true, ReviewLevel: types.WikiReviewLevelL1, ChangeCategory: types.WikiChangeCategoryAddition, Reasons: types.StringArray{"new_reviewable_card"}}
+	updated, err := repo.UpdatePendingGraphCard(context.Background(), "kb-1", candidates[0].ChangeItemID, graphPage, governance)
 	if err != nil || !updated {
 		t.Fatalf("update pending graph updated=%v err=%v", updated, err)
+	}
+	var reclassified types.WikiChangeSet
+	if err := db.Preload("Items").First(&reclassified, "id = ?", set.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if reclassified.ChangeCategory != types.WikiChangeCategoryAddition || reclassified.Items[0].ChangeCategory != types.WikiChangeCategoryAddition {
+		t.Fatalf("graph convergence left stale categories set=%s item=%s", reclassified.ChangeCategory, reclassified.Items[0].ChangeCategory)
+	}
+	if len(reclassified.Reasons) != 1 || reclassified.Reasons[0] != "new_reviewable_card" {
+		t.Fatalf("graph governance was not synchronized: reasons=%v", reclassified.Reasons)
 	}
 	if err := repo.ReviewChangeSet(context.Background(), "kb-1", set.ID, "reviewer-1", &types.WikiReviewDecision{Decision: types.WikiReviewApproved}); err != nil {
 		t.Fatal(err)
@@ -192,8 +203,57 @@ func TestPendingGraphCardStaysIsolatedAndPublishesLatestGraph(t *testing.T) {
 	if len(stored.OutLinks) != 1 || stored.OutLinks[0] != "card/knowledge-target" || !strings.Contains(stored.Content, "关联知识") {
 		t.Fatalf("approval did not publish latest candidate graph: out=%v content=%q", stored.OutLinks, stored.Content)
 	}
-	if updated, err := repo.UpdatePendingGraphCard(context.Background(), "kb-1", candidates[0].ChangeItemID, graphPage); err != nil || updated {
+	if updated, err := repo.UpdatePendingGraphCard(context.Background(), "kb-1", candidates[0].ChangeItemID, graphPage, governance); err != nil || updated {
 		t.Fatalf("applied snapshot must reject candidate graph writes: updated=%v err=%v", updated, err)
+	}
+}
+
+func TestPendingGraphCardPreservesNonGraphReviewEnvelope(t *testing.T) {
+	repo, db := newGovernanceTestRepo(t)
+	now := time.Now()
+	first := &types.WikiPage{ID: uuid.NewString(), TenantID: 1, KnowledgeBaseID: "kb-1", Slug: "card/knowledge-feedback-a", Title: "feedback a", Content: "old a", PageType: types.WikiPageTypeCard, KnowledgeType: types.WikiKnowledgeTypeKnowledge, Status: types.WikiPageStatusDraft, ReviewStatus: types.WikiReviewPending, MaturityStatus: types.WikiMaturityPendingReview, Version: 1}
+	second := &types.WikiPage{ID: uuid.NewString(), TenantID: 1, KnowledgeBaseID: "kb-1", Slug: "card/knowledge-feedback-b", Title: "feedback b", Content: "old b", PageType: types.WikiPageTypeCard, KnowledgeType: types.WikiKnowledgeTypeKnowledge, Status: types.WikiPageStatusDraft, ReviewStatus: types.WikiReviewPending, MaturityStatus: types.WikiMaturityPendingReview, Version: 1}
+	set := &types.WikiChangeSet{
+		ID: uuid.NewString(), TenantID: 1, KnowledgeBaseID: "kb-1", Status: types.WikiChangeSetPending,
+		ReviewLevel: types.WikiReviewLevelL1, ChangeCategory: types.WikiChangeCategoryCorrection,
+		Reasons: types.StringArray{"feedback_signal", "incorrect", "pending_feedback_conflict"},
+		ModelID: "feedback-loop", PromptVersion: "feedback-candidate-v2-full-page", CandidateFingerprint: "feedback-key",
+		CreatedAt: now, UpdatedAt: now,
+		Items: []types.WikiChangeItem{
+			{ID: uuid.NewString(), Operation: "update", ChangeCategory: types.WikiChangeCategoryCorrection, PageID: first.ID, PageSlug: first.Slug, Before: snapshotForTest(t, first), After: snapshotForTest(t, first), CreatedAt: now},
+			{ID: uuid.NewString(), Operation: "update", ChangeCategory: types.WikiChangeCategoryCorrection, PageID: second.ID, PageSlug: second.Slug, Before: snapshotForTest(t, second), After: snapshotForTest(t, second), CreatedAt: now},
+		},
+	}
+	if err := repo.CreateChangeSet(context.Background(), set); err != nil {
+		t.Fatal(err)
+	}
+
+	graphPage := *first
+	graphPage.Content = "old a\n\n## 关联知识\n- [[card/knowledge-feedback-b|feedback b]]（related）\n"
+	graphPage.OutLinks = types.StringArray{second.Slug}
+	graphPage.PageMetadata = types.JSON(`{"relationships":[{"target_slug":"card/knowledge-feedback-b","relation_type":"related"}]}`)
+	updated, err := repo.UpdatePendingGraphCard(context.Background(), "kb-1", set.Items[0].ID, &graphPage, types.WikiPendingGraphGovernance{})
+	if err != nil || !updated {
+		t.Fatalf("update pending feedback graph updated=%v err=%v", updated, err)
+	}
+
+	var stored types.WikiChangeSet
+	if err := db.Preload("Items").First(&stored, "id = ?", set.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.ReviewLevel != types.WikiReviewLevelL1 || stored.ChangeCategory != types.WikiChangeCategoryCorrection {
+		t.Fatalf("feedback review envelope changed to %s/%s", stored.ReviewLevel, stored.ChangeCategory)
+	}
+	if strings.Join(stored.Reasons, ",") != "feedback_signal,incorrect,pending_feedback_conflict" {
+		t.Fatalf("feedback reasons changed: %v", stored.Reasons)
+	}
+	for _, item := range stored.Items {
+		if item.ChangeCategory != types.WikiChangeCategoryCorrection {
+			t.Fatalf("feedback item %s category changed to %s", item.ID, item.ChangeCategory)
+		}
+	}
+	if !strings.Contains(stored.Items[0].After.ToString(), "关联知识") {
+		t.Fatalf("graph-owned candidate snapshot was not updated: %s", stored.Items[0].After.ToString())
 	}
 }
 

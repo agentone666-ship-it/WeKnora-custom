@@ -122,6 +122,17 @@ type WikiPendingGraphCard struct {
 	Page         *WikiPage `json:"page"`
 }
 
+// WikiPendingGraphGovernance optionally keeps an ingest candidate's review
+// envelope in sync with the latest graph-converged snapshot. Other workflows,
+// such as feedback and rollback, keep their own review semantics while still
+// accepting graph-owned snapshot fields.
+type WikiPendingGraphGovernance struct {
+	SyncReviewEnvelope bool
+	ReviewLevel        string
+	ChangeCategory     string
+	Reasons            StringArray
+}
+
 type WikiReview struct {
 	ID              string    `json:"id" gorm:"type:varchar(36);primaryKey"`
 	ChangeSetID     string    `json:"change_set_id" gorm:"type:varchar(36);index"`

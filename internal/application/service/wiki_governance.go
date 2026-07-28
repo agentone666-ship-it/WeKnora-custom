@@ -511,7 +511,11 @@ func classifyWikiChange(candidate, existing *types.WikiPage, reasons []string) s
 	if hasReason("authoritative_explicit_correction") {
 		return types.WikiChangeCategoryCorrection
 	}
-	if hasReason("cross_page_claim_conflict") || hasReason("cross_page_claim_uncertain") || hasReason("cross_page_claim_supersedes_existing") {
+	// An uncertain cross-page relationship still requires human review, but it
+	// is not a conflict that can be resolved by choosing an old or new claim.
+	// Keep its L1 review reason while classifying the candidate by its actual
+	// operation so create candidates retain addition selection/bulk actions.
+	if hasReason("cross_page_claim_conflict") || hasReason("cross_page_claim_supersedes_existing") {
 		return types.WikiChangeCategoryConflict
 	}
 	if hasReason("possible_duplicate") {
@@ -694,8 +698,58 @@ func (s *wikiGovernanceService) ListPageChangeSets(ctx context.Context, kbID, sl
 func (s *wikiGovernanceService) ListPendingGraphCards(ctx context.Context, kbID string, limit int) ([]*types.WikiPendingGraphCard, error) {
 	return s.repo.ListPendingGraphCards(ctx, kbID, limit)
 }
-func (s *wikiGovernanceService) UpdatePendingGraphCard(ctx context.Context, kbID, changeItemID string, page *types.WikiPage) (bool, error) {
-	return s.repo.UpdatePendingGraphCard(ctx, kbID, changeItemID, page)
+func pendingGraphGovernance(page, existing *types.WikiPage, currentReviewLevel string) types.WikiPendingGraphGovernance {
+	assessment := AssessWikiCardChange(page, existing)
+	// Once a candidate has entered the human queue, graph convergence must not
+	// silently turn it into an automatic publish. It may, however, correct the
+	// business category and reasons shown to the reviewer.
+	if currentReviewLevel == types.WikiReviewLevelL1 && assessment.Level == types.WikiReviewLevelL0 {
+		assessment.Level = types.WikiReviewLevelL1
+	}
+	return types.WikiPendingGraphGovernance{
+		SyncReviewEnvelope: true,
+		ReviewLevel:        assessment.Level,
+		ChangeCategory:     classifyWikiChange(page, existing, assessment.Reasons),
+		Reasons:            types.StringArray(assessment.Reasons),
+	}
+}
+
+func ownsGraphDerivedReviewEnvelope(set *types.WikiChangeSet) bool {
+	return set != nil &&
+		set.PromptVersion == wikiCardPromptVersion &&
+		set.CandidateFingerprint != "" &&
+		len(set.Items) == 1
+}
+
+func (s *wikiGovernanceService) UpdatePendingGraphCard(ctx context.Context, kbID, changeSetID, changeItemID string, page *types.WikiPage) (bool, error) {
+	set, err := s.repo.GetChangeSet(ctx, kbID, changeSetID)
+	if err != nil {
+		return false, err
+	}
+	var existing *types.WikiPage
+	found := false
+	for _, item := range set.Items {
+		if item.ID != changeItemID {
+			continue
+		}
+		found = true
+		if item.Operation != "create" && len(item.Before) > 0 && item.Before.ToString() != "{}" {
+			var before types.WikiPage
+			if err := json.Unmarshal(item.Before, &before); err != nil {
+				return false, fmt.Errorf("decode pending graph before snapshot: %w", err)
+			}
+			existing = &before
+		}
+		break
+	}
+	if !found {
+		return false, fmt.Errorf("pending graph change item %s not found in set %s", changeItemID, changeSetID)
+	}
+	governance := types.WikiPendingGraphGovernance{}
+	if ownsGraphDerivedReviewEnvelope(set) {
+		governance = pendingGraphGovernance(page, existing, set.ReviewLevel)
+	}
+	return s.repo.UpdatePendingGraphCard(ctx, kbID, changeItemID, page, governance)
 }
 func (s *wikiGovernanceService) ReviewChangeSet(ctx context.Context, kbID, id, reviewerID string, d *types.WikiReviewDecision) error {
 	set, err := s.repo.GetChangeSet(ctx, kbID, id)

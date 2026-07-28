@@ -610,7 +610,7 @@ func (s *wikiIngestService) rebuildGovernedCardGraphs(ctx context.Context, model
 			if err := applyCardGraph(&pageCopy, assessments, evidence); err != nil {
 				return nil
 			}
-			if updated, updateErr := s.governanceSvc.UpdatePendingGraphCard(ctx, payload.KnowledgeBaseID, candidate.ChangeItemID, &pageCopy); updateErr != nil {
+			if updated, updateErr := s.governanceSvc.UpdatePendingGraphCard(ctx, payload.KnowledgeBaseID, candidate.ChangeSetID, candidate.ChangeItemID, &pageCopy); updateErr != nil {
 				logger.Warnf(ctx, "wiki graph: update pending snapshot %s failed: %v", pageCopy.Slug, updateErr)
 			} else if updated {
 				pendingUpdated.Add(1)
