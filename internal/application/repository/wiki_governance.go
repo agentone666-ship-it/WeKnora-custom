@@ -156,10 +156,60 @@ func (r *wikiGovernanceRepository) FindChangeSetByFingerprint(ctx context.Contex
 func (r *wikiGovernanceRepository) GetChangeSet(ctx context.Context, kbID, id string) (*types.WikiChangeSet, error) {
 	var set types.WikiChangeSet
 	err := r.db.WithContext(ctx).Preload("Items").Where("knowledge_base_id = ? AND id = ?", kbID, id).First(&set).Error
+	if err != nil {
+		return &set, err
+	}
+	if err := r.hydrateMergeDuplicateBefore(ctx, kbID, &set); err != nil {
+		return &set, err
+	}
 	if set.ReviewLevel == types.WikiReviewLevelL2 {
 		set.ReviewLevel = types.WikiReviewLevelL1
 	}
-	return &set, err
+	return &set, nil
+}
+
+// hydrateMergeDuplicateBefore supplies the current merge target as the
+// comparison baseline. A duplicate candidate is a create operation, so its
+// persisted Before snapshot is intentionally empty; reviewers still need the
+// existing target page in order to make a safe keep/adopt/edit decision.
+func (r *wikiGovernanceRepository) hydrateMergeDuplicateBefore(ctx context.Context, kbID string, set *types.WikiChangeSet) error {
+	if set == nil || set.ChangeCategory != types.WikiChangeCategoryMergeDuplicate {
+		return nil
+	}
+	for i := range set.Items {
+		item := &set.Items[i]
+		if item.ChangeCategory != types.WikiChangeCategoryMergeDuplicate {
+			continue
+		}
+		if before, err := decodePageSnapshot(item.Before); err == nil && (strings.TrimSpace(before.Content) != "" || strings.TrimSpace(before.Summary) != "") {
+			continue
+		}
+		candidate, err := decodePageSnapshot(item.After)
+		if err != nil {
+			continue
+		}
+		metadata, err := candidate.PageMetadata.Map()
+		if err != nil {
+			continue
+		}
+		targetSlug, _ := metadata["possible_duplicate_slug"].(string)
+		targetSlug = strings.TrimSpace(targetSlug)
+		if targetSlug == "" {
+			continue
+		}
+		var target types.WikiPage
+		err = r.db.WithContext(ctx).
+			Where("knowledge_base_id = ? AND slug = ? AND page_type = ? AND review_status = ?", kbID, targetSlug, types.WikiPageTypeCard, types.WikiReviewApproved).
+			First(&target).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		item.Before = pageJSONForRepository(&target)
+	}
+	return nil
 }
 
 func (r *wikiGovernanceRepository) ListPendingGraphCards(ctx context.Context, kbID string, limit int) ([]*types.WikiPendingGraphCard, error) {
