@@ -182,6 +182,61 @@ func TestGetChangeSetHydratesMergeDuplicateBeforeFromTargetPage(t *testing.T) {
 	}
 }
 
+func TestGetChangeSetKeepsExistingEmptyContentSnapshot(t *testing.T) {
+	repo, db := newGovernanceTestRepo(t)
+	now := time.Now()
+	target := &types.WikiPage{
+		ID: uuid.NewString(), TenantID: 1, KnowledgeBaseID: "kb-1",
+		Slug: "card/knowledge-existing", Title: "Current target", Content: "Current target content",
+		PageType: types.WikiPageTypeCard, KnowledgeType: types.WikiKnowledgeTypeKnowledge,
+		Status: types.WikiPageStatusPublished, ReviewStatus: types.WikiReviewApproved,
+		MaturityStatus: types.WikiMaturityVerified, Version: 4, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := db.Create(target).Error; err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := json.Marshal(map[string]any{"possible_duplicate_slug": target.Slug})
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := &types.WikiPage{
+		ID: uuid.NewString(), TenantID: 1, KnowledgeBaseID: "kb-1",
+		Slug: "card/knowledge-candidate", Title: "Candidate", Content: "Candidate content",
+		PageType: types.WikiPageTypeCard, KnowledgeType: types.WikiKnowledgeTypeKnowledge,
+		PageMetadata: types.JSON(metadata), Status: types.WikiPageStatusDraft,
+		ReviewStatus: types.WikiReviewPending, MaturityStatus: types.WikiMaturityPendingReview,
+	}
+	historicalBefore := &types.WikiPage{
+		ID: uuid.NewString(), TenantID: 1, KnowledgeBaseID: "kb-1",
+		Slug: "card/knowledge-historical-empty", Title: "Historical empty page",
+		PageType: types.WikiPageTypeCard, KnowledgeType: types.WikiKnowledgeTypeKnowledge, Version: 2,
+	}
+	set := &types.WikiChangeSet{
+		ID: uuid.NewString(), TenantID: 1, KnowledgeBaseID: "kb-1", Status: types.WikiChangeSetPending,
+		ReviewLevel: types.WikiReviewLevelL1, ChangeCategory: types.WikiChangeCategoryMergeDuplicate,
+		CreatedAt: now, UpdatedAt: now,
+		Items: []types.WikiChangeItem{{
+			ID: uuid.NewString(), Operation: "create", ChangeCategory: types.WikiChangeCategoryMergeDuplicate,
+			PageSlug: candidate.Slug, Before: snapshotForTest(t, historicalBefore), After: snapshotForTest(t, candidate), CreatedAt: now,
+		}},
+	}
+	if err := repo.CreateChangeSet(context.Background(), set); err != nil {
+		t.Fatal(err)
+	}
+
+	detail, err := repo.GetChangeSet(context.Background(), "kb-1", set.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := decodePageSnapshot(detail.Items[0].Before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.ID != historicalBefore.ID || before.Slug != historicalBefore.Slug || before.Version != historicalBefore.Version {
+		t.Fatalf("valid empty-content snapshot was replaced: before=%+v", before)
+	}
+}
+
 func TestReviewChangeSetPublishesCardAtomically(t *testing.T) {
 	repo, db := newGovernanceTestRepo(t)
 	now := time.Now()
