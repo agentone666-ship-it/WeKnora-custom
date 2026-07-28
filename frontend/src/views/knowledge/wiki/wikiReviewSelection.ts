@@ -11,7 +11,7 @@ export interface WikiReviewBatchSelectionState {
 }
 
 export function selectableWikiReviewIds(sets: WikiReviewSelectableSet[]): string[] {
-  return sets.filter(set => set.change_category !== 'conflict').map(set => set.id)
+  return sets.filter(set => set.change_category === 'addition').map(set => set.id)
 }
 
 export function normalizeWikiReviewSelection(selectedIds: string[], sets: WikiReviewSelectableSet[]): string[] {

@@ -21,10 +21,22 @@
           <t-button variant="outline" :loading="loading" @click="load">刷新</t-button>
         </div>
         <div class="queue-title"><span>待审核反馈</span><t-tag size="small" theme="primary">{{ sets.length }}</t-tag></div>
+        <div v-if="batchSelection.total" class="batch-selector">
+          <t-checkbox :checked="batchSelection.checked" :indeterminate="batchSelection.indeterminate"
+            @change="toggleAllBatch">
+            全选当前新增内容（{{ batchSelection.total }}）
+          </t-checkbox>
+        </div>
+        <div v-if="selectedBatchIds.length" class="batch-actions">
+          <span>已选 {{ selectedBatchIds.length }} 条新增内容</span>
+          <t-button size="small" theme="primary" :loading="submitting" @click="submitBatch">批量确认并发布</t-button>
+        </div>
         <div v-if="!loading && sets.length === 0" class="review-empty">暂无待处理反馈</div>
         <div v-for="set in sets" :key="set.id" class="review-row" :class="{ active: selected?.id === set.id }"
           @click="select(set)">
           <div class="review-row-top">
+            <t-checkbox v-if="set.change_category === 'addition'" :checked="selectedBatchIds.includes(set.id)"
+              aria-label="选择这条新增内容" @click.stop @change="toggleBatch(set.id, $event)" />
             <t-tag size="small" :theme="categoryTheme(set.change_category)">{{ categoryLabel(set.change_category) }}</t-tag>
             <span>{{ set.items?.[0]?.after?.title || set.items?.[0]?.page_slug || '未命名内容' }}</span>
           </div>
@@ -101,7 +113,7 @@
           </section>
           <section v-for="item in selected.items" :key="item.id" class="change-item">
             <div class="section-heading">
-              <div><span class="section-index">{{ isConflict ? '04' : '02' }}</span><div><strong>哪个说法是对的？</strong><p>{{ itemTitle(item) }} · {{ versionText(item) }}</p></div></div>
+              <div><span class="section-index">{{ isConflict ? '04' : '02' }}</span><div><strong>{{ isConflict ? '查看完整内容对比' : '哪个说法是对的？' }}</strong><p>{{ itemTitle(item) }} · {{ versionText(item) }}</p></div></div>
             </div>
             <div class="change-summary">
               <div class="change-summary-head">
@@ -114,32 +126,48 @@
                   <span class="change-count added">＋ {{ diffSummary(item).addedLines }} 行新增</span>
                 </div>
               </div>
-              <div v-if="diffSummary(item).changed" class="diff-board">
-                <div class="diff-board-column">
-                  <div class="diff-board-title"><span class="diff-dot removed"></span><strong>修改前</strong><small>原知识库内容</small></div>
-                  <div class="diff-lines">
-                    <div v-for="(row, index) in diffRows(item).before" :key="`before-${item.id}-${index}`" class="diff-line" :class="`diff-line--${row.type}`">
-                      <span class="diff-line-number">{{ row.number || '' }}</span><span class="diff-line-marker">{{ row.type === 'removed' ? '−' : ' ' }}</span><code>{{ row.text || ' ' }}</code>
-                    </div>
-                    <div v-if="!diffRows(item).before.length" class="diff-empty">（原内容为空）</div>
+              <template v-if="diffSummary(item).changed">
+                <div class="diff-board diff-board--rendered">
+                  <div class="diff-board-column diff-board-column--removed">
+                    <div class="diff-board-title"><span class="diff-dot removed"></span><strong>{{ comparisonBeforeTitle(item) }}</strong><small>{{ comparisonBeforeSubtitle(item) }}</small></div>
+                    <div class="markdown-content diff-rendered-content" v-html="renderMarkdown(comparisonBefore(item))"></div>
+                  </div>
+                  <div class="diff-board-column diff-board-column--added">
+                    <div class="diff-board-title"><span class="diff-dot added"></span><strong>{{ comparisonAfterTitle(item) }}</strong><small>{{ comparisonAfterSubtitle(item) }}</small></div>
+                    <div class="markdown-content diff-rendered-content" v-html="renderMarkdown(comparisonAfter(item))"></div>
                   </div>
                 </div>
-                <div class="diff-board-column">
-                  <div class="diff-board-title"><span class="diff-dot added"></span><strong>修改后</strong><small>准备发布的内容</small></div>
-                  <div class="diff-lines">
-                    <div v-for="(row, index) in diffRows(item).after" :key="`after-${item.id}-${index}`" class="diff-line" :class="`diff-line--${row.type}`">
-                      <span class="diff-line-number">{{ row.number || '' }}</span><span class="diff-line-marker">{{ row.type === 'added' ? '＋' : ' ' }}</span><code>{{ row.text || ' ' }}</code>
+                <details class="diff-source-details">
+                  <summary>查看逐行差异</summary>
+                  <div class="diff-board diff-board--source">
+                    <div class="diff-board-column">
+                      <div class="diff-board-title"><span class="diff-dot removed"></span><strong>删除内容</strong><small>Markdown 源文</small></div>
+                      <div class="diff-lines">
+                        <div v-for="(row, index) in diffRows(item).before" :key="`before-${item.id}-${index}`" class="diff-line" :class="`diff-line--${row.type}`">
+                          <span class="diff-line-number">{{ row.number || '' }}</span><span class="diff-line-marker">{{ row.type === 'removed' ? '−' : ' ' }}</span><code>{{ row.text || ' ' }}</code>
+                        </div>
+                        <div v-if="!diffRows(item).before.length" class="diff-empty">（原内容为空）</div>
+                      </div>
                     </div>
-                    <div v-if="!diffRows(item).after.length" class="diff-empty">（新内容为空）</div>
+                    <div class="diff-board-column">
+                      <div class="diff-board-title"><span class="diff-dot added"></span><strong>新增内容</strong><small>Markdown 源文</small></div>
+                      <div class="diff-lines">
+                        <div v-for="(row, index) in diffRows(item).after" :key="`after-${item.id}-${index}`" class="diff-line" :class="`diff-line--${row.type}`">
+                          <span class="diff-line-number">{{ row.number || '' }}</span><span class="diff-line-marker">{{ row.type === 'added' ? '＋' : ' ' }}</span><code>{{ row.text || ' ' }}</code>
+                        </div>
+                        <div v-if="!diffRows(item).after.length" class="diff-empty">（新内容为空）</div>
+                      </div>
+                    </div>
                   </div>
-                </div>
-              </div>
+                </details>
+              </template>
               <div v-else class="diff-unchanged">未检测到正文变化，主要是元数据或关联关系调整。</div>
             </div>
+            <template v-if="!isConflict">
             <div class="decision-grid">
               <button type="button" class="decision-option" :class="{ selected: decisionChoices[item.id] === 'existing' }" @click="chooseDecision(item, 'existing')">
                 <span class="decision-label">保留现有说法</span><strong v-if="decisionChoices[item.id] === 'existing'">✓ 已选择</strong>
-                <div class="markdown-content decision-preview" v-html="renderMarkdown(pageContent(item.before) || '（暂无内容）')"></div>
+                <div class="markdown-content decision-preview" v-html="renderMarkdown(comparisonBefore(item))"></div>
               </button>
               <button type="button" class="decision-option" :class="{ selected: decisionChoices[item.id] === 'feedback' }" :disabled="!hasAutoContentChange(item)" @click="chooseDecision(item, 'feedback')">
                 <span class="decision-label">采用反馈说法</span><strong v-if="decisionChoices[item.id] === 'feedback'">✓ 已选择</strong>
@@ -160,6 +188,7 @@
               <div v-else class="markdown-content final-preview" v-html="renderMarkdown(overrides[item.id]?.content || '')"></div>
             </div>
             <div v-else class="choice-hint">请先从上面选择一个说法。选择前不会出现编辑框。</div>
+            </template>
             <details class="technical-details">
               <summary>查看来源与排查信息</summary>
               <div class="technical-summary">
@@ -208,9 +237,11 @@
 import { computed, ref, watch } from 'vue'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { marked } from 'marked'
-import { getWikiChangeSet, listWikiChangeSets, listWikiFeedbackSignals, reviewWikiChangeSet, type WikiChangeCategory, type WikiChangeItem, type WikiChangeSet, type WikiConflictChoice, type WikiFeedbackSignal } from '@/api/wiki'
+import { batchReviewWikiChangeSets, getWikiChangeSet, listWikiChangeSets, listWikiFeedbackSignals, reviewWikiChangeSet, type WikiChangeCategory, type WikiChangeItem, type WikiChangeSet, type WikiConflictChoice, type WikiFeedbackSignal } from '@/api/wiki'
 import { sanitizeMarkdownHTML } from '@/utils/security'
 import { allConflictPositionsSelected, buildConflictChoicesForPositions, conflictChoiceKey, conflictReviewDecision, type ConflictSelection } from './wikiConflictResolution'
+import { usesCrossPageConflictFallback, wikiComparisonBeforeContent } from './wikiConflictComparison'
+import { normalizeWikiReviewSelection, toggleAllWikiReviews, toggleWikiReview, wikiReviewBatchSelectionState } from './wikiReviewSelection'
 
 const props = defineProps<{ modelValue: boolean; knowledgeBaseId: string }>()
 const emit = defineEmits<{ (e: 'update:modelValue', value: boolean): void; (e: 'count-change', value: number): void; (e: 'published'): void }>()
@@ -223,6 +254,7 @@ const comment = ref('')
 const loading = ref(false)
 const detailLoading = ref(false)
 const submitting = ref(false)
+const selectedBatchIds = ref<string[]>([])
 const overrides = ref<Record<string, { knowledge_type: string; maturity_status: string; content: string; summary: string; applicability_text: string }>>({})
 type DecisionChoice = 'existing' | 'feedback' | 'custom'
 const decisionChoices = ref<Record<string, DecisionChoice>>({})
@@ -232,6 +264,7 @@ const categoryOptions: { label: string; value: WikiChangeCategory }[] = [
   { label: '新增', value: 'addition' }, { label: '普通更新', value: 'update' }, { label: '冲突', value: 'conflict' },
   { label: '纠错', value: 'correction' }, { label: '旧版本淘汰', value: 'retirement' }, { label: '合并/重复', value: 'merge_duplicate' },
 ]
+const batchSelection = computed(() => wikiReviewBatchSelectionState(selectedBatchIds.value, sets.value))
 const selectedFeedback = computed(() => feedbackSignals.value.find(signal => signal.change_set_id === selected.value?.id))
 function feedbackFor(set: WikiChangeSet) { return feedbackSignals.value.find(signal => signal.change_set_id === set.id) }
 
@@ -249,6 +282,7 @@ async function load() {
 
     const res: any = changeSetResult.value
     sets.value = res.change_sets || []
+    selectedBatchIds.value = normalizeWikiReviewSelection(selectedBatchIds.value, sets.value)
     feedbackSignals.value = feedbackResult.status === 'fulfilled'
       ? ((feedbackResult.value as any).signals || [])
       : []
@@ -281,6 +315,37 @@ async function select(set: WikiChangeSet) {
   } catch (error: any) {
     MessagePlugin.error(error?.message || '加载变更详情失败')
   } finally { detailLoading.value = false }
+}
+
+function toggleBatch(id: string, checked: boolean) {
+  selectedBatchIds.value = toggleWikiReview(selectedBatchIds.value, sets.value, id, checked)
+}
+
+function toggleAllBatch(checked: boolean) {
+  selectedBatchIds.value = toggleAllWikiReviews(selectedBatchIds.value, sets.value, checked)
+}
+
+async function submitBatch() {
+  const batchIds = normalizeWikiReviewSelection(selectedBatchIds.value, sets.value)
+  if (!batchIds.length) return
+  selectedBatchIds.value = batchIds
+  submitting.value = true
+  try {
+    const res: any = await batchReviewWikiChangeSets(props.knowledgeBaseId, {
+      change_set_ids: batchIds,
+      decision: 'approved',
+      comment: '审核队列批量确认新增内容',
+    })
+    const succeeded = Number(res.succeeded || 0)
+    if (succeeded < batchIds.length) MessagePlugin.warning(`已发布 ${succeeded} 条，其余内容请单独检查`)
+    else MessagePlugin.success(`已批量发布 ${succeeded} 条新增内容`)
+    selectedBatchIds.value = []
+    selected.value = null
+    await load()
+    if (succeeded > 0) emit('published')
+  } catch (error: any) {
+    MessagePlugin.error(error?.message || '批量发布失败')
+  } finally { submitting.value = false }
 }
 
 async function submit(decision: 'approved' | 'rejected', mergeIntoSlug = '') {
@@ -376,8 +441,12 @@ function pageContent(page?: Record<string, any>) { return String(page?.content |
 type DiffRow = { text: string; type: 'context' | 'added' | 'removed'; number: number }
 type DiffResult = { before: DiffRow[]; after: DiffRow[]; addedLines: number; removedLines: number; changed: boolean; description: string }
 
-function comparisonBefore(item: WikiChangeItem) { return pageContent(item.before) }
+function comparisonBefore(item: WikiChangeItem) { return wikiComparisonBeforeContent(item) }
 function comparisonAfter(item: WikiChangeItem) { return String(item.after?.content || pageContent(item.after) || '') }
+function comparisonBeforeTitle(item: WikiChangeItem) { return usesCrossPageConflictFallback(item) ? '知识库现有说法' : '修改前' }
+function comparisonBeforeSubtitle(item: WikiChangeItem) { return usesCrossPageConflictFallback(item) ? '与新内容冲突的已有知识' : '原知识库内容' }
+function comparisonAfterTitle(item: WikiChangeItem) { return usesCrossPageConflictFallback(item) ? '反馈建议的新说法' : '修改后' }
+function comparisonAfterSubtitle(item: WikiChangeItem) { return usesCrossPageConflictFallback(item) ? '准备发布的新知识内容' : '准备发布的内容' }
 function hasAutoContentChange(item: WikiChangeItem) { return comparisonBefore(item) !== comparisonAfter(item) }
 
 function buildDiff(item: WikiChangeItem): DiffResult {
@@ -491,12 +560,13 @@ function feedbackDraft(item: WikiChangeItem) {
   return String(item.after?.content || selectedFeedback.value?.suggested_correction || pageContent(item.before))
 }
 function chooseDecision(item: WikiChangeItem, choice: DecisionChoice) {
+  if (isConflict.value) return
   decisionChoices.value = { ...decisionChoices.value, [item.id]: choice }
   const override = overrides.value[item.id]
   if (!override) return
-  if (choice === 'existing') override.content = pageContent(item.before)
+  if (choice === 'existing') override.content = comparisonBefore(item)
   if (choice === 'feedback') override.content = feedbackDraft(item)
-  if (choice === 'custom' && !override.content.trim()) override.content = pageContent(item.before)
+  if (choice === 'custom' && !override.content.trim()) override.content = comparisonBefore(item)
 }
 const allDecisionsMade = computed(() => isConflict.value || Boolean(selected.value?.items?.length && selected.value.items.every(item => decisionChoices.value[item.id])))
 function sourceLabel(source?: string) { return ({ mcp: '接口使用反馈', mcp_feedback: '接口使用反馈', manual_correction: '人工纠错', agent_answer: '问答反馈', user_feedback: '用户反馈' } as Record<string, string>)[source || ''] || '系统检查' }
@@ -632,11 +702,20 @@ function categoryTheme(value: WikiChangeCategory) { return value === 'conflict' 
 .change-count.added { color: var(--td-success-color); background: var(--td-success-color-light); }
 .diff-board { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .diff-board-column { min-width: 0; overflow: hidden; border: 1px solid var(--td-component-border); border-radius: 8px; background: var(--td-bg-color-container); }
+.diff-board-column--removed { border-color: color-mix(in srgb, var(--td-error-color) 25%, var(--td-component-border)); }
+.diff-board-column--added { border-color: color-mix(in srgb, var(--td-success-color) 30%, var(--td-component-border)); }
 .diff-board-title { display: flex; align-items: center; gap: 7px; padding: 8px 10px; border-bottom: 1px solid var(--td-component-border); font-size: 12px; }
 .diff-board-title small { margin-left: auto; color: var(--td-text-color-placeholder); font-size: 11px; }
 .diff-dot { width: 8px; height: 8px; border-radius: 50%; }
 .diff-dot.removed { background: var(--td-error-color); }
 .diff-dot.added { background: var(--td-success-color); }
+.diff-rendered-content { min-height: 300px; max-height: 430px; overflow: auto; padding: 16px 18px; }
+.diff-rendered-content :deep(.wiki-review-link) { display: inline-flex; align-items: center; padding: 1px 7px; border: 1px solid var(--td-brand-color-3); border-radius: 999px; color: var(--td-brand-color); background: var(--td-brand-color-light); font-size: .92em; }
+.diff-source-details { margin-top: 10px; }
+.diff-source-details > summary { display: inline-flex; align-items: center; gap: 6px; color: var(--td-text-color-secondary); cursor: pointer; font-size: 12px; user-select: none; }
+.diff-source-details > summary:hover { color: var(--td-brand-color); }
+.diff-source-details[open] > summary { margin-bottom: 10px; }
+.diff-board--source { margin-top: 0; }
 .diff-lines { max-height: 300px; overflow: auto; padding: 5px 0; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.55; }
 .diff-line { display: grid; grid-template-columns: 34px 18px minmax(0, 1fr); min-height: 20px; padding: 1px 9px 1px 0; }
 .diff-line code { min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; color: var(--td-text-color-primary); font-family: inherit; }
