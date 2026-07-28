@@ -31,3 +31,9 @@ test('technical identifiers stay inside collapsed diagnostic details', () => {
   assert.doesNotMatch(component, />待处理信号</)
   assert.doesNotMatch(component, />反馈驱动的知识更新</)
 })
+
+test('merge duplicate review loads the existing target page before comparison', () => {
+  assert.match(component, /possibleDuplicateTargetSlug\(item\)/)
+  assert.match(component, /getWikiPage\(props\.knowledgeBaseId, targetSlug\)/)
+  assert.match(component, /withPossibleDuplicateBefore\(item, pageResponse\?\.data \|\| pageResponse\)/)
+})

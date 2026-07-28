@@ -237,10 +237,10 @@
 import { computed, ref, watch } from 'vue'
 import { MessagePlugin } from 'tdesign-vue-next'
 import { marked } from 'marked'
-import { batchReviewWikiChangeSets, getWikiChangeSet, listWikiChangeSets, listWikiFeedbackSignals, reviewWikiChangeSet, type WikiChangeCategory, type WikiChangeItem, type WikiChangeSet, type WikiConflictChoice, type WikiFeedbackSignal } from '@/api/wiki'
+import { batchReviewWikiChangeSets, getWikiChangeSet, getWikiPage, listWikiChangeSets, listWikiFeedbackSignals, reviewWikiChangeSet, type WikiChangeCategory, type WikiChangeItem, type WikiChangeSet, type WikiConflictChoice, type WikiFeedbackSignal } from '@/api/wiki'
 import { sanitizeMarkdownHTML } from '@/utils/security'
 import { allConflictPositionsSelected, buildConflictChoicesForPositions, conflictChoiceKey, conflictReviewDecision, type ConflictSelection } from './wikiConflictResolution'
-import { usesCrossPageConflictFallback, wikiComparisonBeforeContent } from './wikiConflictComparison'
+import { possibleDuplicateTargetSlug, usesCrossPageConflictFallback, wikiComparisonBeforeContent, withPossibleDuplicateBefore } from './wikiConflictComparison'
 import { normalizeWikiReviewSelection, toggleAllWikiReviews, toggleWikiReview, wikiReviewBatchSelectionState } from './wikiReviewSelection'
 
 const props = defineProps<{ modelValue: boolean; knowledgeBaseId: string }>()
@@ -298,7 +298,18 @@ async function select(set: WikiChangeSet) {
   comment.value = ''
   try {
     const res: any = await getWikiChangeSet(props.knowledgeBaseId, set.id)
-    selected.value = res.change_set
+    const detail = res.change_set as WikiChangeSet
+    detail.items = await Promise.all((detail.items || []).map(async item => {
+      const targetSlug = possibleDuplicateTargetSlug(item)
+      if (!targetSlug || wikiComparisonBeforeContent(item)) return item
+      try {
+        const pageResponse: any = await getWikiPage(props.knowledgeBaseId, targetSlug)
+        return withPossibleDuplicateBefore(item, pageResponse?.data || pageResponse)
+      } catch {
+        return item
+      }
+    }))
+    selected.value = detail
     conflictSelections.value = {}
     mergeTargetSlug.value = String(selected.value?.items?.[0]?.after?.page_metadata?.possible_duplicate_slug || '')
     overrides.value = {}
