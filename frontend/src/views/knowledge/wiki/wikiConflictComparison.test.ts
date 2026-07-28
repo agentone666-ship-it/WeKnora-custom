@@ -3,8 +3,10 @@ import test from 'node:test'
 
 import {
   crossPageConflictExistingContent,
+  possibleDuplicateTargetSlug,
   usesCrossPageConflictFallback,
   wikiComparisonBeforeContent,
+  withPossibleDuplicateBefore,
 } from './wikiConflictComparison.ts'
 
 test('uses the stored before page for a same-page update', () => {
@@ -124,4 +126,37 @@ test('does not borrow related evidence for a non-conflict change', () => {
 
   assert.equal(wikiComparisonBeforeContent(item), '')
   assert.equal(usesCrossPageConflictFallback(item), false)
+})
+
+test('hydrates a merge duplicate with the referenced existing page', () => {
+  const item = {
+    change_category: 'merge_duplicate',
+    before: {},
+    after: {
+      content: '# 新说法',
+      page_metadata: {
+        possible_duplicate_slug: 'card/knowledge-existing',
+      },
+    },
+  }
+  const target = {
+    slug: 'card/knowledge-existing',
+    title: '已有知识',
+    content: '# 已有知识\n\n这是知识库当前采用的说法。',
+  }
+
+  assert.equal(possibleDuplicateTargetSlug(item), 'card/knowledge-existing')
+  const hydrated = withPossibleDuplicateBefore(item, target)
+  assert.equal(wikiComparisonBeforeContent(hydrated), target.content)
+  assert.notEqual(hydrated, item)
+})
+
+test('does not overwrite a stored before snapshot when hydrating a duplicate', () => {
+  const item = {
+    change_category: 'merge_duplicate',
+    before: { content: '审核创建时保存的旧内容' },
+    after: { page_metadata: { possible_duplicate_slug: 'card/knowledge-existing' } },
+  }
+
+  assert.equal(withPossibleDuplicateBefore(item, { content: '后来版本' }), item)
 })

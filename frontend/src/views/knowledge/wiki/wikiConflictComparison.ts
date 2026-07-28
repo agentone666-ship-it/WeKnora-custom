@@ -86,3 +86,16 @@ export function wikiComparisonBeforeContent(item: WikiConflictComparisonItem): s
 export function usesCrossPageConflictFallback(item: WikiConflictComparisonItem): boolean {
   return !storedPageContent(item.before) && Boolean(crossPageConflictExistingContent(item))
 }
+
+export function possibleDuplicateTargetSlug(item: WikiConflictComparisonItem): string {
+  if (item.change_category !== 'merge_duplicate') return ''
+  return textValue(item.after?.page_metadata?.possible_duplicate_slug)
+}
+
+export function withPossibleDuplicateBefore<T extends WikiConflictComparisonItem>(
+  item: T,
+  targetPage: Record<string, unknown> | undefined,
+): T {
+  if (!possibleDuplicateTargetSlug(item) || storedPageContent(item.before) || !storedPageContent(targetPage)) return item
+  return { ...item, before: { ...targetPage } }
+}
