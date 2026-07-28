@@ -387,7 +387,11 @@ func (r *wikiGovernanceRepository) mergeChangeSetIntoPage(tx *gorm.DB, set *type
 		return errors.New("merge is only supported for a single new-card candidate")
 	}
 	after := items[0].After
+	overrideFields := map[string]json.RawMessage{}
 	if override, ok := overrides[items[0].ID]; ok {
+		if err := json.Unmarshal(override, &overrideFields); err != nil {
+			return err
+		}
 		var err error
 		after, err = mergeOverride(after, override)
 		if err != nil {
@@ -415,11 +419,28 @@ func (r *wikiGovernanceRepository) mergeChangeSetIntoPage(tx *gorm.DB, set *type
 	target.AudienceRoles = mergeWikiStringArrays(target.AudienceRoles, candidate.AudienceRoles)
 	target.AffectedMetrics = mergeWikiStringArrays(target.AffectedMetrics, candidate.AffectedMetrics)
 	target.Aliases = mergeWikiStringArrays(target.Aliases, types.StringArray{candidate.Title})
+	changed := types.StringArray{"source_refs", "chunk_refs", "scenario_ids", "audience_roles", "affected_metrics", "aliases"}
+	updates := map[string]any{
+		"source_refs": target.SourceRefs, "chunk_refs": target.ChunkRefs, "scenario_ids": target.ScenarioIDs,
+		"audience_roles": target.AudienceRoles, "affected_metrics": target.AffectedMetrics, "aliases": target.Aliases,
+	}
+	if _, ok := overrideFields["content"]; ok {
+		target.Content = candidate.Content
+		updates["content"] = target.Content
+		changed = append(changed, "content")
+	}
+	if _, ok := overrideFields["summary"]; ok {
+		target.Summary = candidate.Summary
+		updates["summary"] = target.Summary
+		changed = append(changed, "summary")
+	}
 	target.ReviewStatus, target.ReviewedBy, target.ReviewedAt = types.WikiReviewApproved, reviewerID, &now
 	expectedVersion := target.Version
 	target.Version++
 	target.UpdatedAt = now
-	result := tx.Model(&types.WikiPage{}).Where("id = ? AND knowledge_base_id = ? AND version = ?", target.ID, kbID, expectedVersion).Updates(map[string]any{"source_refs": target.SourceRefs, "chunk_refs": target.ChunkRefs, "scenario_ids": target.ScenarioIDs, "audience_roles": target.AudienceRoles, "affected_metrics": target.AffectedMetrics, "aliases": target.Aliases, "review_status": target.ReviewStatus, "reviewed_by": reviewerID, "reviewed_at": now, "version": target.Version, "updated_at": now})
+	updates["review_status"], updates["reviewed_by"], updates["reviewed_at"] = target.ReviewStatus, reviewerID, now
+	updates["version"], updates["updated_at"] = target.Version, now
+	result := tx.Model(&types.WikiPage{}).Where("id = ? AND knowledge_base_id = ? AND version = ?", target.ID, kbID, expectedVersion).Updates(updates)
 	if result.Error != nil {
 		return result.Error
 	}
@@ -429,8 +450,10 @@ func (r *wikiGovernanceRepository) mergeChangeSetIntoPage(tx *gorm.DB, set *type
 	if err := syncGovernedPagePackages(tx, &target, now); err != nil {
 		return err
 	}
-	changed := types.StringArray{"source_refs", "chunk_refs", "scenario_ids", "audience_roles", "affected_metrics", "aliases"}
 	if err := tx.Model(&types.WikiChangeItem{}).Where("id = ?", items[0].ID).Updates(map[string]any{"operation": "update", "page_id": target.ID, "page_slug": target.Slug, "expected_version": expectedVersion, "before": before, "after": pageJSONForRepository(&target), "changed_fields": changed}).Error; err != nil {
+		return err
+	}
+	if err := recordGovernancePublishedVersion(tx, &target, before, "update", reviewerID, "审核合并重复知识", now); err != nil {
 		return err
 	}
 	return tx.Model(set).Updates(map[string]any{"status": types.WikiChangeSetApplied, "reviewed_by": reviewerID, "review_comment": "Merged candidate into " + targetSlug, "reviewed_at": now, "updated_at": now}).Error

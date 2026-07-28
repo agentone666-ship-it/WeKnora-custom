@@ -221,7 +221,7 @@
             </template>
             <template v-else>
               <t-button theme="danger" variant="outline" :loading="submitting" @click="submit('rejected')">拒绝这条反馈</t-button>
-              <t-button theme="primary" :disabled="!allDecisionsMade" :loading="submitting" @click="submit('approved')">确认修改并发布</t-button>
+              <t-button theme="primary" :disabled="!allDecisionsMade" :loading="submitting" @click="submit('approved')">{{ isMergeDuplicate ? '合并到现有知识并发布' : '确认修改并发布' }}</t-button>
             </template>
           </div>
           </section>
@@ -260,6 +260,7 @@ type DecisionChoice = 'existing' | 'feedback' | 'custom'
 const decisionChoices = ref<Record<string, DecisionChoice>>({})
 const mergeTargetSlug = ref('')
 const conflictSelections = ref<ConflictSelection>({})
+let detailRequestVersion = 0
 const categoryOptions: { label: string; value: WikiChangeCategory }[] = [
   { label: '新增', value: 'addition' }, { label: '普通更新', value: 'update' }, { label: '冲突', value: 'conflict' },
   { label: '纠错', value: 'correction' }, { label: '旧版本淘汰', value: 'retirement' }, { label: '合并/重复', value: 'merge_duplicate' },
@@ -268,8 +269,19 @@ const batchSelection = computed(() => wikiReviewBatchSelectionState(selectedBatc
 const selectedFeedback = computed(() => feedbackSignals.value.find(signal => signal.change_set_id === selected.value?.id))
 function feedbackFor(set: WikiChangeSet) { return feedbackSignals.value.find(signal => signal.change_set_id === set.id) }
 
-watch(() => props.modelValue, open => { if (open) load() })
-watch(() => props.knowledgeBaseId, id => { if (id) load() }, { immediate: true })
+watch(() => props.modelValue, open => {
+  if (open) load()
+  else {
+    detailRequestVersion += 1
+    detailLoading.value = false
+  }
+})
+watch(() => props.knowledgeBaseId, id => {
+  detailRequestVersion += 1
+  detailLoading.value = false
+  selected.value = null
+  if (id) load()
+}, { immediate: true })
 
 async function load() {
   loading.value = true
@@ -294,6 +306,7 @@ async function load() {
 }
 
 async function select(set: WikiChangeSet) {
+  const requestVersion = ++detailRequestVersion
   detailLoading.value = true
   comment.value = ''
   try {
@@ -309,6 +322,7 @@ async function select(set: WikiChangeSet) {
         return item
       }
     }))
+    if (requestVersion !== detailRequestVersion) return
     selected.value = detail
     conflictSelections.value = {}
     mergeTargetSlug.value = String(selected.value?.items?.[0]?.after?.page_metadata?.possible_duplicate_slug || '')
@@ -324,8 +338,11 @@ async function select(set: WikiChangeSet) {
       }
     }
   } catch (error: any) {
+    if (requestVersion !== detailRequestVersion) return
     MessagePlugin.error(error?.message || '加载变更详情失败')
-  } finally { detailLoading.value = false }
+  } finally {
+    if (requestVersion === detailRequestVersion) detailLoading.value = false
+  }
 }
 
 function toggleBatch(id: string, checked: boolean) {
@@ -369,6 +386,14 @@ async function submit(decision: 'approved' | 'rejected', mergeIntoSlug = '') {
     MessagePlugin.warning('请填写拒绝原因')
     return
   }
+  const resolvedMergeIntoSlug = decision === 'approved' && isMergeDuplicate.value
+    ? (mergeIntoSlug.trim() || mergeTargetSlug.value.trim() || possibleDuplicateTargetSlug(selected.value.items?.[0] || {}))
+    : mergeIntoSlug.trim()
+  if (decision === 'approved' && isMergeDuplicate.value && !resolvedMergeIntoSlug) {
+    MessagePlugin.warning('没有找到要合并到的现有知识，请先填写知识路径')
+    return
+  }
+  const isMergeApproval = decision === 'approved' && Boolean(resolvedMergeIntoSlug)
   submitting.value = true
   try {
     const changedOverrides = Object.fromEntries(Object.entries(overrides.value).map(([id, value]) => {
@@ -376,12 +401,19 @@ async function submit(decision: 'approved' | 'rejected', mergeIntoSlug = '') {
       const patch: Record<string, any> = {}
       if (value.knowledge_type !== String(original?.knowledge_type || '')) patch.knowledge_type = value.knowledge_type
       if (value.maturity_status !== String(original?.maturity_status || 'pending_review')) patch.maturity_status = value.maturity_status
-      if (value.content !== String(original?.content || '')) patch.content = value.content
-      if (value.summary !== String(original?.summary || '')) patch.summary = value.summary
+      if (isMergeApproval) {
+        if (decisionChoices.value[id] && decisionChoices.value[id] !== 'existing') {
+          patch.content = value.content
+          patch.summary = value.summary
+        }
+      } else {
+        if (value.content !== String(original?.content || '')) patch.content = value.content
+        if (value.summary !== String(original?.summary || '')) patch.summary = value.summary
+      }
       return [id, patch]
     }).filter(([, patch]) => Object.keys(patch).length))
     const itemOverrides = decision === 'approved' && Object.keys(changedOverrides).length ? changedOverrides : undefined
-    await reviewWikiChangeSet(props.knowledgeBaseId, selected.value.id, { decision, comment: comment.value.trim(), merge_into_slug: mergeIntoSlug.trim() || undefined, item_overrides: itemOverrides })
+    await reviewWikiChangeSet(props.knowledgeBaseId, selected.value.id, { decision, comment: comment.value.trim(), merge_into_slug: resolvedMergeIntoSlug || undefined, item_overrides: itemOverrides })
     MessagePlugin.success(decision === 'approved' ? '已批准并发布' : '已拒绝')
     selected.value = null
     await load()
@@ -575,7 +607,9 @@ function chooseDecision(item: WikiChangeItem, choice: DecisionChoice) {
   decisionChoices.value = { ...decisionChoices.value, [item.id]: choice }
   const override = overrides.value[item.id]
   if (!override) return
-  if (choice === 'existing') override.content = comparisonBefore(item)
+  if (choice === 'existing') {
+    override.content = comparisonBefore(item)
+  }
   if (choice === 'feedback') override.content = feedbackDraft(item)
   if (choice === 'custom' && !override.content.trim()) override.content = comparisonBefore(item)
 }
@@ -621,6 +655,8 @@ function diagnosticText(item: WikiChangeItem) {
   return [`知识路径：${item.page_slug}`, `变更编号：${item.id}`, `来源编号：${item.evidence_chunk_ids?.join(', ') || '无'}`].join('\n')
 }
 const isConflict = computed(() => selected.value?.change_category === 'conflict')
+const isMergeDuplicate = computed(() => selected.value?.change_category === 'merge_duplicate'
+  || Boolean(selected.value?.items?.some(item => item.change_category === 'merge_duplicate')))
 const conflictAssessments = computed<any[]>(() => {
   return (selected.value?.items || []).flatMap(item => {
     const assessments = item.after?.page_metadata?.cross_page_assessments || []

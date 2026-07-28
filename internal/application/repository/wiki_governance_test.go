@@ -546,11 +546,11 @@ func TestReviewCreatesScenarioAndManagedPackages(t *testing.T) {
 func TestReviewCanMergeDuplicateCandidateIntoExistingCard(t *testing.T) {
 	repo, db := newGovernanceTestRepo(t)
 	now := time.Now()
-	target := &types.WikiPage{ID: uuid.NewString(), TenantID: 1, KnowledgeBaseID: "kb-1", Slug: "card/knowledge-target", Title: "target", PageType: types.WikiPageTypeCard, KnowledgeType: types.WikiKnowledgeTypeKnowledge, Status: types.WikiPageStatusPublished, ReviewStatus: types.WikiReviewApproved, MaturityStatus: types.WikiMaturityVerified, SourceRefs: types.StringArray{"doc-1"}, ChunkRefs: types.StringArray{"chunk-1"}, Version: 1, CreatedAt: now, UpdatedAt: now}
+	target := &types.WikiPage{ID: uuid.NewString(), TenantID: 1, KnowledgeBaseID: "kb-1", Slug: "card/knowledge-target", Title: "target", Content: "existing content", Summary: "existing summary", PageType: types.WikiPageTypeCard, KnowledgeType: types.WikiKnowledgeTypeKnowledge, Status: types.WikiPageStatusPublished, ReviewStatus: types.WikiReviewApproved, MaturityStatus: types.WikiMaturityVerified, SourceRefs: types.StringArray{"doc-1"}, ChunkRefs: types.StringArray{"chunk-1"}, Version: 1, CreatedAt: now, UpdatedAt: now}
 	if err := db.Create(target).Error; err != nil {
 		t.Fatal(err)
 	}
-	candidate := &types.WikiPage{TenantID: 1, KnowledgeBaseID: "kb-1", Slug: "card/knowledge-duplicate", Title: "duplicate title", PageType: types.WikiPageTypeCard, KnowledgeType: types.WikiKnowledgeTypeKnowledge, Status: types.WikiPageStatusDraft, ReviewStatus: types.WikiReviewPending, MaturityStatus: types.WikiMaturityPendingReview, SourceRefs: types.StringArray{"doc-2"}, ChunkRefs: types.StringArray{"chunk-2"}, Version: 1}
+	candidate := &types.WikiPage{TenantID: 1, KnowledgeBaseID: "kb-1", Slug: "card/knowledge-duplicate", Title: "duplicate title", Content: "candidate content", Summary: "candidate summary", PageType: types.WikiPageTypeCard, KnowledgeType: types.WikiKnowledgeTypeKnowledge, Status: types.WikiPageStatusDraft, ReviewStatus: types.WikiReviewPending, MaturityStatus: types.WikiMaturityPendingReview, SourceRefs: types.StringArray{"doc-2"}, ChunkRefs: types.StringArray{"chunk-2"}, Version: 1}
 	set := &types.WikiChangeSet{ID: uuid.NewString(), TenantID: 1, KnowledgeBaseID: "kb-1", Status: types.WikiChangeSetPending, ReviewLevel: types.WikiReviewLevelL1, CreatedAt: now, UpdatedAt: now, Items: []types.WikiChangeItem{{ID: uuid.NewString(), Operation: "create", PageSlug: candidate.Slug, After: snapshotForTest(t, candidate), CreatedAt: now}}}
 	if err := repo.CreateChangeSet(context.Background(), set); err != nil {
 		t.Fatal(err)
@@ -569,8 +569,8 @@ func TestReviewCanMergeDuplicateCandidateIntoExistingCard(t *testing.T) {
 	if err := db.First(&stored, "id = ?", target.ID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if stored.Version != 2 || len(stored.SourceRefs) != 2 || len(stored.ChunkRefs) != 2 {
-		t.Fatalf("merged target version=%d sources=%v chunks=%v", stored.Version, stored.SourceRefs, stored.ChunkRefs)
+	if stored.Version != 2 || len(stored.SourceRefs) != 2 || len(stored.ChunkRefs) != 2 || stored.Content != "existing content" || stored.Summary != "existing summary" {
+		t.Fatalf("merged target version=%d sources=%v chunks=%v content=%q summary=%q", stored.Version, stored.SourceRefs, stored.ChunkRefs, stored.Content, stored.Summary)
 	}
 	var item types.WikiChangeItem
 	if err := db.Where("change_set_id = ?", set.ID).First(&item).Error; err != nil {
@@ -578,6 +578,50 @@ func TestReviewCanMergeDuplicateCandidateIntoExistingCard(t *testing.T) {
 	}
 	if item.Operation != "update" || item.PageSlug != target.Slug {
 		t.Fatalf("audit item operation=%s slug=%s", item.Operation, item.PageSlug)
+	}
+}
+
+func TestReviewMergeDuplicateAppliesChosenContentAndRecordsVersion(t *testing.T) {
+	repo, db := newGovernanceTestRepo(t)
+	now := time.Now()
+	target := &types.WikiPage{ID: uuid.NewString(), TenantID: 1, KnowledgeBaseID: "kb-1", Slug: "card/knowledge-target-content", Title: "target", Content: "old content", Summary: "old summary", PageType: types.WikiPageTypeCard, KnowledgeType: types.WikiKnowledgeTypeKnowledge, Status: types.WikiPageStatusPublished, ReviewStatus: types.WikiReviewApproved, MaturityStatus: types.WikiMaturityVerified, SourceRefs: types.StringArray{"doc-1"}, ChunkRefs: types.StringArray{"chunk-1"}, Version: 1, CreatedAt: now, UpdatedAt: now}
+	if err := db.Create(target).Error; err != nil {
+		t.Fatal(err)
+	}
+	candidate := &types.WikiPage{TenantID: 1, KnowledgeBaseID: "kb-1", Slug: "card/knowledge-duplicate-content", Title: "duplicate title", Content: "candidate content", Summary: "candidate summary", PageType: types.WikiPageTypeCard, KnowledgeType: types.WikiKnowledgeTypeKnowledge, Status: types.WikiPageStatusDraft, ReviewStatus: types.WikiReviewPending, MaturityStatus: types.WikiMaturityPendingReview, SourceRefs: types.StringArray{"doc-2"}, ChunkRefs: types.StringArray{"chunk-2"}, Version: 1}
+	itemID := uuid.NewString()
+	set := &types.WikiChangeSet{ID: uuid.NewString(), TenantID: 1, KnowledgeBaseID: "kb-1", Status: types.WikiChangeSetPending, ReviewLevel: types.WikiReviewLevelL1, ChangeCategory: types.WikiChangeCategoryMergeDuplicate, CreatedAt: now, UpdatedAt: now, Items: []types.WikiChangeItem{{ID: itemID, Operation: "create", ChangeCategory: types.WikiChangeCategoryMergeDuplicate, PageSlug: candidate.Slug, After: snapshotForTest(t, candidate), CreatedAt: now}}}
+	if err := repo.CreateChangeSet(context.Background(), set); err != nil {
+		t.Fatal(err)
+	}
+	override, _ := json.Marshal(map[string]any{"content": "reviewer chosen content", "summary": "reviewer chosen summary"})
+	decision := &types.WikiReviewDecision{Decision: types.WikiReviewApproved, MergeIntoSlug: target.Slug, ItemOverrides: map[string]types.JSON{itemID: types.JSON(override)}}
+	if err := repo.ReviewChangeSet(context.Background(), "kb-1", set.ID, "reviewer-1", decision); err != nil {
+		t.Fatal(err)
+	}
+	var stored types.WikiPage
+	if err := db.First(&stored, "id = ?", target.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.Content != "reviewer chosen content" || stored.Summary != "reviewer chosen summary" || stored.Version != 2 {
+		t.Fatalf("merged target content=%q summary=%q version=%d", stored.Content, stored.Summary, stored.Version)
+	}
+	var versions []types.WikiPageVersion
+	if err := db.Where("page_id = ?", target.ID).Order("version ASC").Find(&versions).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(versions) != 2 || versions[0].State != types.WikiPageVersionHistory || versions[1].State != types.WikiPageVersionPublished {
+		t.Fatalf("versions=%+v, want old history and merged published versions", versions)
+	}
+	var oldSnapshot, publishedSnapshot types.WikiPage
+	if err := json.Unmarshal(versions[0].Snapshot, &oldSnapshot); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(versions[1].Snapshot, &publishedSnapshot); err != nil {
+		t.Fatal(err)
+	}
+	if oldSnapshot.Content != "old content" || publishedSnapshot.Content != "reviewer chosen content" {
+		t.Fatalf("version contents=%q/%q", oldSnapshot.Content, publishedSnapshot.Content)
 	}
 }
 
