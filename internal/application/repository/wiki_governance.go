@@ -190,10 +190,12 @@ func (r *wikiGovernanceRepository) ListPendingGraphCards(ctx context.Context, kb
 	return out, nil
 }
 
-// UpdatePendingGraphCard updates only graph-owned fields in the latest
-// candidate snapshot. Locking the owning change set serializes this write with
-// ReviewChangeSet, so an approval can never publish a stale pre-graph snapshot.
-func (r *wikiGovernanceRepository) UpdatePendingGraphCard(ctx context.Context, kbID, changeItemID string, page *types.WikiPage) (bool, error) {
+// UpdatePendingGraphCard updates graph-owned fields and, for graph-governed
+// ingest candidates, their derived review classification. Locking the owning
+// change set serializes this write with ReviewChangeSet, so reviewers never
+// see a stale conflict category around a graph snapshot that no longer
+// contains actionable conflicts.
+func (r *wikiGovernanceRepository) UpdatePendingGraphCard(ctx context.Context, kbID, changeItemID string, page *types.WikiPage, governance types.WikiPendingGraphGovernance) (bool, error) {
 	if page == nil {
 		return false, errors.New("pending graph card is nil")
 	}
@@ -223,8 +225,22 @@ func (r *wikiGovernanceRepository) UpdatePendingGraphCard(ctx context.Context, k
 		current.Content = page.Content
 		current.OutLinks = page.OutLinks
 		current.PageMetadata = page.PageMetadata
-		if err := tx.Model(&types.WikiChangeItem{}).Where("id = ?", item.ID).Update("after", pageJSONForRepository(current)).Error; err != nil {
+		itemUpdates := map[string]any{"after": pageJSONForRepository(current)}
+		if governance.SyncReviewEnvelope {
+			itemUpdates["change_category"] = governance.ChangeCategory
+		}
+		if err := tx.Model(&types.WikiChangeItem{}).Where("id = ?", item.ID).Updates(itemUpdates).Error; err != nil {
 			return err
+		}
+		if governance.SyncReviewEnvelope {
+			if err := tx.Model(&types.WikiChangeSet{}).Where("id = ?", set.ID).Updates(map[string]any{
+				"review_level":    governance.ReviewLevel,
+				"change_category": governance.ChangeCategory,
+				"reasons":         governance.Reasons,
+				"updated_at":      time.Now(),
+			}).Error; err != nil {
+				return err
+			}
 		}
 		updated = true
 		return nil
