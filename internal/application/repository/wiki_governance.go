@@ -181,7 +181,7 @@ func (r *wikiGovernanceRepository) hydrateMergeDuplicateBefore(ctx context.Conte
 		if item.ChangeCategory != types.WikiChangeCategoryMergeDuplicate {
 			continue
 		}
-		if before, err := decodePageSnapshot(item.Before); err == nil && (strings.TrimSpace(before.Content) != "" || strings.TrimSpace(before.Summary) != "") {
+		if !emptyWikiPageSnapshot(item.Before) {
 			continue
 		}
 		candidate, err := decodePageSnapshot(item.After)
@@ -210,6 +210,15 @@ func (r *wikiGovernanceRepository) hydrateMergeDuplicateBefore(ctx context.Conte
 		item.Before = pageJSONForRepository(&target)
 	}
 	return nil
+}
+
+func emptyWikiPageSnapshot(raw types.JSON) bool {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		return true
+	}
+	var object map[string]json.RawMessage
+	return json.Unmarshal(raw, &object) == nil && len(object) == 0
 }
 
 func (r *wikiGovernanceRepository) ListPendingGraphCards(ctx context.Context, kbID string, limit int) ([]*types.WikiPendingGraphCard, error) {
