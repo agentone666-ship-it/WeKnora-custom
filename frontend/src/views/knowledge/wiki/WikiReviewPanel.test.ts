@@ -37,3 +37,30 @@ test('merge duplicate review loads the existing target page before comparison', 
   assert.match(component, /getWikiPage\(props\.knowledgeBaseId, targetSlug\)/)
   assert.match(component, /withPossibleDuplicateBefore\(item, pageResponse\?\.data \|\| pageResponse\)/)
 })
+
+test('merge duplicate approval always submits the referenced existing page as merge target', () => {
+  assert.match(component, /const resolvedMergeIntoSlug = decision === 'approved' && isMergeDuplicate\.value/)
+  assert.match(component, /mergeTargetSlug\.value\.trim\(\) \|\| possibleDuplicateTargetSlug/)
+  assert.match(component, /const isMergeApproval = decision === 'approved' && Boolean\(resolvedMergeIntoSlug\)/)
+  assert.match(component, /if \(isMergeApproval\)/)
+  assert.match(component, /decisionChoices\.value\[id\] !== 'existing'/)
+  assert.match(component, /patch\.content = value\.content\n\s+patch\.summary = value\.summary/)
+  assert.match(component, /merge_into_slug: resolvedMergeIntoSlug \|\| undefined/)
+  assert.match(component, /isMergeDuplicate \? '合并到现有知识并发布'/)
+})
+
+test('manual merging an addition preserves existing content when that choice is selected', () => {
+  assert.match(component, /const isMergeApproval = decision === 'approved' && Boolean\(resolvedMergeIntoSlug\)/)
+  assert.match(component, /if \(isMergeApproval\) \{\n\s+if \(decisionChoices\.value\[id\] && decisionChoices\.value\[id\] !== 'existing'\)/)
+})
+
+test('manual merging an addition explicitly submits feedback or custom content', () => {
+  assert.match(component, /decisionChoices\.value\[id\] !== 'existing'/)
+  assert.match(component, /patch\.content = value\.content\n\s+patch\.summary = value\.summary/)
+})
+
+test('only the latest detail request may update the active review', () => {
+  assert.match(component, /const requestVersion = \+\+detailRequestVersion/)
+  assert.match(component, /if \(requestVersion !== detailRequestVersion\) return\n    selected\.value = detail/)
+  assert.match(component, /if \(requestVersion === detailRequestVersion\) detailLoading\.value = false/)
+})
