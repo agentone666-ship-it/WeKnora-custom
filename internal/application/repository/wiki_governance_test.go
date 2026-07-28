@@ -119,6 +119,69 @@ func TestCreateChangeSetNormalizesLegacyL2ToL1(t *testing.T) {
 	}
 }
 
+func TestGetChangeSetHydratesMergeDuplicateBeforeFromTargetPage(t *testing.T) {
+	repo, db := newGovernanceTestRepo(t)
+	now := time.Now()
+	target := &types.WikiPage{
+		ID: uuid.NewString(), TenantID: 1, KnowledgeBaseID: "kb-1",
+		Slug: "card/knowledge-existing", Title: "Existing knowledge",
+		Content: "The current approved wording.", Summary: "Current wording",
+		PageType: types.WikiPageTypeCard, KnowledgeType: types.WikiKnowledgeTypeKnowledge,
+		Status: types.WikiPageStatusPublished, ReviewStatus: types.WikiReviewApproved,
+		MaturityStatus: types.WikiMaturityVerified, Version: 3, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := db.Create(target).Error; err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := json.Marshal(map[string]any{"possible_duplicate_slug": target.Slug})
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := &types.WikiPage{
+		ID: uuid.NewString(), TenantID: 1, KnowledgeBaseID: "kb-1",
+		Slug: "card/knowledge-candidate", Title: "Candidate knowledge",
+		Content: "Candidate wording.", PageType: types.WikiPageTypeCard,
+		KnowledgeType: types.WikiKnowledgeTypeKnowledge, PageMetadata: types.JSON(metadata),
+		Status: types.WikiPageStatusDraft, ReviewStatus: types.WikiReviewPending,
+		MaturityStatus: types.WikiMaturityPendingReview, Version: 1,
+	}
+	set := &types.WikiChangeSet{
+		ID: uuid.NewString(), TenantID: 1, KnowledgeBaseID: "kb-1",
+		Status: types.WikiChangeSetPending, ReviewLevel: types.WikiReviewLevelL1,
+		ChangeCategory: types.WikiChangeCategoryMergeDuplicate, CreatedAt: now, UpdatedAt: now,
+		Items: []types.WikiChangeItem{{
+			ID: uuid.NewString(), Operation: "create", ChangeCategory: types.WikiChangeCategoryMergeDuplicate,
+			PageSlug: candidate.Slug, Before: types.JSON(`{}`), After: snapshotForTest(t, candidate), CreatedAt: now,
+		}},
+	}
+	if err := repo.CreateChangeSet(context.Background(), set); err != nil {
+		t.Fatal(err)
+	}
+
+	detail, err := repo.GetChangeSet(context.Background(), "kb-1", set.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(detail.Items) != 1 {
+		t.Fatalf("items=%d, want 1", len(detail.Items))
+	}
+	before, err := decodePageSnapshot(detail.Items[0].Before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.ID != target.ID || before.Slug != target.Slug || before.Content != target.Content || before.Version != target.Version {
+		t.Fatalf("before=%+v, want current merge target %+v", before, target)
+	}
+
+	var stored types.WikiChangeItem
+	if err := db.First(&stored, "id = ?", set.Items[0].ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.Before.ToString() != "{}" {
+		t.Fatalf("hydration must not mutate persisted candidate snapshot: before=%s", stored.Before)
+	}
+}
+
 func TestReviewChangeSetPublishesCardAtomically(t *testing.T) {
 	repo, db := newGovernanceTestRepo(t)
 	now := time.Now()
