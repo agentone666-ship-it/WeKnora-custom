@@ -16,9 +16,9 @@ const sets: WikiReviewSelectableSet[] = [
   { id: 'correction-1', change_category: 'correction' },
 ]
 
-test('select all includes every current batch-safe item and excludes conflicts', () => {
-  assert.deepEqual(selectableWikiReviewIds(sets), ['addition-1', 'correction-1'])
-  assert.deepEqual(toggleAllWikiReviews([], sets, true), ['addition-1', 'correction-1'])
+test('select all includes additions only', () => {
+  assert.deepEqual(selectableWikiReviewIds(sets), ['addition-1'])
+  assert.deepEqual(toggleAllWikiReviews([], sets, true), ['addition-1'])
 })
 
 test('select all toggles back to an empty selection', () => {
@@ -26,13 +26,15 @@ test('select all toggles back to an empty selection', () => {
 })
 
 test('selection state supports unchecked, indeterminate, and checked states', () => {
-  assert.deepEqual(wikiReviewBatchSelectionState([], sets), { checked: false, indeterminate: false, selected: 0, total: 2 })
-  assert.deepEqual(wikiReviewBatchSelectionState(['addition-1'], sets), { checked: false, indeterminate: true, selected: 1, total: 2 })
-  assert.deepEqual(wikiReviewBatchSelectionState(['addition-1', 'correction-1'], sets), { checked: true, indeterminate: false, selected: 2, total: 2 })
+  const additionSets = [...sets, { id: 'addition-2', change_category: 'addition' }]
+  assert.deepEqual(wikiReviewBatchSelectionState([], additionSets), { checked: false, indeterminate: false, selected: 0, total: 2 })
+  assert.deepEqual(wikiReviewBatchSelectionState(['addition-1'], additionSets), { checked: false, indeterminate: true, selected: 1, total: 2 })
+  assert.deepEqual(wikiReviewBatchSelectionState(['addition-1', 'addition-2'], additionSets), { checked: true, indeterminate: false, selected: 2, total: 2 })
 })
 
-test('a conflict cannot be selected through the single-item toggle', () => {
+test('non-addition items cannot be selected through the single-item toggle', () => {
   assert.deepEqual(toggleWikiReview([], sets, 'conflict-1', true), [])
+  assert.deepEqual(toggleWikiReview([], sets, 'correction-1', true), [])
 })
 
 test('refresh and filtering remove hidden, stale, and conflict IDs', () => {
@@ -43,7 +45,8 @@ test('refresh and filtering remove hidden, stale, and conflict IDs', () => {
 })
 
 test('deselecting one item after select all produces an indeterminate state', () => {
-  const selected = toggleWikiReview(toggleAllWikiReviews([], sets, true), sets, 'addition-1', false)
-  assert.deepEqual(selected, ['correction-1'])
-  assert.equal(wikiReviewBatchSelectionState(selected, sets).indeterminate, true)
+  const additionSets = [...sets, { id: 'addition-2', change_category: 'addition' }]
+  const selected = toggleWikiReview(toggleAllWikiReviews([], additionSets, true), additionSets, 'addition-1', false)
+  assert.deepEqual(selected, ['addition-2'])
+  assert.equal(wikiReviewBatchSelectionState(selected, additionSets).indeterminate, true)
 })
