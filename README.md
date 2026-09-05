@@ -44,6 +44,17 @@
   </h4>
 </p>
 
+## About this fork
+
+This repository is a personal secondary-development project based on [Tencent/WeKnora](https://github.com/Tencent/WeKnora), with **33 fork-specific commits** on its development baseline. The work focuses on turning automatically generated Wiki content into a governable product workflow:
+
+- structured Wiki cards across 10 knowledge types, with L0/L1 review queues;
+- cross-concept conflict detection, side-by-side evidence comparison, and per-conflict resolution;
+- review decisions, version history, duplicate snapshots, and traceable feedback signals;
+- Wiki Agent retrieval exposed through MCP, with token limits and rate limiting.
+
+This is an independent portfolio fork and is not an official Tencent distribution. Upstream documentation and the MIT license are retained below.
+
 # 💡 WeKnora — Turn Documents into Living Knowledge with RAG, Agents and Auto-Wiki
 
 ## 📌 Overview
